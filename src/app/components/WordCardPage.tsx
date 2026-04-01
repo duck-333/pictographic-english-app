@@ -69,16 +69,28 @@ function VideoModal({ onClose }: { onClose: () => void }) {
           </div>
         </div>
         <div className="p-5">
-          <p style={{ color: 'white', fontWeight: 600, fontSize: 15, margin: '0 0 4px' }}>象形解析 · 视频讲解</p>
-          <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, margin: '0 0 16px' }}>作者亲讲 · 4分32秒 · 含配图说明</p>
-          <div className="flex gap-3">
-            <button className="flex-1 py-3 rounded-xl" style={{ background: '#C9973A', color: 'white', fontWeight: 600, fontSize: 14 }}>
-              立即观看
-            </button>
-            <button onClick={onClose} className="px-5 py-3 rounded-xl" style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.7)', fontSize: 14 }}>
-              关闭
-            </button>
-          </div>
+  <p style={{ color: 'white', fontWeight: 600, fontSize: 15, margin: '0 0 4px' }}>象形解析 · 视频讲解</p>
+  <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, margin: '0 0 16px' }}>作者亲讲 · 5分04秒</p>
+  
+  {/* 这里是真正的视频播放器 */}
+  <div className="mb-4 rounded-xl overflow-hidden bg-black">
+    <video 
+      controls 
+      playsInline
+      className="w-full h-auto"
+      style={{ maxHeight: '200px' }}
+    >
+      <source src="/assets/videos/root-au.mp4" type="video/mp4" />
+      您的浏览器不支持视频播放。
+    </video>
+  </div>
+
+  <div className="flex gap-3">
+    <button onClick={onClose} className="flex-1 py-3 rounded-xl" style={{ background: 'rgba(255,255,255,0.1)', color: 'white' }}>
+      关闭
+    </button>
+  </div>
+</div>
         </div>
       </div>
     </div>
