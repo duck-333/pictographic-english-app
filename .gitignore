@@ -1,1 +1,5 @@
 node_modules
+dist
+miniapp-uni/unpackage
+miniapp-uni/.hbuilderx
+miniapp-uni/node_modules
