@@ -1,5 +1,21 @@
 # Plan
 
+## 当前小块：最小后台方案落地
+
+目标：
+- 先不买服务器、不接真实云数据库。
+- 建立后台录入数据的标准模板。
+- 建立内容校验脚本，防止几千个单词录入后出现 ID 重复、拆解卡片断链、视频时间点错误。
+- 明确后台不放进用户小程序，后续新建独立后台项目，并用管理员权限保护。
+
+验收：
+- `content-seed/words.example.json` 能表达 `study -> s/tud/y -> t/u/d`。
+- `content-seed/word-entry-template.json` 能作为新增单词模板。
+- `npm.cmd run validate:content` 能通过。
+- 不影响 `miniapp-uni/word-app1` 当前小程序预览。
+- `miniapp-uni/word-app1` 不注册内容管理、词条编辑、资料管理等后台页面。
+- `admin-portal` 记录独立后台项目骨架、权限边界和数据流。
+
 ## 长任务执行方式
 
 这个项目适合按“主代理统一管理 + 3-5 个子代理分工 + 审查代理把关”的方式推进。每次开长任务前，先确认本文件的阶段和验收条件，再分配具体文件边界。
@@ -9,7 +25,7 @@
 - 主代理 / 架构负责人：维护 `Prompt.md`、`Plan.md`、`Documentation.md`，拆任务，合并结果，最终验收。
 - UI 前端子代理：负责页面还原、组件、视觉层级、移动端适配。主要目录：`miniapp-uni/word-app1/pages`、`miniapp-uni/word-app1/components`、`miniapp-uni/word-app1/uni.scss`。
 - 功能开发子代理：负责搜索、详情跳转、底部导航、学习记录、收藏、mock 数据读写。主要目录：`miniapp-uni/word-app1/common` 和相关页面脚本。
-- 内容/数据子代理：负责单词数据结构、示例词、视频字段、富文本/讲解字段的 MVP 数据模型。主要目录：`miniapp-uni/word-app1/common/mock-data.js` 和产品文档。
+- 内容/数据子代理：负责单词数据结构、示例词、视频字段、富文本/讲解字段的 MVP 数据模型。主要目录：`miniapp-uni/word-app1/common/content-schema.js`、`miniapp-uni/word-app1/common/word-repository.js`、`miniapp-uni/word-app1/common/mock-data.js` 和产品文档。
 - 测试子代理：负责手动验收清单、控制台错误、路由检查、构建检查。默认不改业务代码。
 - 审查子代理：负责代码审查、安全风险、依赖风险、目录误改、完成标准确认。默认只读。
 
@@ -81,7 +97,7 @@
 - 后续接后台时数据结构可迁移。
 
 状态：
-- 待开始。
+- 进行中：已新增内容数据契约和前台仓库接口，下一步接后台/云数据库。
 
 ## 阶段 4：后台和账号方案设计
 
@@ -97,7 +113,7 @@
 - 有云成本预估和分阶段启用方案。
 
 状态：
-- 待开始。
+- 进行中：已新增 `BackendDataModel.md` 数据库草案和 `admin-portal` 独立后台骨架；后台录入不放进用户小程序。
 
 ## 阶段 5：云服务接入和上线准备
 

@@ -22,7 +22,7 @@
 </template>
 
 <script>
-import { NAV_ITEMS } from '../common/mock-data.js'
+import { NAV_ITEMS } from '../common/word-repository.js'
 
 export default {
   name: 'BottomNav',

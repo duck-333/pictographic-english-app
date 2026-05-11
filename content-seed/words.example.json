@@ -1,0 +1,270 @@
+{
+  "meta": {
+    "name": "pictographic-english-content-example",
+    "version": 1,
+    "description": "Minimal backend content seed for the study breakdown chain."
+  },
+  "words": [
+    {
+      "id": "word-study",
+      "kind": "word",
+      "status": "published",
+      "word": "study",
+      "cardType": "word",
+      "phonetic": "/'studi/",
+      "meaning": "v. learn or research; n. research or learning",
+      "level": "CET-4",
+      "bookPage": 18,
+      "tip": "Study is a repeated drilling into knowledge.",
+      "pictograph": "Use s as outward force, tud as repeated striking or drilling, and y as a word-forming tail. The whole image is: pushing attention outward and drilling into knowledge, so study means learning or researching.",
+      "richTextHtml": "<p><strong>study</strong> can be explained as <em>s + tud + y</em>.</p>",
+      "parts": [
+        {
+          "text": "s",
+          "meaning": "outward force",
+          "targetId": "node-s",
+          "color": "#7C3AED",
+          "bgColor": "#F3F0FF",
+          "borderColor": "#C4B5FD"
+        },
+        {
+          "text": "tud",
+          "meaning": "strike / drill",
+          "targetId": "node-tud",
+          "color": "#C9973A",
+          "bgColor": "#FFFBEB",
+          "borderColor": "#FCD34D"
+        },
+        {
+          "text": "y",
+          "meaning": "word tail",
+          "targetId": "node-y",
+          "color": "#0E7490",
+          "bgColor": "#ECFEFF",
+          "borderColor": "#A5F3FC"
+        }
+      ],
+      "examples": [
+        {
+          "english": "She studies hard every day.",
+          "chinese": "She learns carefully every day."
+        }
+      ],
+      "siblingIds": [],
+      "videoSegment": {
+        "videoUrl": "",
+        "startSec": 0,
+        "endSec": 156,
+        "segmentTitle": "study pictographic breakdown",
+        "provider": "",
+        "assetId": ""
+      },
+      "updatedAt": "2026-05-07"
+    }
+  ],
+  "word_nodes": [
+    {
+      "id": "node-s",
+      "kind": "letter",
+      "status": "published",
+      "word": "s",
+      "cardType": "letter",
+      "phonetic": "/s/",
+      "meaning": "letter s: outward or sliding motion",
+      "level": "letter",
+      "bookPage": 18,
+      "tip": "In study, s gives the image of pushing attention outward.",
+      "pictograph": "The shape of s feels like a curved moving path. It can suggest motion, extension, or outward force.",
+      "parts": [],
+      "examples": [],
+      "siblingIds": [
+        "node-tud",
+        "node-y",
+        "word-study"
+      ],
+      "videoSegment": {
+        "videoUrl": "",
+        "startSec": 0,
+        "endSec": 80,
+        "segmentTitle": "letter s explanation",
+        "provider": "",
+        "assetId": ""
+      },
+      "updatedAt": "2026-05-07"
+    },
+    {
+      "id": "node-tud",
+      "kind": "root",
+      "status": "published",
+      "word": "tud",
+      "cardType": "root",
+      "phonetic": "/tud/",
+      "meaning": "root tud: strike, drill, repeatedly touch knowledge",
+      "level": "root",
+      "bookPage": 18,
+      "tip": "tud is like striking the surface of knowledge until it opens.",
+      "pictograph": "tud can split into t, u, and d. t starts the strike, u receives or contains, and d lands as the result.",
+      "parts": [
+        {
+          "text": "t",
+          "meaning": "strike point",
+          "targetId": "node-t",
+          "color": "#2563EB",
+          "bgColor": "#EFF6FF",
+          "borderColor": "#BFDBFE"
+        },
+        {
+          "text": "u",
+          "meaning": "container",
+          "targetId": "node-u",
+          "color": "#C9973A",
+          "bgColor": "#FFFBEB",
+          "borderColor": "#FCD34D"
+        },
+        {
+          "text": "d",
+          "meaning": "result",
+          "targetId": "node-d",
+          "color": "#0E7490",
+          "bgColor": "#ECFEFF",
+          "borderColor": "#A5F3FC"
+        }
+      ],
+      "examples": [],
+      "siblingIds": [
+        "node-t",
+        "node-u",
+        "node-d",
+        "word-study"
+      ],
+      "videoSegment": {
+        "videoUrl": "",
+        "startSec": 0,
+        "endSec": 108,
+        "segmentTitle": "tud root breakdown",
+        "provider": "",
+        "assetId": ""
+      },
+      "updatedAt": "2026-05-07"
+    },
+    {
+      "id": "node-y",
+      "kind": "suffix",
+      "status": "published",
+      "word": "y",
+      "cardType": "suffix",
+      "phonetic": "/i/",
+      "meaning": "suffix y: word-forming tail",
+      "level": "suffix",
+      "bookPage": 18,
+      "tip": "y helps close the word form.",
+      "pictograph": "In study, y is mainly a forming tail that lets s + tud become a complete word.",
+      "parts": [],
+      "examples": [],
+      "siblingIds": [
+        "node-s",
+        "node-tud",
+        "word-study"
+      ],
+      "videoSegment": {
+        "videoUrl": "",
+        "startSec": 0,
+        "endSec": 65,
+        "segmentTitle": "suffix y explanation",
+        "provider": "",
+        "assetId": ""
+      },
+      "updatedAt": "2026-05-07"
+    },
+    {
+      "id": "node-t",
+      "kind": "letter",
+      "status": "published",
+      "word": "t",
+      "cardType": "letter",
+      "phonetic": "/t/",
+      "meaning": "letter t: strike point",
+      "level": "letter",
+      "bookPage": 18,
+      "tip": "t is the start of the striking action inside tud.",
+      "pictograph": "The cross shape of t can be read as a tool or a clear point of impact.",
+      "parts": [],
+      "examples": [],
+      "siblingIds": [
+        "node-u",
+        "node-d",
+        "node-tud"
+      ],
+      "videoSegment": {
+        "videoUrl": "",
+        "startSec": 0,
+        "endSec": 70,
+        "segmentTitle": "letter t explanation",
+        "provider": "",
+        "assetId": ""
+      },
+      "updatedAt": "2026-05-07"
+    },
+    {
+      "id": "node-u",
+      "kind": "letter",
+      "status": "published",
+      "word": "u",
+      "cardType": "letter",
+      "phonetic": "/u/",
+      "meaning": "letter u: container",
+      "level": "letter",
+      "bookPage": 18,
+      "tip": "u receives what has been opened by the strike.",
+      "pictograph": "The shape of u looks like a cup or container. It suggests holding or receiving.",
+      "parts": [],
+      "examples": [],
+      "siblingIds": [
+        "node-t",
+        "node-d",
+        "node-tud"
+      ],
+      "videoSegment": {
+        "videoUrl": "",
+        "startSec": 0,
+        "endSec": 72,
+        "segmentTitle": "letter u explanation",
+        "provider": "",
+        "assetId": ""
+      },
+      "updatedAt": "2026-05-07"
+    },
+    {
+      "id": "node-d",
+      "kind": "letter",
+      "status": "published",
+      "word": "d",
+      "cardType": "letter",
+      "phonetic": "/d/",
+      "meaning": "letter d: landing result",
+      "level": "letter",
+      "bookPage": 18,
+      "tip": "d is the result after repeated drilling.",
+      "pictograph": "d can suggest the final landing point or the result formed after action.",
+      "parts": [],
+      "examples": [],
+      "siblingIds": [
+        "node-t",
+        "node-u",
+        "node-tud"
+      ],
+      "videoSegment": {
+        "videoUrl": "",
+        "startSec": 0,
+        "endSec": 68,
+        "segmentTitle": "letter d explanation",
+        "provider": "",
+        "assetId": ""
+      },
+      "updatedAt": "2026-05-07"
+    }
+  ],
+  "video_segments": [],
+  "feedbacks": []
+}
+

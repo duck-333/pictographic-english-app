@@ -8,6 +8,7 @@
 - 当前主线：在已有 demo 基础上，用 HBuilderX + uni-app 跑通微信小程序 MVP。
 - 当前优先级：先保证“查词首页 -> 单词详情页 -> 我的页面/学习数据雏形”稳定可运行，再扩展后台、账号、云端、视频和内容管理。
 - 当前真正要运行的小程序目录：`miniapp-uni/word-app1`。
+- 管理后台必须是独立后台项目或独立 Web 后台入口，不允许作为普通小程序页面或隐藏入口暴露给用户。
 
 ## 安全规则
 
@@ -31,6 +32,9 @@
 - 轻量静态检查：
   - `node --check miniapp-uni/word-app1/common/mock-data.js`
   - `node --check miniapp-uni/word-app1/common/user-store.js`
+  - `node --check miniapp-uni/word-app1/common/content-schema.js`
+  - `node --check miniapp-uni/word-app1/common/word-repository.js`
+  - `npm.cmd run validate:content`（Windows PowerShell 下优先用这个，避免 `npm.ps1` 执行策略拦截）
 - 当前没有完整自动化测试套件。完成前至少要做微信开发者工具手动验收，并记录无法自动验证的部分。
 
 ## 改代码边界
@@ -41,6 +45,12 @@
   - `miniapp-uni/word-app1/common`
   - `miniapp-uni/word-app1/pages.json`
   - `miniapp-uni/word-app1/manifest.json`
+- 最小后台数据准备优先改：
+  - `content-seed`
+  - `scripts/validate-content.mjs`
+  - `BackendDataModel.md`
+  - `admin-portal`
+- 不要在 `miniapp-uni/word-app1/pages` 里新增可由普通用户访问的内容录入、词库管理、资料管理页面。后台录入应放到独立后台项目，并通过管理员登录和权限控制访问。
 - `miniapp-uni/word-app1/main.js` 当前必须保持 Vue2 版 uni-app 入口：`import Vue from 'vue'`、`App.mpType = 'app'`、`new Vue({ ...App }).$mount()`。不要改成 Vue3 `createSSRApp`，除非明确执行整项目升级。
 - 根目录 `src` 是原 React demo/参考实现。除非任务明确要求，不要把它和小程序实现混在一起改。
 - `miniapp-uni` 外层旧项目容易造成运行路径混乱。除非任务明确要求迁移或清理，不要主动改外层旧项目。
@@ -55,6 +65,9 @@
 - `miniapp-uni/.hbuilderx`
 - `miniapp-uni/node_modules`
 - `miniapp-uni/word-app1/unpackage`
+- `admin-portal/pictographic-admin/unpackage`
+- `admin-portal/pictographic-admin/.hbuilderx`
+- `admin-portal/pictographic-admin/node_modules`
 - 任何 HBuilderX、微信开发者工具自动生成的编译产物，除非任务就是排查编译产物。
 
 ## 依赖边界

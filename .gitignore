@@ -3,3 +3,7 @@ dist
 miniapp-uni/unpackage
 miniapp-uni/.hbuilderx
 miniapp-uni/node_modules
+miniapp-uni/word-app1/unpackage
+admin-portal/pictographic-admin/unpackage
+admin-portal/pictographic-admin/.hbuilderx
+admin-portal/pictographic-admin/node_modules

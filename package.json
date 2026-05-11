@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "validate:content": "node scripts/validate-content.mjs"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",

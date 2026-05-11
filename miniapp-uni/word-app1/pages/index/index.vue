@@ -191,7 +191,7 @@
 </template>
 
 <script>
-import { HOT_WORDS, TODAY_WORD_ID, getWordById, getWordByWord, searchWords, normalizeWordQuery } from '../../common/mock-data.js'
+import { HOT_WORDS, TODAY_WORD_ID, getWordById, getWordByWord, searchWords, normalizeWordQuery } from '../../common/word-repository.js'
 import { addRecentWord, getRecentWords, getUserState, savePendingWordId } from '../../common/user-store.js'
 
 const initialTodayWord = getWordById(TODAY_WORD_ID)

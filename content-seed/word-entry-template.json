@@ -1,0 +1,40 @@
+{
+  "id": "word-example",
+  "kind": "word",
+  "status": "draft",
+  "word": "example",
+  "cardType": "word",
+  "phonetic": "/ig'zampel/",
+  "meaning": "n. a sample word",
+  "level": "draft",
+  "bookPage": 0,
+  "tip": "One sentence memory hint.",
+  "pictograph": "Long pictographic explanation goes here.",
+  "richTextHtml": "<p>Long editable rich text can go here later.</p>",
+  "parts": [
+    {
+      "text": "ex",
+      "meaning": "out",
+      "targetId": "",
+      "color": "#7C3AED",
+      "bgColor": "#F3F0FF",
+      "borderColor": "#C4B5FD"
+    }
+  ],
+  "examples": [
+    {
+      "english": "This is an example sentence.",
+      "chinese": "This is where the Chinese translation goes."
+    }
+  ],
+  "siblingIds": [],
+  "videoSegment": {
+    "videoUrl": "",
+    "startSec": 0,
+    "endSec": 0,
+    "segmentTitle": "",
+    "provider": "",
+    "assetId": ""
+  },
+  "updatedAt": ""
+}

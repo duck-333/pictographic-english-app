@@ -1,4 +1,4 @@
-import { getWordById } from './mock-data.js'
+import { getWordById } from './word-repository.js'
 
 export const USER_PROFILE_KEY = 'pictographic:userProfile'
 export const USER_STATE_KEY = 'pictographic:userState'

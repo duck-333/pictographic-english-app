@@ -135,7 +135,7 @@
 </template>
 
 <script>
-import { getRelatedWords, getWordById, getWordByWord } from '../../common/mock-data.js'
+import { getRelatedWords, getWordById, getWordByWord } from '../../common/word-repository.js'
 import { addRecentWord, getPendingWordId, isFavorite, savePendingWordId, toggleFavorite } from '../../common/user-store.js'
 
 export default {
