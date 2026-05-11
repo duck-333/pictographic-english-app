@@ -883,19 +883,28 @@ export default {
 				return { ok: false, message: '请先粘贴 JSON 内容' }
 			}
 			try {
-				const parsed = JSON.parse(text)
-				const words = Array.isArray(parsed) ? parsed : parsed.words
+				const parsed = JSON.parse(this.normalizeImportJsonText(text))
+				const words = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.words) ? parsed.words : [parsed])
 				if (!Array.isArray(words) || !words.length) {
-					return { ok: false, message: 'JSON 里需要有 words 数组' }
+					return { ok: false, message: 'JSON 里需要有 words 数组，或直接粘贴一个词条对象' }
 				}
 				return { ok: true, words }
 			} catch (error) {
 				return { ok: false, message: 'JSON 格式不正确，请让 AI 重新输出纯 JSON' }
 			}
 		},
+		normalizeImportJsonText(text) {
+			return String(text || '')
+				.trim()
+				.replace(/^\uFEFF/, '')
+				.replace(/,\s*$/, '')
+		},
 		normalizeImportedWord(raw) {
 			raw = raw || {}
-			return this.normalizeWord({
+			const rawVideo = raw.video || {}
+			const firstNonEmpty = (...values) => values.find((value) => value !== undefined && value !== null && String(value).trim() !== '')
+			const valueOrBlank = (value) => value === undefined ? '' : value
+			const normalized = this.normalizeWord({
 				id: raw.id || raw.wordId || raw.word,
 				word: raw.word || raw.id || raw.wordId,
 				entryType: raw.entryType || raw.type,
@@ -904,13 +913,36 @@ export default {
 				explanation: raw.explanation || raw.analysis || raw.note || '',
 				status: 'draft',
 				parts: this.normalizeImportedParts(raw.parts || raw.breakdown || raw.children || []),
-				video: raw.video || {
-					url: raw.videoUrl || '',
-					title: raw.videoTitle || '',
-					startSec: raw.startSec === undefined ? '' : raw.startSec,
-					endSec: raw.endSec === undefined ? '' : raw.endSec
+				video: {
+					url: valueOrBlank(firstNonEmpty(rawVideo.url, rawVideo.videoUrl, raw.videoUrl)),
+					title: valueOrBlank(firstNonEmpty(rawVideo.title, rawVideo.videoTitle, raw.videoTitle)),
+					startSec: valueOrBlank(firstNonEmpty(rawVideo.startSec, raw.startSec)),
+					endSec: valueOrBlank(firstNonEmpty(rawVideo.endSec, raw.endSec))
 				}
 			})
+			normalized._providedFields = this.getImportedProvidedFields(raw)
+			return normalized
+		},
+		getImportedProvidedFields(raw) {
+			const hasOwn = (target, key) => Object.prototype.hasOwnProperty.call(target || {}, key)
+			const hasNonEmpty = (...values) => values.some((value) => value !== undefined && value !== null && String(value).trim() !== '')
+			const video = raw.video || {}
+			return {
+				word: hasNonEmpty(raw.word),
+				entryType: hasNonEmpty(raw.entryType, raw.type),
+				phonetic: hasNonEmpty(raw.phonetic, raw.pronunciation),
+				meaning: hasNonEmpty(raw.meaning, raw.definition, raw.translation),
+				explanation: hasNonEmpty(raw.explanation, raw.analysis, raw.note),
+				parts: (hasOwn(raw, 'parts') && Array.isArray(raw.parts) && raw.parts.length > 0) ||
+					(hasOwn(raw, 'breakdown') && Array.isArray(raw.breakdown) && raw.breakdown.length > 0) ||
+					(hasOwn(raw, 'children') && Array.isArray(raw.children) && raw.children.length > 0),
+				video: {
+					url: hasNonEmpty(video.url, video.videoUrl, raw.videoUrl),
+					title: hasNonEmpty(video.title, video.videoTitle, raw.videoTitle),
+					startSec: hasNonEmpty(video.startSec, raw.startSec),
+					endSec: hasNonEmpty(video.endSec, raw.endSec)
+				}
+			}
 		},
 		normalizeImportedParts(parts) {
 			return Array.isArray(parts) ? parts.filter((part) => part && typeof part === 'object' && !Array.isArray(part)).map((part) => ({
@@ -1084,6 +1116,7 @@ export default {
 			uni.setStorageSync(PENDING_STORAGE_KEY, clone(this.pendingWords))
 		},
 		applyImportedWords(incoming, newCount, updateCount, options) {
+			const firstImportedId = incoming[0] ? incoming[0].id : ''
 			const incomingById = incoming.reduce((result, item) => {
 				result[item.id] = item
 				return result
@@ -1096,11 +1129,12 @@ export default {
 				}
 				return item
 			})
-			const newWords = incoming.filter((item) => !usedIds[item.id]).map((item) => clone(item))
+			const newWords = incoming.filter((item) => !usedIds[item.id]).map((item) => this.stripImportMeta(item))
 			this.words = newWords.concat(this.words)
-			if (incoming[0]) {
-				this.selectedId = incoming[0].id
-				this.form = clone(incoming[0])
+			const selected = this.words.find((item) => item.id === firstImportedId)
+			if (selected) {
+				this.selectedId = selected.id
+				this.form = clone(selected)
 			}
 			this.expandedLetters = this.defaultExpandedLetters(this.words)
 			this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
@@ -1113,23 +1147,31 @@ export default {
 		},
 		mergeImportedWord(existing, incoming) {
 			const next = clone(existing)
+			const provided = incoming._providedFields || {}
+			const hasProvidedMeta = !!incoming._providedFields
 			;['word', 'entryType', 'phonetic', 'meaning', 'explanation'].forEach((field) => {
-				if (incoming[field] !== '' && incoming[field] !== undefined) {
+				if ((!hasProvidedMeta || provided[field]) && incoming[field] !== '' && incoming[field] !== undefined) {
 					next[field] = incoming[field]
 				}
 			})
-			if (Array.isArray(incoming.parts) && incoming.parts.length) {
+			if ((!hasProvidedMeta || provided.parts) && Array.isArray(incoming.parts) && incoming.parts.length) {
 				next.parts = incoming.parts
 			}
 			const incomingVideo = incoming.video || {}
+			const providedVideo = provided.video || {}
 			next.video = next.video || {}
 			;['url', 'title', 'startSec', 'endSec'].forEach((field) => {
-				if (incomingVideo[field] !== '' && incomingVideo[field] !== undefined) {
+				if ((!hasProvidedMeta || providedVideo[field]) && incomingVideo[field] !== '' && incomingVideo[field] !== undefined) {
 					next.video[field] = incomingVideo[field]
 				}
 			})
 			next.status = 'draft'
-			return this.normalizeWord(next)
+			return this.stripImportMeta(this.normalizeWord(next))
+		},
+		stripImportMeta(item) {
+			const next = clone(item)
+			delete next._providedFields
+			return next
 		},
 		copyJson() {
 			uni.setClipboardData({

@@ -1,0 +1,981 @@
+{
+  "meta": {
+    "title": "第三课 认识字母C",
+    "source": "E:\\象形英语\\象形英语图书（核心板块）\\象形英语幼儿版策划\\【2026.2月版】幼儿版文案\\3 认识字母C.docx",
+    "format": "pictographic-admin-import",
+    "version": 1,
+    "note": "按 ImportWorkflow.md 整理。导入后台后默认进入草稿，视频字段先留空。"
+  },
+  "words": [
+    {
+      "id": "c",
+      "word": "c",
+      "entryType": "letter",
+      "phonetic": "/k/",
+      "meaning": "字母C：弯刀、足、C形物、圆形物、包围状物；也可用/k/音表义。",
+      "explanation": "字母C可追溯至古埃及象形文字的弯刀，表示砍、切；另一词源来自古闪米特字母的足，表示走。抽象化后，C还可对应把手、钥匙环、半圆、圆形物、包围状物等C形物，并可用/k/模拟声音。英文字母C的字母名读作/si:/。",
+      "parts": [],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "con",
+      "word": "con",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "角；圆形的角。",
+      "explanation": "词根con-，即C表示角，on通one，表示角。书稿中强调词根con-是角之形的描摹，其中字母C隐含圆形，强调圆形的角。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "角；圆形",
+          "targetId": "c"
+        },
+        {
+          "label": "on",
+          "title": "通 one",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "corn",
+      "word": "corn",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "转角；角。",
+      "explanation": "词根corn-来自con角，插入r表示转，强调转角。",
+      "parts": [
+        {
+          "label": "con",
+          "title": "角",
+          "targetId": "con"
+        },
+        {
+          "label": "r",
+          "title": "转",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "grav",
+      "word": "grav",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "刻；划；写。",
+      "explanation": "词根grav-，即g-Γ表示手凿，r表示转，a通one，v表示V形缺口，合起来表示刻、划、写。",
+      "parts": [
+        {
+          "label": "g",
+          "title": "Γ，手凿",
+          "targetId": ""
+        },
+        {
+          "label": "r",
+          "title": "转",
+          "targetId": ""
+        },
+        {
+          "label": "a",
+          "title": "通 one",
+          "targetId": ""
+        },
+        {
+          "label": "v",
+          "title": "V形缺口",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cre",
+      "word": "cre",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "生长；创造。",
+      "explanation": "词根cre-，即c-γ表示幼苗，re表示再，表示生长，引申为创造。书稿说明词根cre-是幼苗一再抽枝发芽之形的描摹。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "γ，幼苗",
+          "targetId": "c"
+        },
+        {
+          "label": "re",
+          "title": "再",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "clav",
+      "word": "clav",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "锁住；关闭。",
+      "explanation": "词根clav-，即c表示钥匙环，l表示钥匙柄，a通one，v表示钥匙头，表示锁住、关闭。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "钥匙环",
+          "targetId": "c"
+        },
+        {
+          "label": "l",
+          "title": "钥匙柄",
+          "targetId": ""
+        },
+        {
+          "label": "a",
+          "title": "通 one",
+          "targetId": ""
+        },
+        {
+          "label": "v",
+          "title": "钥匙头",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "col",
+      "word": "col",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "日出或日落；太阳在地平线上。",
+      "explanation": "词根col-，即c表示半个太阳，o隐含太阳，l表示地平线，表示太阳在地平线上，引申为日出或日落。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "半个太阳",
+          "targetId": "c"
+        },
+        {
+          "label": "o",
+          "title": "太阳",
+          "targetId": ""
+        },
+        {
+          "label": "l",
+          "title": "地平线",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "c-c",
+      "word": "c-c",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "两个半圆围成一个圆。",
+      "explanation": "字母组合C-C，即C表示半圆，C表示半圆，两个半圆围成一个圆，表示圆。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "半圆",
+          "targetId": "c"
+        },
+        {
+          "label": "c",
+          "title": "半圆",
+          "targetId": "c"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cycl",
+      "word": "cycl",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "车轮。",
+      "explanation": "词根cycl-，即c表示半圆，Y表示Y形车辐，c表示半圆，l表示线，合起来表示车轮。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "半圆",
+          "targetId": "c"
+        },
+        {
+          "label": "y",
+          "title": "Y形车辐",
+          "targetId": ""
+        },
+        {
+          "label": "c",
+          "title": "半圆",
+          "targetId": "c"
+        },
+        {
+          "label": "l",
+          "title": "线",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cor",
+      "word": "cor",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "心；心脏。",
+      "explanation": "词根cor-，即c表示心包，or表物，表示心脏，引申为心。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "心包",
+          "targetId": "c"
+        },
+        {
+          "label": "or",
+          "title": "表物",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cit",
+      "word": "cit",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "住所；家园；城市。",
+      "explanation": "词根cit-，即c表示城墙包围的城市，it动，表示住所、家园、城市。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "城墙包围的城市",
+          "targetId": "c"
+        },
+        {
+          "label": "it",
+          "title": "动",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cut",
+      "word": "cut",
+      "entryType": "word",
+      "phonetic": "/kʌt/",
+      "meaning": "v. 砍；切；割；切断；割断。",
+      "explanation": "cut，即c表示砍、切，ut通out，表示砍切之义。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "砍；切",
+          "targetId": "c"
+        },
+        {
+          "label": "ut",
+          "title": "通 out",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "ancient",
+      "word": "ancient",
+      "entryType": "word",
+      "phonetic": "/ˈeɪnʃənt/",
+      "meaning": "adj. 古老的；n. 古人。",
+      "explanation": "ancient，即an(t)表示在……之前，c表示走，i连接，ent为形容词后缀。",
+      "parts": [
+        {
+          "label": "an(t)",
+          "title": "在……之前",
+          "targetId": ""
+        },
+        {
+          "label": "c",
+          "title": "走",
+          "targetId": "c"
+        },
+        {
+          "label": "i",
+          "title": "连接",
+          "targetId": ""
+        },
+        {
+          "label": "ent",
+          "title": "形容词后缀",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "camel",
+      "word": "camel",
+      "entryType": "word",
+      "phonetic": "/ˈkæml/",
+      "meaning": "n. 骆驼。",
+      "explanation": "camel是拟声词，模拟骆驼的叫声，音近/gimmel/。书稿中把它放在字母C的古闪米特足、行走、骆驼逻辑下说明。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "足；骆驼；拟声",
+          "targetId": "c"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cone",
+      "word": "cone",
+      "entryType": "word",
+      "phonetic": "/kəʊn/",
+      "meaning": "n. 圆锥体。",
+      "explanation": "cone，即con表示角，e作结尾，表示圆锥体。",
+      "parts": [
+        {
+          "label": "con",
+          "title": "角",
+          "targetId": "con"
+        },
+        {
+          "label": "e",
+          "title": "结尾",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "corner",
+      "word": "corner",
+      "entryType": "word",
+      "phonetic": "/ˈkɔːnə(r)/",
+      "meaning": "n. 角；拐角。",
+      "explanation": "corner，即corn表示转角，er表物，表示角、拐角。",
+      "parts": [
+        {
+          "label": "corn",
+          "title": "转角",
+          "targetId": "corn"
+        },
+        {
+          "label": "er",
+          "title": "表物",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "grave",
+      "word": "grave",
+      "entryType": "word",
+      "phonetic": "/ɡreɪv/",
+      "meaning": "v. 雕刻；铭记。",
+      "explanation": "grave，即grav表示刻，e作结尾，表示雕刻、铭记。",
+      "parts": [
+        {
+          "label": "grav",
+          "title": "刻",
+          "targetId": "grav"
+        },
+        {
+          "label": "e",
+          "title": "结尾",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "create",
+      "word": "create",
+      "entryType": "word",
+      "phonetic": "/kriˈeɪt/",
+      "meaning": "v. 产生；创造；创作。",
+      "explanation": "create，即cre表示生长，ate为动词后缀，表示产生、创造、创作。",
+      "parts": [
+        {
+          "label": "cre",
+          "title": "生长；创造",
+          "targetId": "cre"
+        },
+        {
+          "label": "ate",
+          "title": "动词后缀",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cup",
+      "word": "cup",
+      "entryType": "word",
+      "phonetic": "/kʌp/",
+      "meaning": "n. 杯子。",
+      "explanation": "cup，即c表示把手，u表示容器，p作补充构形；词语cup是杯子之形的描摹，同时隐含up开口朝上。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "把手",
+          "targetId": "c"
+        },
+        {
+          "label": "u",
+          "title": "容器",
+          "targetId": ""
+        },
+        {
+          "label": "p",
+          "title": "构形",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "clavicle",
+      "word": "clavicle",
+      "entryType": "word",
+      "phonetic": "/ˈklævɪkl/",
+      "meaning": "n. 锁骨。",
+      "explanation": "clavicle，即clav表示锁住，ic为形容词后缀，l表示直线状，e作结尾，表示锁骨。",
+      "parts": [
+        {
+          "label": "clav",
+          "title": "锁住；关闭",
+          "targetId": "clav"
+        },
+        {
+          "label": "ic",
+          "title": "形容词后缀",
+          "targetId": ""
+        },
+        {
+          "label": "l",
+          "title": "直线状",
+          "targetId": ""
+        },
+        {
+          "label": "e",
+          "title": "结尾",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cool",
+      "word": "cool",
+      "entryType": "word",
+      "phonetic": "/kuːl/",
+      "meaning": "adj. 凉的；v. 变凉；冷却。",
+      "explanation": "cool，即col表示太阳在地平线上，插入o表示太阳。太阳停留在地平线上，天气和大地还没热起来。",
+      "parts": [
+        {
+          "label": "col",
+          "title": "太阳在地平线上",
+          "targetId": "col"
+        },
+        {
+          "label": "o",
+          "title": "太阳",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cold",
+      "word": "cold",
+      "entryType": "word",
+      "phonetic": "/kəʊld/",
+      "meaning": "adj. 寒冷的。",
+      "explanation": "cold，即col表示太阳在地平线上，d为动词后缀，并隐含down。太阳继续往下落，气温骤降。",
+      "parts": [
+        {
+          "label": "col",
+          "title": "太阳在地平线上",
+          "targetId": "col"
+        },
+        {
+          "label": "d",
+          "title": "down；往下",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cat",
+      "word": "cat",
+      "entryType": "word",
+      "phonetic": "/kæt/",
+      "meaning": "n. 猫。",
+      "explanation": "cat，即c表示抓取之手，at为动词后缀。猫有用爪子抓东西的习性，并以此为名。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "抓取之手",
+          "targetId": "c"
+        },
+        {
+          "label": "at",
+          "title": "动词后缀",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "call",
+      "word": "call",
+      "entryType": "word",
+      "phonetic": "/kɔːl/",
+      "meaning": "v. 叫喊。",
+      "explanation": "call，即c表示叫喊，all表示所有人，表示叫喊。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "嘴巴张开；叫喊",
+          "targetId": "c"
+        },
+        {
+          "label": "all",
+          "title": "所有人",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "bicycle",
+      "word": "bicycle",
+      "entryType": "word",
+      "phonetic": "/ˈbaɪsɪkl/",
+      "meaning": "n. 自行车。",
+      "explanation": "bicycle，即bi表示二，cycl表示车轮，e作结尾，表示自行车。",
+      "parts": [
+        {
+          "label": "bi",
+          "title": "二",
+          "targetId": ""
+        },
+        {
+          "label": "cycl",
+          "title": "车轮",
+          "targetId": "cycl"
+        },
+        {
+          "label": "e",
+          "title": "结尾",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "can",
+      "word": "can",
+      "entryType": "word",
+      "phonetic": "/kən/",
+      "meaning": "n. 罐头；用金属或塑料制作的容器。",
+      "explanation": "can，即c表示圆形，an通one，表示罐头或容器。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "圆形",
+          "targetId": "c"
+        },
+        {
+          "label": "an",
+          "title": "通 one",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cover",
+      "word": "cover",
+      "entryType": "word",
+      "phonetic": "/ˈkʌvə(r)/",
+      "meaning": "v. 覆盖；遮住；包括；n. 封面。",
+      "explanation": "cover，即c表示包围，over表示在……之上，表示覆盖、遮住、包括。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "包围",
+          "targetId": "c"
+        },
+        {
+          "label": "over",
+          "title": "在……之上",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cap",
+      "word": "cap",
+      "entryType": "word",
+      "phonetic": "/kæp/",
+      "meaning": "n. 帽子。",
+      "explanation": "cap，即c表示包裹头的帽子，a通one，p表示头，表示帽子。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "包裹头的帽子",
+          "targetId": "c"
+        },
+        {
+          "label": "a",
+          "title": "通 one",
+          "targetId": ""
+        },
+        {
+          "label": "p",
+          "title": "头",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "core",
+      "word": "core",
+      "entryType": "word",
+      "phonetic": "/kɔː(r)/",
+      "meaning": "n. 心脏；核心；中心；adj. 核心的。",
+      "explanation": "core，即cor表示心，e作结尾，表示心脏、核心、中心。",
+      "parts": [
+        {
+          "label": "cor",
+          "title": "心",
+          "targetId": "cor"
+        },
+        {
+          "label": "e",
+          "title": "结尾",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "city",
+      "word": "city",
+      "entryType": "word",
+      "phonetic": "/ˈsɪti/",
+      "meaning": "n. 城市；市民。",
+      "explanation": "city，即cit表示住所、城市，y作结尾，表示城市以及统称的市民。",
+      "parts": [
+        {
+          "label": "cit",
+          "title": "住所；城市",
+          "targetId": "cit"
+        },
+        {
+          "label": "y",
+          "title": "结尾",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "click",
+      "word": "click",
+      "entryType": "word",
+      "phonetic": "/klɪk/",
+      "meaning": "v. 发出喀嚓声；点击。",
+      "explanation": "click属于字母C以音表义的拟声词，借/k/音模拟声音。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "/k/ 拟声",
+          "targetId": "c"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "clock",
+      "word": "clock",
+      "entryType": "word",
+      "phonetic": "/klɒk/",
+      "meaning": "n. 时钟。",
+      "explanation": "clock属于字母C以音表义的拟声词，借/k/音模拟声音。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "/k/ 拟声",
+          "targetId": "c"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cock",
+      "word": "cock",
+      "entryType": "word",
+      "phonetic": "/kɒk/",
+      "meaning": "n. 公鸡。",
+      "explanation": "cock属于字母C以音表义的拟声词，借/k/音模拟声音。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "/k/ 拟声",
+          "targetId": "c"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cough",
+      "word": "cough",
+      "entryType": "word",
+      "phonetic": "/kɒf/",
+      "meaning": "n. 咳嗽；v. 咳嗽。",
+      "explanation": "cough属于字母C以音表义的拟声词，借/k/音模拟声音。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "/k/ 拟声",
+          "targetId": "c"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "cow",
+      "word": "cow",
+      "entryType": "word",
+      "phonetic": "/kaʊ/",
+      "meaning": "n. 奶牛。",
+      "explanation": "cow属于字母C以音表义的拟声词，借/k/音模拟声音。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "/k/ 拟声",
+          "targetId": "c"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "clone",
+      "word": "clone",
+      "entryType": "word",
+      "phonetic": "/kləʊn/",
+      "meaning": "n. 无性繁殖；克隆；v. 克隆。",
+      "explanation": "clone，即c表示切，l表示细长枝条，one表示一根，整体是切下来的一根细长枝条，用于扦插，引申为无性繁殖、克隆。",
+      "parts": [
+        {
+          "label": "c",
+          "title": "切",
+          "targetId": "c"
+        },
+        {
+          "label": "l",
+          "title": "细长枝条",
+          "targetId": ""
+        },
+        {
+          "label": "one",
+          "title": "一根",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    }
+  ]
+}

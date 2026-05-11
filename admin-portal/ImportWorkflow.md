@@ -50,7 +50,7 @@
 
 ## 后台导入 JSON 格式
 
-后台接受两种格式：
+后台接受三种格式：
 
 ```json
 {
@@ -95,6 +95,24 @@
   }
 ]
 ```
+
+也可以只粘贴一个词条对象，适合从大 JSON 里临时复制单条检查：
+
+```json
+{
+  "id": "tud",
+  "word": "tud",
+  "entryType": "root",
+  "meaning": "敲击、钻研的象形节点",
+  "parts": [
+    { "label": "t", "title": "手", "targetId": "t" },
+    { "label": "u", "title": "包含", "targetId": "u" },
+    { "label": "d", "title": "得", "targetId": "d" }
+  ]
+}
+```
+
+如果从数组里复制单条时末尾多带了一个逗号，后台会自动去掉末尾这个逗号；但中间缺括号、缺引号、中文逗号等仍然会提示 JSON 格式错误。
 
 ## entryType 规则
 

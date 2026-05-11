@@ -114,6 +114,7 @@
 
 状态：
 - 进行中：已新增 `BackendDataModel.md` 数据库草案和 `admin-portal` 独立后台骨架；后台录入不放进用户小程序。
+- 进行中：已把两个 Codex 工作树的改动分别保存到救援分支，并在 `codex/merge-rescued-worktrees-20260512` 整合后台字母折叠目录、未上传队列、JSON 容错导入和 C 课内容样例。
 
 ## 阶段 5：云服务接入和上线准备
 
