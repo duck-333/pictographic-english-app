@@ -33,12 +33,16 @@
         {
           "label": "c",
           "title": "角；圆形",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "角；圆形"
         },
         {
           "label": "on",
           "title": "通 one",
-          "targetId": ""
+          "targetId": "",
+          "text": "on",
+          "meaning": "通 one"
         }
       ],
       "video": {
@@ -59,12 +63,16 @@
         {
           "label": "con",
           "title": "角",
-          "targetId": "con"
+          "targetId": "con",
+          "text": "con",
+          "meaning": "角"
         },
         {
           "label": "r",
           "title": "转",
-          "targetId": ""
+          "targetId": "",
+          "text": "r",
+          "meaning": "转"
         }
       ],
       "video": {
@@ -85,22 +93,30 @@
         {
           "label": "g",
           "title": "Γ，手凿",
-          "targetId": ""
+          "targetId": "",
+          "text": "g",
+          "meaning": "Γ，手凿"
         },
         {
           "label": "r",
           "title": "转",
-          "targetId": ""
+          "targetId": "",
+          "text": "r",
+          "meaning": "转"
         },
         {
           "label": "a",
           "title": "通 one",
-          "targetId": ""
+          "targetId": "",
+          "text": "a",
+          "meaning": "通 one"
         },
         {
           "label": "v",
           "title": "V形缺口",
-          "targetId": ""
+          "targetId": "",
+          "text": "v",
+          "meaning": "V形缺口"
         }
       ],
       "video": {
@@ -121,12 +137,16 @@
         {
           "label": "c",
           "title": "γ，幼苗",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "γ，幼苗"
         },
         {
           "label": "re",
           "title": "再",
-          "targetId": ""
+          "targetId": "",
+          "text": "re",
+          "meaning": "再"
         }
       ],
       "video": {
@@ -147,22 +167,30 @@
         {
           "label": "c",
           "title": "钥匙环",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "钥匙环"
         },
         {
           "label": "l",
           "title": "钥匙柄",
-          "targetId": ""
+          "targetId": "",
+          "text": "l",
+          "meaning": "钥匙柄"
         },
         {
           "label": "a",
           "title": "通 one",
-          "targetId": ""
+          "targetId": "",
+          "text": "a",
+          "meaning": "通 one"
         },
         {
           "label": "v",
           "title": "钥匙头",
-          "targetId": ""
+          "targetId": "",
+          "text": "v",
+          "meaning": "钥匙头"
         }
       ],
       "video": {
@@ -183,17 +211,23 @@
         {
           "label": "c",
           "title": "半个太阳",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "半个太阳"
         },
         {
           "label": "o",
           "title": "太阳",
-          "targetId": ""
+          "targetId": "",
+          "text": "o",
+          "meaning": "太阳"
         },
         {
           "label": "l",
           "title": "地平线",
-          "targetId": ""
+          "targetId": "",
+          "text": "l",
+          "meaning": "地平线"
         }
       ],
       "video": {
@@ -214,12 +248,16 @@
         {
           "label": "c",
           "title": "半圆",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "半圆"
         },
         {
           "label": "c",
           "title": "半圆",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "半圆"
         }
       ],
       "video": {
@@ -240,22 +278,30 @@
         {
           "label": "c",
           "title": "半圆",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "半圆"
         },
         {
           "label": "y",
           "title": "Y形车辐",
-          "targetId": ""
+          "targetId": "",
+          "text": "y",
+          "meaning": "Y形车辐"
         },
         {
           "label": "c",
           "title": "半圆",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "半圆"
         },
         {
           "label": "l",
           "title": "线",
-          "targetId": ""
+          "targetId": "",
+          "text": "l",
+          "meaning": "线"
         }
       ],
       "video": {
@@ -276,12 +322,16 @@
         {
           "label": "c",
           "title": "心包",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "心包"
         },
         {
           "label": "or",
           "title": "表物",
-          "targetId": ""
+          "targetId": "",
+          "text": "or",
+          "meaning": "表物"
         }
       ],
       "video": {
@@ -302,12 +352,16 @@
         {
           "label": "c",
           "title": "城墙包围的城市",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "城墙包围的城市"
         },
         {
           "label": "it",
           "title": "动",
-          "targetId": ""
+          "targetId": "",
+          "text": "it",
+          "meaning": "动"
         }
       ],
       "video": {
@@ -328,12 +382,16 @@
         {
           "label": "c",
           "title": "砍；切",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "砍；切"
         },
         {
           "label": "ut",
           "title": "通 out",
-          "targetId": ""
+          "targetId": "",
+          "text": "ut",
+          "meaning": "通 out"
         }
       ],
       "video": {
@@ -354,22 +412,30 @@
         {
           "label": "an(t)",
           "title": "在……之前",
-          "targetId": ""
+          "targetId": "",
+          "text": "an(t)",
+          "meaning": "在……之前"
         },
         {
           "label": "c",
           "title": "走",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "走"
         },
         {
           "label": "i",
           "title": "连接",
-          "targetId": ""
+          "targetId": "",
+          "text": "i",
+          "meaning": "连接"
         },
         {
           "label": "ent",
           "title": "形容词后缀",
-          "targetId": ""
+          "targetId": "",
+          "text": "ent",
+          "meaning": "形容词后缀"
         }
       ],
       "video": {
@@ -390,7 +456,9 @@
         {
           "label": "c",
           "title": "足；骆驼；拟声",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "足；骆驼；拟声"
         }
       ],
       "video": {
@@ -411,12 +479,16 @@
         {
           "label": "con",
           "title": "角",
-          "targetId": "con"
+          "targetId": "con",
+          "text": "con",
+          "meaning": "角"
         },
         {
           "label": "e",
           "title": "结尾",
-          "targetId": ""
+          "targetId": "",
+          "text": "e",
+          "meaning": "结尾"
         }
       ],
       "video": {
@@ -437,12 +509,16 @@
         {
           "label": "corn",
           "title": "转角",
-          "targetId": "corn"
+          "targetId": "corn",
+          "text": "corn",
+          "meaning": "转角"
         },
         {
           "label": "er",
           "title": "表物",
-          "targetId": ""
+          "targetId": "",
+          "text": "er",
+          "meaning": "表物"
         }
       ],
       "video": {
@@ -463,12 +539,16 @@
         {
           "label": "grav",
           "title": "刻",
-          "targetId": "grav"
+          "targetId": "grav",
+          "text": "grav",
+          "meaning": "刻"
         },
         {
           "label": "e",
           "title": "结尾",
-          "targetId": ""
+          "targetId": "",
+          "text": "e",
+          "meaning": "结尾"
         }
       ],
       "video": {
@@ -489,12 +569,16 @@
         {
           "label": "cre",
           "title": "生长；创造",
-          "targetId": "cre"
+          "targetId": "cre",
+          "text": "cre",
+          "meaning": "生长；创造"
         },
         {
           "label": "ate",
           "title": "动词后缀",
-          "targetId": ""
+          "targetId": "",
+          "text": "ate",
+          "meaning": "动词后缀"
         }
       ],
       "video": {
@@ -515,17 +599,23 @@
         {
           "label": "c",
           "title": "把手",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "把手"
         },
         {
           "label": "u",
           "title": "容器",
-          "targetId": ""
+          "targetId": "",
+          "text": "u",
+          "meaning": "容器"
         },
         {
           "label": "p",
           "title": "构形",
-          "targetId": ""
+          "targetId": "",
+          "text": "p",
+          "meaning": "构形"
         }
       ],
       "video": {
@@ -546,22 +636,30 @@
         {
           "label": "clav",
           "title": "锁住；关闭",
-          "targetId": "clav"
+          "targetId": "clav",
+          "text": "clav",
+          "meaning": "锁住；关闭"
         },
         {
           "label": "ic",
           "title": "形容词后缀",
-          "targetId": ""
+          "targetId": "",
+          "text": "ic",
+          "meaning": "形容词后缀"
         },
         {
           "label": "l",
           "title": "直线状",
-          "targetId": ""
+          "targetId": "",
+          "text": "l",
+          "meaning": "直线状"
         },
         {
           "label": "e",
           "title": "结尾",
-          "targetId": ""
+          "targetId": "",
+          "text": "e",
+          "meaning": "结尾"
         }
       ],
       "video": {
@@ -582,12 +680,16 @@
         {
           "label": "col",
           "title": "太阳在地平线上",
-          "targetId": "col"
+          "targetId": "col",
+          "text": "col",
+          "meaning": "太阳在地平线上"
         },
         {
           "label": "o",
           "title": "太阳",
-          "targetId": ""
+          "targetId": "",
+          "text": "o",
+          "meaning": "太阳"
         }
       ],
       "video": {
@@ -608,12 +710,16 @@
         {
           "label": "col",
           "title": "太阳在地平线上",
-          "targetId": "col"
+          "targetId": "col",
+          "text": "col",
+          "meaning": "太阳在地平线上"
         },
         {
           "label": "d",
           "title": "down；往下",
-          "targetId": ""
+          "targetId": "",
+          "text": "d",
+          "meaning": "down；往下"
         }
       ],
       "video": {
@@ -634,12 +740,16 @@
         {
           "label": "c",
           "title": "抓取之手",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "抓取之手"
         },
         {
           "label": "at",
           "title": "动词后缀",
-          "targetId": ""
+          "targetId": "",
+          "text": "at",
+          "meaning": "动词后缀"
         }
       ],
       "video": {
@@ -660,12 +770,16 @@
         {
           "label": "c",
           "title": "嘴巴张开；叫喊",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "嘴巴张开；叫喊"
         },
         {
           "label": "all",
           "title": "所有人",
-          "targetId": ""
+          "targetId": "",
+          "text": "all",
+          "meaning": "所有人"
         }
       ],
       "video": {
@@ -686,17 +800,23 @@
         {
           "label": "bi",
           "title": "二",
-          "targetId": ""
+          "targetId": "",
+          "text": "bi",
+          "meaning": "二"
         },
         {
           "label": "cycl",
           "title": "车轮",
-          "targetId": "cycl"
+          "targetId": "cycl",
+          "text": "cycl",
+          "meaning": "车轮"
         },
         {
           "label": "e",
           "title": "结尾",
-          "targetId": ""
+          "targetId": "",
+          "text": "e",
+          "meaning": "结尾"
         }
       ],
       "video": {
@@ -717,12 +837,16 @@
         {
           "label": "c",
           "title": "圆形",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "圆形"
         },
         {
           "label": "an",
           "title": "通 one",
-          "targetId": ""
+          "targetId": "",
+          "text": "an",
+          "meaning": "通 one"
         }
       ],
       "video": {
@@ -743,12 +867,16 @@
         {
           "label": "c",
           "title": "包围",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "包围"
         },
         {
           "label": "over",
           "title": "在……之上",
-          "targetId": ""
+          "targetId": "",
+          "text": "over",
+          "meaning": "在……之上"
         }
       ],
       "video": {
@@ -769,17 +897,23 @@
         {
           "label": "c",
           "title": "包裹头的帽子",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "包裹头的帽子"
         },
         {
           "label": "a",
           "title": "通 one",
-          "targetId": ""
+          "targetId": "",
+          "text": "a",
+          "meaning": "通 one"
         },
         {
           "label": "p",
           "title": "头",
-          "targetId": ""
+          "targetId": "",
+          "text": "p",
+          "meaning": "头"
         }
       ],
       "video": {
@@ -800,12 +934,16 @@
         {
           "label": "cor",
           "title": "心",
-          "targetId": "cor"
+          "targetId": "cor",
+          "text": "cor",
+          "meaning": "心"
         },
         {
           "label": "e",
           "title": "结尾",
-          "targetId": ""
+          "targetId": "",
+          "text": "e",
+          "meaning": "结尾"
         }
       ],
       "video": {
@@ -826,12 +964,16 @@
         {
           "label": "cit",
           "title": "住所；城市",
-          "targetId": "cit"
+          "targetId": "cit",
+          "text": "cit",
+          "meaning": "住所；城市"
         },
         {
           "label": "y",
           "title": "结尾",
-          "targetId": ""
+          "targetId": "",
+          "text": "y",
+          "meaning": "结尾"
         }
       ],
       "video": {
@@ -852,7 +994,9 @@
         {
           "label": "c",
           "title": "/k/ 拟声",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "/k/ 拟声"
         }
       ],
       "video": {
@@ -873,7 +1017,9 @@
         {
           "label": "c",
           "title": "/k/ 拟声",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "/k/ 拟声"
         }
       ],
       "video": {
@@ -894,7 +1040,9 @@
         {
           "label": "c",
           "title": "/k/ 拟声",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "/k/ 拟声"
         }
       ],
       "video": {
@@ -915,7 +1063,9 @@
         {
           "label": "c",
           "title": "/k/ 拟声",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "/k/ 拟声"
         }
       ],
       "video": {
@@ -936,7 +1086,9 @@
         {
           "label": "c",
           "title": "/k/ 拟声",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "/k/ 拟声"
         }
       ],
       "video": {
@@ -957,17 +1109,23 @@
         {
           "label": "c",
           "title": "切",
-          "targetId": "c"
+          "targetId": "c",
+          "text": "c",
+          "meaning": "切"
         },
         {
           "label": "l",
           "title": "细长枝条",
-          "targetId": ""
+          "targetId": "",
+          "text": "l",
+          "meaning": "细长枝条"
         },
         {
           "label": "one",
           "title": "一根",
-          "targetId": ""
+          "targetId": "",
+          "text": "one",
+          "meaning": "一根"
         }
       ],
       "video": {

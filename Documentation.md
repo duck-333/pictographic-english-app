@@ -277,3 +277,16 @@
 2. 如果继续小程序页面开发，优先检查 `miniapp-uni/word-app1` 是否能在 HBuilderX 跑起来。
 3. 如果页面报错，先看微信开发者工具 Console，再看 HBuilderX 编译日志。
 4. 如果要开长任务，先写清本次目标和允许改的文件，再分配子代理。
+### 2026-05-15：项目结构交付级整理检查
+
+决策：
+- 当前仍采用一个 Git 仓库管理小程序、后台、内容数据和校验脚本。
+- 新增 `scripts/audit-project.mjs`，用于检查真实小程序和后台入口、页面路由、本地引用和静态资源引用。
+- `scripts/validate-content.mjs` 支持一次校验多个内容文件。
+- 根目录 `package.json` 新增 `npm.cmd run check` 作为当前交付前的统一轻量检查入口。
+- 修正 `content-seed/letter-c-import.json` 的拆解项字段，使其与 `letter-c-import-paste-ready.json` 一样符合当前内容结构。
+
+原因：
+- 项目里仍有早期 React/Vite demo、外层旧 `miniapp-uni` 和已跟踪 `dist`，这些属于历史/参考区域；按照项目安全规则，暂不批量删除。
+- 在不批量删除文件的前提下，先把真实交付入口和可重复检查命令固定下来，降低后续误改旧项目或错误目录的风险。
+- 后续如需物理清理历史目录，应先列出清单，由用户手动确认后逐项处理。

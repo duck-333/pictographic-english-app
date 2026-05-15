@@ -8,7 +8,9 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const repoRoot = path.resolve(__dirname, '..')
 const defaultFile = path.join(repoRoot, 'content-seed', 'words.example.json')
-const inputFile = path.resolve(repoRoot, process.argv[2] || defaultFile)
+const inputFiles = process.argv.length > 2
+  ? process.argv.slice(2).map((filePath) => path.resolve(repoRoot, filePath))
+  : [defaultFile]
 
 function readJson(filePath) {
   try {
@@ -96,7 +98,7 @@ function validateVideoSegments(content, recordById, errors) {
   })
 }
 
-function main() {
+function validateFile(inputFile) {
   const content = readJson(inputFile)
   const records = collectRecords(content)
   const errors = []
@@ -112,9 +114,9 @@ function main() {
 
   if (errors.length > 0) {
     console.error('Content validation failed')
+    console.error(`- file: ${path.relative(repoRoot, inputFile)}`)
     errors.forEach((message) => console.error(`- ${message}`))
-    process.exitCode = 1
-    return
+    return false
   }
 
   console.log('Content validation passed')
@@ -123,6 +125,21 @@ function main() {
   console.log(`- words: ${content.id || content.word ? records.length : asArray(content.words).length}`)
   console.log(`- word_nodes: ${content.id || content.word ? 0 : asArray(content.word_nodes || content.wordNodes).length}`)
   console.log(`- video_segments: ${asArray(content.video_segments || content.videoSegments).length}`)
+  return true
+}
+
+function main() {
+  let ok = true
+  inputFiles.forEach((inputFile, index) => {
+    if (index > 0) {
+      console.log('')
+    }
+    ok = validateFile(inputFile) && ok
+  })
+
+  if (!ok) {
+    process.exitCode = 1
+  }
 }
 
 main()
