@@ -150,13 +150,45 @@
 				<view class="section-head">
 					<view>
 						<text class="section-title">讲解视频</text>
-						<text class="panel-note">先填视频链接和时间点；正式上线后再接云存储上传。</text>
+						<text class="panel-note">按真实上传流程演练：选文件、校验、上传、生成视频资产信息。当前不写入云端，后续只替换上传接口。</text>
+					</view>
+				</view>
+				<view class="video-upload-card">
+					<view class="video-upload-main">
+						<label class="file-button">
+							选择视频文件
+							<input type="file" accept="video/mp4,video/webm,video/quicktime,video/*" @change="handleVideoFileChange" />
+						</label>
+						<view class="video-upload-copy">
+							<text class="video-upload-title">{{ videoUpload.fileName || '还没有选择视频' }}</text>
+							<text class="video-upload-note">{{ videoUpload.message }}</text>
+						</view>
+					</view>
+					<view class="upload-progress-track">
+						<view class="upload-progress-bar" :style="{ width: videoUpload.progress + '%' }"></view>
+					</view>
+					<view class="video-upload-meta">
+						<text>状态：{{ videoUploadStatusText }}</text>
+						<text>大小：{{ videoUpload.fileSizeLabel || '未选择' }}</text>
+						<text>类型：{{ videoUpload.mimeType || '未知' }}</text>
+					</view>
+					<video
+						v-if="videoUpload.previewUrl"
+						class="admin-video-preview"
+						:src="videoUpload.previewUrl"
+						controls
+					></video>
+					<view v-if="form.video && form.video.assetId" class="video-asset-box">
+						<text class="video-asset-title">已生成视频资产</text>
+						<text class="video-asset-line">Asset ID：{{ form.video.assetId }}</text>
+						<text class="video-asset-line">未来存储路径：{{ form.video.storagePath }}</text>
+						<button class="secondary-button clear-video-button" @click="clearVideoAsset">清除视频资产</button>
 					</view>
 				</view>
 				<view class="form-grid">
 					<label class="field">
-						<text>视频链接</text>
-						<input v-model="form.video.url" placeholder="https://.../study.mp4" />
+						<text>视频播放地址</text>
+						<input v-model="form.video.url" placeholder="真实上线后这里是 HTTPS 或云存储临时链接" />
 					</label>
 					<label class="field">
 						<text>视频标题</text>
@@ -223,6 +255,7 @@
 						<view v-if="form.video && form.video.url" class="preview-video">
 							<text class="preview-video-title">讲解视频</text>
 							<text class="preview-video-time">{{ form.video.title || '未命名视频' }} · {{ form.video.startSec || 0 }}s - {{ form.video.endSec || '?' }}s</text>
+							<text class="preview-video-time">来源：{{ form.video.provider || '手动链接' }} · {{ form.video.uploadStatus || '待上传' }}</text>
 						</view>
 					</view>
 				</view>
@@ -231,7 +264,8 @@
 					<text class="section-title">下一步接云时会做什么？</text>
 					<text class="next-line">1. 把本地草稿变成 words 数据表。</text>
 					<text class="next-line">2. 给管理员加登录和角色权限。</text>
-					<text class="next-line">3. 小程序只读取已发布内容。</text>
+					<text class="next-line">3. 把视频上传演练替换成真实云存储上传。</text>
+					<text class="next-line">4. 小程序只读取已发布内容。</text>
 				</view>
 			</view>
 		</view>
@@ -267,6 +301,9 @@
 const STORAGE_KEY = 'pictographic-admin:words-draft'
 const PENDING_STORAGE_KEY = 'pictographic-admin:pending-imports'
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+const VIDEO_MAX_SIZE_MB = 200
+const VIDEO_MAX_SIZE_BYTES = VIDEO_MAX_SIZE_MB * 1024 * 1024
+const VIDEO_UPLOAD_PROVIDER = 'local-upload-rehearsal'
 
 const seedWords = [{
 	id: 'study',
@@ -343,6 +380,16 @@ export default {
 			selectedSource: 'uploaded',
 			selectedId: '',
 			form: clone(seedWords[0]),
+			videoUpload: {
+				status: 'idle',
+				progress: 0,
+				fileName: '',
+				fileSizeLabel: '',
+				mimeType: '',
+				message: '选择一个本地视频文件，系统会按未来上传流程做格式、大小和元数据校验。',
+				previewUrl: ''
+			},
+			videoUploadTimer: null,
 			saveState: '未保存',
 			statusOptions: [
 				{ label: '草稿', value: 'draft' },
@@ -384,6 +431,16 @@ export default {
 		currentJson() {
 			return JSON.stringify(this.form, null, 2)
 		},
+		videoUploadStatusText() {
+			const statusMap = {
+				idle: '待选择',
+				ready: '已选择，待上传',
+				uploading: '上传演练中',
+				done: '上传演练完成',
+				error: '需要处理'
+			}
+			return statusMap[this.videoUpload.status] || '待选择'
+		},
 		letterGroups() {
 			const groups = LETTERS.map((letter) => {
 				const words = this.activeWords.filter((item) => this.getFirstLetter(item) === letter && this.matchesKeyword(item))
@@ -420,6 +477,12 @@ export default {
 	onLoad() {
 		this.loadDraft()
 	},
+	beforeDestroy() {
+		this.releaseVideoPreview()
+		if (this.videoUploadTimer) {
+			clearInterval(this.videoUploadTimer)
+		}
+	},
 	methods: {
 		loadDraft() {
 			const saved = uni.getStorageSync(STORAGE_KEY)
@@ -433,6 +496,7 @@ export default {
 			this.form = this.words[0] ? clone(this.words[0]) : clone(seedWords[0])
 			this.saveState = saved ? '已读取本地草稿' : '使用示例数据'
 			this.expandedLetters = this.defaultExpandedLetters(this.words)
+			this.syncVideoUploadStateFromForm()
 		},
 		switchBucket(bucket) {
 			if (this.activeBucket === bucket) return
@@ -449,10 +513,12 @@ export default {
 					this.selectedSource = 'uploaded'
 					this.selectedId = this.words[0].id
 					this.form = clone(this.words[0])
+					this.syncVideoUploadStateFromForm()
 				} else if (source === 'uploaded') {
 					this.selectedSource = 'uploaded'
 					this.selectedId = ''
 					this.form = clone(seedWords[0])
+					this.syncVideoUploadStateFromForm()
 				}
 				this.saveState = source === 'pending' ? '未上传列表为空，仍在编辑当前词条' : '已上传列表为空'
 			}
@@ -473,6 +539,7 @@ export default {
 			this.selectedSource = source
 			this.selectedId = id
 			this.form = source === 'pending' ? this.normalizePendingWord(target) : this.normalizeWord(target)
+			this.syncVideoUploadStateFromForm()
 			this.saveState = (source === 'pending' ? '正在检查未上传 ' : '正在编辑 ') + target.word
 		},
 		createWord() {
@@ -500,6 +567,7 @@ export default {
 			this.words.unshift(next)
 			this.selectedId = next.id
 			this.form = clone(next)
+			this.syncVideoUploadStateFromForm()
 			this.ensureLetterExpanded(this.getFirstLetter(next))
 			this.saveState = '已创建新草稿'
 		},
@@ -580,7 +648,10 @@ export default {
 					return next
 				})
 				const current = this.words.find((item) => item.id === this.selectedId)
-				if (current) this.form = clone(current)
+				if (current) {
+					this.form = clone(current)
+					this.syncVideoUploadStateFromForm()
+				}
 				uni.setStorageSync(STORAGE_KEY, clone(this.words))
 				this.saveState = '全部草稿已发布到本地列表'
 				uni.showToast({ title: '已发布全部草稿', icon: 'success' })
@@ -651,6 +722,7 @@ export default {
 			this.selectedSource = 'uploaded'
 			this.selectedId = this.words[0].id
 			this.form = clone(this.words[0])
+			this.syncVideoUploadStateFromForm()
 			this.expandedLetters = this.defaultExpandedLetters(this.words)
 			this.saveState = '已恢复示例数据'
 		},
@@ -721,6 +793,175 @@ export default {
 			})
 			return letters.slice(0, 4)
 		},
+		syncVideoUploadStateFromForm() {
+			this.releaseVideoPreview()
+			const video = this.form && this.form.video ? this.form.video : {}
+			if (video.assetId || video.url) {
+				this.videoUpload = {
+					status: video.assetId ? 'done' : 'ready',
+					progress: video.assetId ? 100 : 0,
+					fileName: video.fileName || '',
+					fileSizeLabel: video.size ? this.formatFileSize(video.size) : '',
+					mimeType: video.mimeType || '',
+					message: video.assetId
+						? '当前词条已经有视频资产信息。'
+						: '当前词条只有视频地址，还没有上传资产元数据。',
+					previewUrl: ''
+				}
+				return
+			}
+			this.videoUpload = {
+				status: 'idle',
+				progress: 0,
+				fileName: '',
+				fileSizeLabel: '',
+				mimeType: '',
+				message: '选择一个本地视频文件，系统会按未来上传流程做格式、大小和元数据校验。',
+				previewUrl: ''
+			}
+		},
+		handleVideoFileChange(event) {
+			const files = event && event.target && event.target.files ? event.target.files : []
+			const file = files[0]
+			if (!file) return
+
+			const validation = this.validateVideoFile(file)
+			if (!validation.ok) {
+				this.videoUpload = {
+					status: 'error',
+					progress: 0,
+					fileName: file.name || '',
+					fileSizeLabel: this.formatFileSize(file.size || 0),
+					mimeType: file.type || '未知',
+					message: validation.message,
+					previewUrl: ''
+				}
+				uni.showToast({ title: validation.message, icon: 'none' })
+				return
+			}
+
+			this.releaseVideoPreview()
+			const previewUrl = URL.createObjectURL(file)
+			this.videoUpload = {
+				status: 'ready',
+				progress: 0,
+				fileName: file.name,
+				fileSizeLabel: this.formatFileSize(file.size),
+				mimeType: file.type || 'video/*',
+				message: '文件已选择，正在模拟上传到未来云存储。',
+				previewUrl
+			}
+			this.ensureVideoObject()
+			if (!this.form.video.title) {
+				this.form.video.title = `${this.form.word || file.name} 的象形讲解`
+			}
+			this.simulateVideoUpload(file)
+		},
+		validateVideoFile(file) {
+			const fileName = file && file.name ? file.name.toLowerCase() : ''
+			const mimeType = file && file.type ? file.type : ''
+			const allowedExtension = /\.(mp4|mov|m4v|webm)$/i.test(fileName)
+			const allowedMime = mimeType.indexOf('video/') === 0
+
+			if (!allowedExtension && !allowedMime) {
+				return { ok: false, message: '请选择 mp4、mov、m4v 或 webm 视频文件' }
+			}
+			if (file.size > VIDEO_MAX_SIZE_BYTES) {
+				return { ok: false, message: `视频不能超过 ${VIDEO_MAX_SIZE_MB}MB` }
+			}
+			return { ok: true }
+		},
+		simulateVideoUpload(file) {
+			if (this.videoUploadTimer) {
+				clearInterval(this.videoUploadTimer)
+			}
+
+			this.videoUpload.status = 'uploading'
+			this.videoUpload.progress = 8
+			this.videoUpload.message = '上传演练中：正在生成资产 ID、存储路径和播放地址。'
+
+			this.videoUploadTimer = setInterval(() => {
+				const nextProgress = Math.min(this.videoUpload.progress + 18, 100)
+				this.videoUpload.progress = nextProgress
+
+				if (nextProgress < 100) return
+				clearInterval(this.videoUploadTimer)
+				this.videoUploadTimer = null
+				this.completeVideoUpload(file)
+			}, 220)
+		},
+		completeVideoUpload(file) {
+			const safeName = this.toSafeVideoFileName(file.name || 'lesson-video.mp4')
+			const assetId = `${this.form.id || this.form.word || 'word'}-${Date.now()}`
+			const storagePath = `videos/${this.form.id || 'draft'}/${assetId}-${safeName}`
+
+			this.ensureVideoObject()
+			this.form.video = Object.assign({}, this.form.video, {
+				url: `mock-cloud://${storagePath}`,
+				provider: VIDEO_UPLOAD_PROVIDER,
+				assetId,
+				storagePath,
+				fileName: file.name || safeName,
+				mimeType: file.type || 'video/*',
+				size: file.size || 0,
+				uploadStatus: 'uploaded',
+				uploadedAt: new Date().toISOString()
+			})
+			this.videoUpload.status = 'done'
+			this.videoUpload.progress = 100
+			this.videoUpload.message = '上传演练完成：字段已写入当前词条，正式接云时会把 mock-cloud 替换成真实 HTTPS/云文件地址。'
+			this.saveState = '视频资产已写入当前词条'
+		},
+		clearVideoAsset() {
+			this.releaseVideoPreview()
+			this.ensureVideoObject()
+			this.form.video = Object.assign({}, this.form.video, {
+				url: '',
+				provider: '',
+				assetId: '',
+				storagePath: '',
+				fileName: '',
+				mimeType: '',
+				size: '',
+				uploadStatus: '',
+				uploadedAt: ''
+			})
+			this.videoUpload = {
+				status: 'idle',
+				progress: 0,
+				fileName: '',
+				fileSizeLabel: '',
+				mimeType: '',
+				message: '视频资产已清除，可以重新选择文件。',
+				previewUrl: ''
+			}
+		},
+		ensureVideoObject() {
+			if (!this.form.video) {
+				this.$set(this.form, 'video', {
+					url: '',
+					title: '',
+					startSec: '',
+					endSec: ''
+				})
+			}
+		},
+		releaseVideoPreview() {
+			if (this.videoUpload && this.videoUpload.previewUrl) {
+				URL.revokeObjectURL(this.videoUpload.previewUrl)
+			}
+		},
+		formatFileSize(size) {
+			const value = Number(size || 0)
+			if (value < 1024 * 1024) {
+				return `${Math.max(1, Math.round(value / 1024))}KB`
+			}
+			return `${(value / 1024 / 1024).toFixed(1)}MB`
+		},
+		toSafeVideoFileName(fileName) {
+			const normalized = String(fileName || 'lesson-video.mp4').trim().toLowerCase()
+			return normalized.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'lesson-video.mp4'
+		},
 		normalizeWord(item) {
 			const next = clone(item)
 			next.id = String(next.id || '').trim()
@@ -737,11 +978,20 @@ export default {
 			const video = next.video || {}
 			const startSec = Number(video.startSec)
 			const endSec = Number(video.endSec)
+			const videoSize = Number(video.size)
 			next.video = {
 				url: String(video.url || video.videoUrl || '').trim(),
 				title: String(video.title || video.videoTitle || '').trim(),
 				startSec: video.startSec === '' || video.startSec === undefined || Number.isNaN(startSec) ? '' : startSec,
-				endSec: video.endSec === '' || video.endSec === undefined || Number.isNaN(endSec) ? '' : endSec
+				endSec: video.endSec === '' || video.endSec === undefined || Number.isNaN(endSec) ? '' : endSec,
+				provider: String(video.provider || '').trim(),
+				assetId: String(video.assetId || video.asset_id || '').trim(),
+				storagePath: String(video.storagePath || video.storage_path || '').trim(),
+				fileName: String(video.fileName || video.file_name || '').trim(),
+				mimeType: String(video.mimeType || video.mime_type || '').trim(),
+				size: video.size === '' || video.size === undefined || Number.isNaN(videoSize) ? '' : videoSize,
+				uploadStatus: String(video.uploadStatus || video.upload_status || '').trim(),
+				uploadedAt: String(video.uploadedAt || video.uploaded_at || '').trim()
 			}
 			next.entryType = this.getEntryType(next)
 			return next
@@ -917,7 +1167,15 @@ export default {
 					url: valueOrBlank(firstNonEmpty(rawVideo.url, rawVideo.videoUrl, raw.videoUrl)),
 					title: valueOrBlank(firstNonEmpty(rawVideo.title, rawVideo.videoTitle, raw.videoTitle)),
 					startSec: valueOrBlank(firstNonEmpty(rawVideo.startSec, raw.startSec)),
-					endSec: valueOrBlank(firstNonEmpty(rawVideo.endSec, raw.endSec))
+					endSec: valueOrBlank(firstNonEmpty(rawVideo.endSec, raw.endSec)),
+					provider: valueOrBlank(firstNonEmpty(rawVideo.provider, raw.provider)),
+					assetId: valueOrBlank(firstNonEmpty(rawVideo.assetId, rawVideo.asset_id, raw.assetId)),
+					storagePath: valueOrBlank(firstNonEmpty(rawVideo.storagePath, rawVideo.storage_path, raw.storagePath)),
+					fileName: valueOrBlank(firstNonEmpty(rawVideo.fileName, rawVideo.file_name, raw.fileName)),
+					mimeType: valueOrBlank(firstNonEmpty(rawVideo.mimeType, rawVideo.mime_type, raw.mimeType)),
+					size: valueOrBlank(firstNonEmpty(rawVideo.size, raw.size)),
+					uploadStatus: valueOrBlank(firstNonEmpty(rawVideo.uploadStatus, rawVideo.upload_status, raw.uploadStatus)),
+					uploadedAt: valueOrBlank(firstNonEmpty(rawVideo.uploadedAt, rawVideo.uploaded_at, raw.uploadedAt))
 				}
 			})
 			normalized._providedFields = this.getImportedProvidedFields(raw)
@@ -940,7 +1198,15 @@ export default {
 					url: hasNonEmpty(video.url, video.videoUrl, raw.videoUrl),
 					title: hasNonEmpty(video.title, video.videoTitle, raw.videoTitle),
 					startSec: hasNonEmpty(video.startSec, raw.startSec),
-					endSec: hasNonEmpty(video.endSec, raw.endSec)
+					endSec: hasNonEmpty(video.endSec, raw.endSec),
+					provider: hasNonEmpty(video.provider, raw.provider),
+					assetId: hasNonEmpty(video.assetId, video.asset_id, raw.assetId),
+					storagePath: hasNonEmpty(video.storagePath, video.storage_path, raw.storagePath),
+					fileName: hasNonEmpty(video.fileName, video.file_name, raw.fileName),
+					mimeType: hasNonEmpty(video.mimeType, video.mime_type, raw.mimeType),
+					size: hasNonEmpty(video.size, raw.size),
+					uploadStatus: hasNonEmpty(video.uploadStatus, video.upload_status, raw.uploadStatus),
+					uploadedAt: hasNonEmpty(video.uploadedAt, video.uploaded_at, raw.uploadedAt)
 				}
 			}
 		},
@@ -1007,6 +1273,7 @@ export default {
 				this.selectedSource = 'pending'
 				this.selectedId = this.pendingWords[0].id
 				this.form = clone(this.pendingWords[0])
+				this.syncVideoUploadStateFromForm()
 			}
 			this.expandedLetters = this.defaultExpandedLetters(this.pendingWords)
 			this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
@@ -1036,6 +1303,7 @@ export default {
 					this.selectedSource = 'uploaded'
 					this.selectedId = draft.id
 					this.form = clone(draft)
+					this.syncVideoUploadStateFromForm()
 					this.expandedLetters = this.defaultExpandedLetters(this.words)
 					this.ensureLetterExpanded(this.getFirstLetter(draft) || '#')
 					this.saveState = '已加入草稿列表'
@@ -1079,6 +1347,7 @@ export default {
 					if (drafts[0]) {
 						this.selectedId = drafts[0].id
 						this.form = clone(drafts[0])
+						this.syncVideoUploadStateFromForm()
 					}
 					this.expandedLetters = this.defaultExpandedLetters(this.words)
 					this.saveState = '未上传词条已批量加入草稿'
@@ -1106,6 +1375,7 @@ export default {
 					this.selectedSource = 'uploaded'
 					this.selectedId = this.words[0] ? this.words[0].id : ''
 					this.form = this.words[0] ? clone(this.words[0]) : clone(seedWords[0])
+					this.syncVideoUploadStateFromForm()
 					this.expandedLetters = this.defaultExpandedLetters(this.words)
 					this.saveState = '已清空未上传列表'
 					uni.showToast({ title: '已清空', icon: 'success' })
@@ -1135,6 +1405,7 @@ export default {
 			if (selected) {
 				this.selectedId = selected.id
 				this.form = clone(selected)
+				this.syncVideoUploadStateFromForm()
 			}
 			this.expandedLetters = this.defaultExpandedLetters(this.words)
 			this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
@@ -1160,7 +1431,7 @@ export default {
 			const incomingVideo = incoming.video || {}
 			const providedVideo = provided.video || {}
 			next.video = next.video || {}
-			;['url', 'title', 'startSec', 'endSec'].forEach((field) => {
+			;['url', 'title', 'startSec', 'endSec', 'provider', 'assetId', 'storagePath', 'fileName', 'mimeType', 'size', 'uploadStatus', 'uploadedAt'].forEach((field) => {
 				if ((!hasProvidedMeta || providedVideo[field]) && incomingVideo[field] !== '' && incomingVideo[field] !== undefined) {
 					next.video[field] = incomingVideo[field]
 				}
@@ -1702,6 +1973,104 @@ button::after {
 	min-height: 96px;
 	padding: 12px 14px;
 	line-height: 1.7;
+}
+
+.video-upload-card {
+	margin-bottom: 16px;
+	padding: 16px;
+	border: 1px solid #d8e9f2;
+	border-radius: 20px;
+	background: #f8fcff;
+}
+
+.video-upload-main {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+}
+
+.video-upload-copy {
+	min-width: 0;
+}
+
+.video-upload-title,
+.video-upload-note {
+	display: block;
+}
+
+.video-upload-title {
+	color: #12344d;
+	font-size: 14px;
+	font-weight: 800;
+}
+
+.video-upload-note {
+	margin-top: 4px;
+	color: #66869b;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.upload-progress-track {
+	overflow: hidden;
+	height: 8px;
+	margin-top: 14px;
+	border-radius: 999px;
+	background: #e1edf5;
+}
+
+.upload-progress-bar {
+	height: 100%;
+	border-radius: inherit;
+	background: #fe8500;
+	transition: width 0.2s ease;
+}
+
+.video-upload-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin-top: 10px;
+	color: #66869b;
+	font-size: 12px;
+}
+
+.admin-video-preview {
+	width: 100%;
+	height: 220px;
+	margin-top: 14px;
+	border-radius: 16px;
+	background: #0e3a5c;
+}
+
+.video-asset-box {
+	margin-top: 14px;
+	padding: 12px;
+	border-radius: 16px;
+	background: #ebf8ff;
+	border: 1px solid #cce9f8;
+}
+
+.video-asset-title,
+.video-asset-line {
+	display: block;
+}
+
+.video-asset-title {
+	color: #0e3a5c;
+	font-size: 13px;
+	font-weight: 800;
+}
+
+.video-asset-line {
+	margin-top: 4px;
+	color: #466578;
+	font-size: 12px;
+	word-break: break-all;
+}
+
+.clear-video-button {
+	margin-top: 10px;
 }
 
 .save-state {

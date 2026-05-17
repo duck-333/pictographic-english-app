@@ -95,13 +95,27 @@
       </view>
 
       <view class="section video-card">
-        <view>
-          <text class="video-title">{{ word.videoTitle }}</text>
-          <text class="video-meta">时长 {{ word.videoDuration }} · 视频打点待接入</text>
+        <view class="video-head">
+          <view>
+            <text class="video-title">{{ activeVideoTitle }}</text>
+            <text class="video-meta">{{ activeVideoMeta }}</text>
+          </view>
+          <text class="video-status">{{ hasPlayableVideo ? '可播放' : '待接入' }}</text>
         </view>
-        <button class="play-button" hover-class="button-pressed" @tap="showVideoTip">
-          <view class="play-triangle"></view>
-        </button>
+        <video
+          v-if="hasPlayableVideo"
+          class="lesson-video"
+          :src="activeVideoUrl"
+          :initial-time="activeVideoStart"
+          controls
+          @error="handleVideoError"
+        ></video>
+        <view v-else class="video-placeholder" @tap="showVideoTip">
+          <view class="play-button">
+            <view class="play-triangle"></view>
+          </view>
+          <text class="video-placeholder-text">{{ videoPlaceholderText }}</text>
+        </view>
       </view>
     </view>
 
@@ -153,6 +167,44 @@ export default {
   },
   onLoad(options) {
     this.loadWord(options)
+  },
+  computed: {
+    activeVideo() {
+      if (!this.word) return {}
+      return this.word.videoSegment || this.word.video || {}
+    },
+    activeVideoUrl() {
+      return this.activeVideo.videoUrl || this.activeVideo.url || ''
+    },
+    activeVideoTitle() {
+      return this.word && (this.activeVideo.segmentTitle || this.activeVideo.title || this.word.videoTitle)
+        ? (this.activeVideo.segmentTitle || this.activeVideo.title || this.word.videoTitle)
+        : '讲解视频'
+    },
+    activeVideoStart() {
+      const start = Number(this.activeVideo.startSec || 0)
+      return Number.isNaN(start) ? 0 : start
+    },
+    activeVideoEnd() {
+      const end = Number(this.activeVideo.endSec || 0)
+      return Number.isNaN(end) ? 0 : end
+    },
+    activeVideoMeta() {
+      const range = this.activeVideoEnd > 0
+        ? `${this.activeVideoStart}s - ${this.activeVideoEnd}s`
+        : `从 ${this.activeVideoStart}s 开始`
+      const provider = this.activeVideo.provider ? ` · ${this.activeVideo.provider}` : ''
+      return `${range}${provider}`
+    },
+    hasPlayableVideo() {
+      return /^https?:\/\//.test(this.activeVideoUrl)
+    },
+    videoPlaceholderText() {
+      if (this.activeVideoUrl && !this.hasPlayableVideo) {
+        return '后台已生成视频资产信息；正式云存储接入后会变成可播放地址。'
+      }
+      return '这个词条还没有上传讲解视频。'
+    }
   },
   methods: {
     loadWord(options) {
@@ -227,7 +279,13 @@ export default {
     },
     showVideoTip() {
       uni.showToast({
-        title: '下一步接入真实视频片段',
+        title: this.videoPlaceholderText,
+        icon: 'none'
+      })
+    },
+    handleVideoError() {
+      uni.showToast({
+        title: '视频暂时无法播放，请检查视频地址或小程序合法域名配置',
         icon: 'none'
       })
     },
@@ -592,11 +650,15 @@ export default {
 }
 
 .video-card {
+  border-radius: 32rpx;
+  background: #0e3a5c;
+}
+
+.video-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-radius: 32rpx;
-  background: #0e3a5c;
+  gap: 20rpx;
 }
 
 .video-title {
@@ -611,8 +673,45 @@ export default {
   font-size: 24rpx;
 }
 
+.video-status {
+  flex-shrink: 0;
+  padding: 6rpx 18rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 235, 162, 0.16);
+  color: #ffeba2;
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
+.lesson-video {
+  width: 100%;
+  height: 360rpx;
+  margin-top: 24rpx;
+  border-radius: 24rpx;
+  overflow: hidden;
+  background: #08263d;
+}
+
+.video-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 22rpx;
+  margin-top: 24rpx;
+  padding: 24rpx;
+  border-radius: 24rpx;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.video-placeholder-text {
+  flex: 1;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
 .play-button {
   position: relative;
+  flex-shrink: 0;
   width: 84rpx;
   height: 84rpx;
   margin: 0;

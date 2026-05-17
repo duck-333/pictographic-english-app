@@ -65,12 +65,18 @@ export function normalizeVideoSegment(segment) {
   const source = segment || {}
   return {
     ...source,
-    videoUrl: source.videoUrl || source.video_url || '',
+    videoUrl: source.videoUrl || source.video_url || source.url || '',
     startSec: Number(source.startSec || source.start_sec || 0),
     endSec: Number(source.endSec || source.end_sec || 0),
-    segmentTitle: source.segmentTitle || source.segment_title || '',
+    segmentTitle: source.segmentTitle || source.segment_title || source.title || '',
     provider: source.provider || '',
-    assetId: source.assetId || source.asset_id || ''
+    assetId: source.assetId || source.asset_id || '',
+    storagePath: source.storagePath || source.storage_path || '',
+    fileName: source.fileName || source.file_name || '',
+    mimeType: source.mimeType || source.mime_type || '',
+    size: source.size || '',
+    uploadStatus: source.uploadStatus || source.upload_status || '',
+    uploadedAt: source.uploadedAt || source.uploaded_at || ''
   }
 }
 
@@ -121,9 +127,9 @@ export function normalizeWordRecord(record) {
     tip: source.tip || '',
     pictograph: source.pictograph || '',
     richTextHtml: source.richTextHtml || '',
-    videoTitle: source.videoTitle || '',
+    videoTitle: source.videoTitle || (source.video && source.video.title) || '',
     videoDuration: source.videoDuration || '',
-    videoSegment: normalizeVideoSegment(source.videoSegment || {}),
+    videoSegment: normalizeVideoSegment(source.videoSegment || source.video || {}),
     examples,
     siblingIds,
     updatedAt: source.updatedAt || ''

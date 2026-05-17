@@ -1,0 +1,945 @@
+{
+  "words": [
+    {
+      "id": "a",
+      "word": "a",
+      "entryType": "letter",
+      "phonetic": "/eɪ/",
+      "meaning": "字母A：鹰、牛、高空、第一、能力、A形物和a形物；以形表义为主，以音表义为辅。",
+      "explanation": "字母A可追溯至古埃及象形文字的鹰和古闪米特字母的牛，经由腓尼基字母、希腊字母A、伊特鲁斯坎字母、拉丁字母A演化为英文字母A。抽象化之后，字母A可以与所有A形物或a形物对应，并以此作为造字组词的底层逻辑。",
+      "parts": [],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "as",
+      "word": "as",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "太阳升起。",
+      "explanation": "词根as-，即A“鹰”加S“眼镜蛇”，表示“太阳升起”。古埃及神话中，鹰和蛇都是背负太阳升起的神兽。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "鹰",
+          "meaning": "鹰",
+          "targetId": "a"
+        },
+        {
+          "label": "s",
+          "text": "s",
+          "title": "眼镜蛇",
+          "meaning": "眼镜蛇",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "asia",
+      "word": "asia",
+      "entryType": "word",
+      "phonetic": "/ˈeɪʃə/",
+      "meaning": "n. 亚洲。",
+      "explanation": "Asia，即as“太阳升起”加i加a表地点，表示太阳升起的地方，音译为亚洲。",
+      "parts": [
+        {
+          "label": "as",
+          "text": "as",
+          "title": "太阳升起",
+          "meaning": "太阳升起",
+          "targetId": "as"
+        },
+        {
+          "label": "i",
+          "text": "i",
+          "title": "连接",
+          "meaning": "连接",
+          "targetId": ""
+        },
+        {
+          "label": "a",
+          "text": "a",
+          "title": "表地点",
+          "meaning": "表地点",
+          "targetId": "a"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "av",
+      "word": "av",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "鸟；飞行。",
+      "explanation": "词根av-由字母A“鹰”和V“雄鹰展翅之形”组合而成，是展翅高飞的雄鹰的符号化抽象表达。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "鹰",
+          "meaning": "鹰",
+          "targetId": "a"
+        },
+        {
+          "label": "v",
+          "text": "v",
+          "title": "鹰展翅状",
+          "meaning": "鹰展翅状",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "avian",
+      "word": "avian",
+      "entryType": "word",
+      "phonetic": "/ˈeɪviən/",
+      "meaning": "adj. 鸟的；鸟类的；n. 鸟。",
+      "explanation": "avian，即av“鸟”加i加an通one，表示鸟的、鸟类的，也可作名词表示鸟。",
+      "parts": [
+        {
+          "label": "av",
+          "text": "av",
+          "title": "鸟",
+          "meaning": "鸟",
+          "targetId": "av"
+        },
+        {
+          "label": "i",
+          "text": "i",
+          "title": "连接",
+          "meaning": "连接",
+          "targetId": ""
+        },
+        {
+          "label": "an",
+          "text": "an",
+          "title": "通one",
+          "meaning": "通one",
+          "targetId": "an"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "aviate",
+      "word": "aviate",
+      "entryType": "word",
+      "phonetic": "/ˈeɪvɪˌeɪt/",
+      "meaning": "v. 飞行。",
+      "explanation": "aviate，即av“飞行”加i加ate动词后缀，表示飞行。",
+      "parts": [
+        {
+          "label": "av",
+          "text": "av",
+          "title": "飞行",
+          "meaning": "飞行",
+          "targetId": "av"
+        },
+        {
+          "label": "i",
+          "text": "i",
+          "title": "连接",
+          "meaning": "连接",
+          "targetId": ""
+        },
+        {
+          "label": "ate",
+          "text": "ate",
+          "title": "动词后缀",
+          "meaning": "动词后缀",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "aer",
+      "word": "aer",
+      "entryType": "root",
+      "phonetic": "/ɛə(r)/",
+      "meaning": "天空；空气。",
+      "explanation": "aer，即A表示高，er表物，表示天空、空气。鹰的形象总是定格于天空，这是字母A能够引申为高空的文化根源。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "高",
+          "meaning": "高",
+          "targetId": "a"
+        },
+        {
+          "label": "er",
+          "text": "er",
+          "title": "表物",
+          "meaning": "表物",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "air",
+      "word": "air",
+      "entryType": "word",
+      "phonetic": "/eə(r)/",
+      "meaning": "n. 天空；空气。",
+      "explanation": "air，即aer“高空”中插入i“气”，表示天空、空气。",
+      "parts": [
+        {
+          "label": "aer",
+          "text": "aer",
+          "title": "高空",
+          "meaning": "高空",
+          "targetId": "aer"
+        },
+        {
+          "label": "i",
+          "text": "i",
+          "title": "气",
+          "meaning": "气",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "and",
+      "word": "and",
+      "entryType": "word",
+      "phonetic": "/ənd/",
+      "meaning": "conj. 和。",
+      "explanation": "and，即A“牛”加n“牛轭之形”加d“犁形状”，表现牛、牛轭、犁共同构成的一套农具体系，引申为和。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "牛",
+          "meaning": "牛",
+          "targetId": "a"
+        },
+        {
+          "label": "n",
+          "text": "n",
+          "title": "牛轭之形",
+          "meaning": "牛轭之形",
+          "targetId": ""
+        },
+        {
+          "label": "d",
+          "text": "d",
+          "title": "犁形状",
+          "meaning": "犁形状",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "agro",
+      "word": "agro",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "农业；农田。",
+      "explanation": "词根agro-，即A“牛”加gro(w)“种植”，表示农业、农田。牛耕是传统农业生产中熟悉的场景，几乎成为农业的象征。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "牛",
+          "meaning": "牛",
+          "targetId": "a"
+        },
+        {
+          "label": "gro(w)",
+          "text": "gro(w)",
+          "title": "种植",
+          "meaning": "种植",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "agronomy",
+      "word": "agronomy",
+      "entryType": "word",
+      "phonetic": "/əˈɡrɒnəmi/",
+      "meaning": "n. 农学。",
+      "explanation": "agronomy，即agro“农业”加nom“管理”加y，表示农学。",
+      "parts": [
+        {
+          "label": "agro",
+          "text": "agro",
+          "title": "农业",
+          "meaning": "农业",
+          "targetId": "agro"
+        },
+        {
+          "label": "nom",
+          "text": "nom",
+          "title": "管理",
+          "meaning": "管理",
+          "targetId": ""
+        },
+        {
+          "label": "y",
+          "text": "y",
+          "title": "名词后缀",
+          "meaning": "名词后缀",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "agri",
+      "word": "agri",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "农业；农田。",
+      "explanation": "词根agri-是词根agro-的变体，字母i、o发生元音音变，仍表示农业、农田。",
+      "parts": [
+        {
+          "label": "agro",
+          "text": "agro",
+          "title": "农业；农田",
+          "meaning": "农业；农田",
+          "targetId": "agro"
+        },
+        {
+          "label": "i/o",
+          "text": "i/o",
+          "title": "元音音变",
+          "meaning": "元音音变",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "agriculture",
+      "word": "agriculture",
+      "entryType": "word",
+      "phonetic": "/ˈæɡrɪkʌltʃə(r)/",
+      "meaning": "n. 农业。",
+      "explanation": "agriculture，即agri“农业”加culture“种植”，表示农业。",
+      "parts": [
+        {
+          "label": "agri",
+          "text": "agri",
+          "title": "农业",
+          "meaning": "农业",
+          "targetId": "agri"
+        },
+        {
+          "label": "culture",
+          "text": "culture",
+          "title": "种植",
+          "meaning": "种植",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "able",
+      "word": "able",
+      "entryType": "word",
+      "phonetic": "/ˈeɪb(ə)l/",
+      "meaning": "adj. 有能力的；能干的；能够的。",
+      "explanation": "able，即A“能力”加bl通pl“倍”加e，表示有能力的、能干的、能够的。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "能力",
+          "meaning": "能力",
+          "targetId": "a"
+        },
+        {
+          "label": "bl",
+          "text": "bl",
+          "title": "通pl，倍",
+          "meaning": "通pl，倍",
+          "targetId": ""
+        },
+        {
+          "label": "e",
+          "text": "e",
+          "title": "结尾",
+          "meaning": "结尾",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "alphabet",
+      "word": "alphabet",
+      "entryType": "word",
+      "phonetic": "/ˈælfəbet/",
+      "meaning": "n. 字母表。",
+      "explanation": "alphabet，即alpha“A”加bet(a)“B”，表示字母表。希腊字母A alpha和B beta位于字母表前两位，常用来指代字母表。",
+      "parts": [
+        {
+          "label": "alpha",
+          "text": "alpha",
+          "title": "A",
+          "meaning": "A",
+          "targetId": "a"
+        },
+        {
+          "label": "bet(a)",
+          "text": "bet(a)",
+          "title": "B",
+          "meaning": "B",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "angle",
+      "word": "angle",
+      "entryType": "word",
+      "phonetic": "/ˈæŋɡl/",
+      "meaning": "n. 角。",
+      "explanation": "字母A可以与A形物对应，以形表义。angle中的A对应角的形状，表示角。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "角",
+          "meaning": "角",
+          "targetId": "a"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "astraeus",
+      "word": "astraeus",
+      "entryType": "word",
+      "phonetic": "",
+      "meaning": "n. 古希腊星空之神。",
+      "explanation": "字母A可以与A形物对应，以形表义。Astraeus中的A对应星星之形，用于表示星空相关意义。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "星星",
+          "meaning": "星星",
+          "targetId": "a"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "arrow",
+      "word": "arrow",
+      "entryType": "word",
+      "phonetic": "/ˈærəʊ/",
+      "meaning": "n. 箭。",
+      "explanation": "arrow，即A“箭头”加r(ow)“排”加row“排”，表示箭。词语arrow是羽箭之形的描摹：一支羽箭由一个箭头和两排箭羽组成。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "箭头",
+          "meaning": "箭头",
+          "targetId": "a"
+        },
+        {
+          "label": "r(ow)",
+          "text": "r(ow)",
+          "title": "排",
+          "meaning": "排",
+          "targetId": ""
+        },
+        {
+          "label": "row",
+          "text": "row",
+          "title": "排",
+          "meaning": "排",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "al",
+      "word": "al",
+      "entryType": "root",
+      "phonetic": "",
+      "meaning": "生长。",
+      "explanation": "词根al-，即A“植物芽尖”加l“茎”，表示生长。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "植物芽尖",
+          "meaning": "植物芽尖",
+          "targetId": "a"
+        },
+        {
+          "label": "l",
+          "text": "l",
+          "title": "茎",
+          "meaning": "茎",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "aliment",
+      "word": "aliment",
+      "entryType": "word",
+      "phonetic": "/ˈælɪmənt/",
+      "meaning": "n. 营养。",
+      "explanation": "aliment，即al“生长”加i加ment名词后缀，表示促进生长的东西，引申为营养。",
+      "parts": [
+        {
+          "label": "al",
+          "text": "al",
+          "title": "生长",
+          "meaning": "生长",
+          "targetId": "al"
+        },
+        {
+          "label": "i",
+          "text": "i",
+          "title": "连接",
+          "meaning": "连接",
+          "targetId": ""
+        },
+        {
+          "label": "ment",
+          "text": "ment",
+          "title": "名词后缀",
+          "meaning": "名词后缀",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "attic",
+      "word": "attic",
+      "entryType": "word",
+      "phonetic": "/ˈætɪk/",
+      "meaning": "n. 阁楼。",
+      "explanation": "attic，即A“阁楼”加T“高”加T“高”加ic形容词后缀，表示阁楼。词语attic是阁楼之形的描摹。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "阁楼",
+          "meaning": "阁楼",
+          "targetId": "a"
+        },
+        {
+          "label": "t",
+          "text": "t",
+          "title": "高",
+          "meaning": "高",
+          "targetId": ""
+        },
+        {
+          "label": "t",
+          "text": "t",
+          "title": "高",
+          "meaning": "高",
+          "targetId": ""
+        },
+        {
+          "label": "ic",
+          "text": "ic",
+          "title": "形容词后缀",
+          "meaning": "形容词后缀",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "alps",
+      "word": "alps",
+      "entryType": "word",
+      "phonetic": "/ælps/",
+      "meaning": "n. 阿尔卑斯山脉。",
+      "explanation": "Alps，即A“山峰”加l“山脊线”加p“头”加s复数，表示阿尔卑斯山脉。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "山峰",
+          "meaning": "山峰",
+          "targetId": "a"
+        },
+        {
+          "label": "l",
+          "text": "l",
+          "title": "山脊线",
+          "meaning": "山脊线",
+          "targetId": ""
+        },
+        {
+          "label": "p",
+          "text": "p",
+          "title": "头",
+          "meaning": "头",
+          "targetId": ""
+        },
+        {
+          "label": "s",
+          "text": "s",
+          "title": "复数",
+          "meaning": "复数",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "apple",
+      "word": "apple",
+      "entryType": "word",
+      "phonetic": "/ˈæp(ə)l/",
+      "meaning": "n. 苹果。",
+      "explanation": "apple，即a“苹果”加p双写加pl“倍；充满”加e，表示苹果。词语apple是苹果树上果实累累之形的描摹，字母a与苹果之形对应。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "苹果",
+          "meaning": "苹果",
+          "targetId": "a"
+        },
+        {
+          "label": "p",
+          "text": "p",
+          "title": "双写",
+          "meaning": "双写",
+          "targetId": ""
+        },
+        {
+          "label": "pl",
+          "text": "pl",
+          "title": "倍；充满",
+          "meaning": "倍；充满",
+          "targetId": ""
+        },
+        {
+          "label": "e",
+          "text": "e",
+          "title": "结尾",
+          "meaning": "结尾",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "a-article",
+      "word": "a",
+      "entryType": "word",
+      "phonetic": "/ə/",
+      "meaning": "art. 一。",
+      "explanation": "字母a可以与a形物对应，以形表义，如计数的卵石。a表示一。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "计数的卵石；一",
+          "meaning": "计数的卵石；一",
+          "targetId": "a"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "an",
+      "word": "an",
+      "entryType": "root",
+      "phonetic": "/ən/",
+      "meaning": "一；人；独立个体。",
+      "explanation": "an是a的异化形式，一般用于读音以元音音素起首或以/h/音起首的词之前。词根an-，即a“人头”加n，以头指代人，隐含an通one，强调人是独立的个体，表示人。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "人头",
+          "meaning": "人头",
+          "targetId": "a"
+        },
+        {
+          "label": "n",
+          "text": "n",
+          "title": "通one；独立个体",
+          "meaning": "通one；独立个体",
+          "targetId": ""
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "american",
+      "word": "american",
+      "entryType": "word",
+      "phonetic": "/əˈmerɪkən/",
+      "meaning": "n. 美国人。",
+      "explanation": "American，即Americ(a)“美国”加an表人，表示美国人。",
+      "parts": [
+        {
+          "label": "Americ(a)",
+          "text": "Americ(a)",
+          "title": "美国",
+          "meaning": "美国",
+          "targetId": ""
+        },
+        {
+          "label": "an",
+          "text": "an",
+          "title": "表人",
+          "meaning": "表人",
+          "targetId": "an"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "am",
+      "word": "am",
+      "entryType": "word",
+      "phonetic": "/æm; əm/",
+      "meaning": "v. 是。",
+      "explanation": "字母A可以模拟声音，以音表义，从而形成拟声词。am表示是。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "以音表义",
+          "meaning": "以音表义",
+          "targetId": "a"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "are",
+      "word": "are",
+      "entryType": "word",
+      "phonetic": "/ɑː(r)/",
+      "meaning": "v. 是。",
+      "explanation": "字母A可以模拟声音，以音表义，从而形成拟声词。are表示是。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "以音表义",
+          "meaning": "以音表义",
+          "targetId": "a"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "ask",
+      "word": "ask",
+      "entryType": "word",
+      "phonetic": "/ɑːsk/",
+      "meaning": "v. 问。",
+      "explanation": "字母A可以模拟声音，以音表义，从而形成拟声词。ask表示问。",
+      "parts": [
+        {
+          "label": "a",
+          "text": "a",
+          "title": "以音表义",
+          "meaning": "以音表义",
+          "targetId": "a"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    },
+    {
+      "id": "china",
+      "word": "china",
+      "entryType": "word",
+      "phonetic": "/ˈtʃaɪnə/",
+      "meaning": "n. 中国；瓷器。",
+      "explanation": "China，即Chin“秦”加a表地点，表示中国。关于China之名的由来，比较主流的说法是源自中国第一个封建王朝秦朝的音译Chin或Hsin。china意为瓷器，出自chinaware“中国瓷器”的简写。",
+      "parts": [
+        {
+          "label": "Chin",
+          "text": "Chin",
+          "title": "秦",
+          "meaning": "秦",
+          "targetId": ""
+        },
+        {
+          "label": "a",
+          "text": "a",
+          "title": "表地点",
+          "meaning": "表地点",
+          "targetId": "a"
+        }
+      ],
+      "video": {
+        "url": "",
+        "title": "",
+        "startSec": "",
+        "endSec": ""
+      }
+    }
+  ]
+}
