@@ -155,10 +155,9 @@
 				</view>
 				<view class="video-upload-card">
 					<view class="video-upload-main">
-						<label class="file-button">
-							选择视频文件
-							<input type="file" accept="video/mp4,video/webm,video/quicktime,video/*" @change="handleVideoFileChange" />
-						</label>
+						<view id="video-native-picker-host" class="video-native-picker-host">
+							<text class="native-picker-loading">正在加载文件选择控件...</text>
+						</view>
 						<view class="video-upload-copy">
 							<text class="video-upload-title">{{ videoUpload.fileName || '还没有选择视频' }}</text>
 							<text class="video-upload-note">{{ videoUpload.message }}</text>
@@ -174,10 +173,28 @@
 					</view>
 					<video
 						v-if="videoUpload.previewUrl"
+						ref="adminVideoPreview"
 						class="admin-video-preview"
 						:src="videoUpload.previewUrl"
 						controls
+						@loadedmetadata="handleVideoLoadedMetadata"
+						@timeupdate="handleVideoTimeUpdate"
 					></video>
+					<view v-if="videoUpload.previewUrl" class="video-preview-tools">
+						<view class="video-time-row">
+							<text>当前：{{ formattedVideoCurrentTime }}</text>
+							<text>总长：{{ formattedVideoDuration }}</text>
+							<text>片段：{{ form.video.startSec || 0 }}s - {{ form.video.endSec || '?' }}s</text>
+							<text>已关联：{{ videoClipCount }} 段</text>
+						</view>
+						<view class="clip-action-row">
+							<button class="secondary-button" @click="markVideoStart">设为开始秒</button>
+							<button class="secondary-button" @click="markVideoEnd">设为结束秒</button>
+							<button class="publish-button" @click="previewSelectedSegment">预览当前片段</button>
+							<button class="small-button" @click="commitCurrentVideoClip">{{ currentClipActionText }}</button>
+						</view>
+						<text class="video-preview-tip">先选视频并拖到要展示的位置，设置开始/结束秒，再点击“添加为片段”。同一个词条可以添加多个片段，也可以更换视频后继续添加。</text>
+					</view>
 					<view v-if="form.video && form.video.assetId" class="video-asset-box">
 						<text class="video-asset-title">已生成视频资产</text>
 						<text class="video-asset-line">Asset ID：{{ form.video.assetId }}</text>
@@ -187,12 +204,20 @@
 				</view>
 				<view class="form-grid">
 					<label class="field">
-						<text>视频播放地址</text>
+						<text>当前片段播放地址</text>
 						<input v-model="form.video.url" placeholder="真实上线后这里是 HTTPS 或云存储临时链接" />
 					</label>
 					<label class="field">
-						<text>视频标题</text>
-						<input v-model="form.video.title" placeholder="study 的象形讲解" />
+						<text>当前片段标题</text>
+						<input v-model="form.video.title" placeholder="例：第 1 段：c 的象形来源" />
+					</label>
+					<label class="field">
+						<text>当前片段讲解焦点</text>
+						<input v-model="form.video.focus" placeholder="例：c 的象形 / col 的组合义 / d 的象形" />
+					</label>
+					<label class="field">
+						<text>关联拆解节点</text>
+						<input v-model="form.video.targetPart" placeholder="例：c / col / d / whole" />
 					</label>
 					<label class="field">
 						<text>开始秒</text>
@@ -202,6 +227,43 @@
 						<text>结束秒</text>
 						<input v-model="form.video.endSec" type="number" placeholder="120" />
 					</label>
+					<label class="field span-2">
+						<text>用户端提示说明</text>
+						<input v-model="form.video.note" placeholder="例：这一段解释 c 像弯曲包住冷气的形象。" />
+					</label>
+				</view>
+				<view class="clip-list-card">
+					<view class="clip-list-head">
+						<view>
+							<text class="clip-list-title">已关联视频片段</text>
+							<text class="clip-list-note">用户会按这里的顺序观看片段；如果想看完整视频，后续再接付费完整播放。</text>
+						</view>
+						<button class="secondary-button" @click="commitCurrentVideoClip">{{ currentClipActionText }}</button>
+					</view>
+					<view v-if="videoClipCount" class="clip-list">
+						<view class="clip-item" v-for="(clip, index) in form.videoClips" :key="clip.clipId || index">
+							<view class="clip-index">{{ index + 1 }}</view>
+							<view class="clip-main">
+								<text class="clip-title">{{ getClipDisplayTitle(clip) }}</text>
+								<view class="clip-tags">
+									<text v-if="clip.focus" class="clip-tag focus">讲：{{ clip.focus }}</text>
+									<text v-if="clip.targetPart" class="clip-tag">节点：{{ clip.targetPart }}</text>
+								</view>
+								<text v-if="clip.note" class="clip-note">{{ clip.note }}</text>
+								<text class="clip-meta">{{ clip.fileName || clip.url || '手动链接' }} · {{ formatClipTimeRange(clip) }}</text>
+							</view>
+							<view class="clip-buttons">
+								<button class="clip-mini-button" @click="loadVideoClipForEditing(index)">载入</button>
+								<button class="clip-mini-button" @click="previewVideoClip(clip)">预览</button>
+								<button class="clip-mini-button" :disabled="index === 0" @click="moveVideoClip(index, -1)">上移</button>
+								<button class="clip-mini-button" :disabled="index === videoClipCount - 1" @click="moveVideoClip(index, 1)">下移</button>
+								<button class="clip-mini-button danger" @click="removeVideoClip(index)">删除</button>
+							</view>
+						</view>
+					</view>
+					<view v-else class="clip-empty">
+						还没有关联片段。先选择视频、设置开始秒和结束秒，再点击“添加当前片段”。
+					</view>
 				</view>
 
 				<view class="section-head">
@@ -252,12 +314,47 @@
 							</view>
 						</view>
 						<text class="preview-explain">{{ form.explanation || '这里显示象形讲解。' }}</text>
-						<view v-if="form.video && form.video.url" class="preview-video">
-							<text class="preview-video-title">讲解视频</text>
-							<text class="preview-video-time">{{ form.video.title || '未命名视频' }} · {{ form.video.startSec || 0 }}s - {{ form.video.endSec || '?' }}s</text>
-							<text class="preview-video-time">来源：{{ form.video.provider || '手动链接' }} · {{ form.video.uploadStatus || '待上传' }}</text>
+						<view v-if="videoClipCount" class="preview-video">
+							<text class="preview-video-title">讲解视频 · {{ videoClipCount }} 段</text>
+							<view class="preview-video-row" v-for="(clip, index) in form.videoClips" :key="clip.clipId || index">
+								<text class="preview-video-index">{{ index + 1 }}</text>
+								<view class="preview-video-copy">
+									<text class="preview-video-time">{{ getClipDisplayTitle(clip) }} · {{ formatClipTimeRange(clip) }}</text>
+									<text v-if="clip.focus || clip.targetPart" class="preview-video-note">
+										{{ getClipFocusLine(clip) }}
+									</text>
+								</view>
+							</view>
+							<text class="preview-video-time">用户端将按顺序播放这些片段，完整视频后续可接付费解锁。</text>
 						</view>
 					</view>
+				</view>
+
+				<view v-if="videoClipCount" class="viewer-preview-box">
+					<view class="viewer-preview-head">
+						<view>
+							<text class="viewer-preview-title">用户视角连续预览</text>
+							<text class="viewer-preview-note">模拟用户看到的“只播放精选片段”路径，进度条上标明每段在讲什么。</text>
+						</view>
+						<view class="viewer-preview-actions">
+							<button class="secondary-button" @click="playUserVideoPreview">连续预览</button>
+							<button class="clip-mini-button" @click="stopUserVideoPreview">停止</button>
+						</view>
+					</view>
+					<view class="viewer-timeline">
+						<view
+							v-for="(clip, index) in form.videoClips"
+							:key="clip.clipId || index"
+							:class="['viewer-timeline-segment', userPreview.activeIndex === index ? 'active' : '']"
+							:style="{ flexGrow: getClipDuration(clip) }"
+							@click="playUserPreviewClip(index)"
+						>
+							<text class="viewer-timeline-title">{{ clip.focus || getClipDisplayTitle(clip) }}</text>
+							<text class="viewer-timeline-time">{{ formatClipTimeRange(clip) }}</text>
+						</view>
+					</view>
+					<text class="viewer-preview-status">{{ userPreview.status }}</text>
+					<text class="viewer-preview-footnote">建议规则：每段标题写“这一段讲什么”，不要都写“{{ form.word || '单词' }} 的象形讲解”。</text>
 				</view>
 
 				<view class="next-box">
@@ -390,6 +487,20 @@ export default {
 				previewUrl: ''
 			},
 			videoUploadTimer: null,
+			videoUploadJob: null,
+			videoFileTriggerEl: null,
+			runtimeVideoInputEl: null,
+			editingClipIndex: -1,
+			videoPreview: {
+				currentSec: 0,
+				durationSec: 0,
+				isPreviewingSegment: false
+			},
+			userPreview: {
+				activeIndex: -1,
+				isPlaying: false,
+				status: '还未开始连续预览。点击时间轴片段可单段预览，点击“连续预览”可按顺序播放。'
+			},
 			saveState: '未保存',
 			statusOptions: [
 				{ label: '草稿', value: 'draft' },
@@ -429,7 +540,13 @@ export default {
 			}
 		},
 		currentJson() {
-			return JSON.stringify(this.form, null, 2)
+			return JSON.stringify(this.stripRuntimeVideoFields(this.normalizeWord(this.form)), null, 2)
+		},
+		videoClipCount() {
+			return Array.isArray(this.form.videoClips) ? this.form.videoClips.length : 0
+		},
+		currentClipActionText() {
+			return this.editingClipIndex > -1 ? '更新当前片段' : '添加为片段'
 		},
 		videoUploadStatusText() {
 			const statusMap = {
@@ -440,6 +557,12 @@ export default {
 				error: '需要处理'
 			}
 			return statusMap[this.videoUpload.status] || '待选择'
+		},
+		formattedVideoCurrentTime() {
+			return this.formatVideoClock(this.videoPreview.currentSec)
+		},
+		formattedVideoDuration() {
+			return this.formatVideoClock(this.videoPreview.durationSec)
 		},
 		letterGroups() {
 			const groups = LETTERS.map((letter) => {
@@ -477,11 +600,13 @@ export default {
 	onLoad() {
 		this.loadDraft()
 	},
+	mounted() {
+		this.installNativeVideoButtonHandler()
+	},
 	beforeDestroy() {
 		this.releaseVideoPreview()
-		if (this.videoUploadTimer) {
-			clearInterval(this.videoUploadTimer)
-		}
+		this.removeNativeVideoButtonHandler()
+		this.cancelVideoUploadTimer()
 	},
 	methods: {
 		loadDraft() {
@@ -562,6 +687,7 @@ export default {
 					startSec: '',
 					endSec: ''
 				},
+				videoClips: [],
 				parts: []
 			}
 			this.words.unshift(next)
@@ -591,8 +717,8 @@ export default {
 			if (!this.validateCurrent()) return
 			this.persistFormToList()
 			if (!this.validateAllWords()) return
-			uni.setStorageSync(STORAGE_KEY, clone(this.words))
-			uni.setStorageSync(PENDING_STORAGE_KEY, clone(this.pendingWords))
+			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
+			uni.setStorageSync(PENDING_STORAGE_KEY, this.stripRuntimeVideoFields(this.pendingWords))
 			this.saveState = '已保存全部本地草稿'
 			uni.showToast({ title: '已保存全部草稿', icon: 'success' })
 		},
@@ -600,7 +726,7 @@ export default {
 			if (!this.validateCurrent()) return
 			if (this.selectedSource === 'pending') {
 				this.persistFormToList()
-				uni.setStorageSync(PENDING_STORAGE_KEY, clone(this.pendingWords))
+				uni.setStorageSync(PENDING_STORAGE_KEY, this.stripRuntimeVideoFields(this.pendingWords))
 				this.saveState = '未上传词条修改已暂存'
 				uni.showToast({ title: '已保存未上传修改', icon: 'success' })
 				return
@@ -608,7 +734,7 @@ export default {
 			this.form.status = 'draft'
 			this.persistFormToList()
 			if (!this.validateAllWords()) return
-			uni.setStorageSync(STORAGE_KEY, clone(this.words))
+			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
 			this.saveState = '当前词条已保存为草稿'
 			uni.showToast({ title: '已保存为草稿', icon: 'success' })
 		},
@@ -622,7 +748,7 @@ export default {
 				this.form.status = 'published'
 				this.persistFormToList()
 				if (!this.validateAllWords()) return
-				uni.setStorageSync(STORAGE_KEY, clone(this.words))
+				uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
 				this.saveState = '当前词条已发布到本地列表'
 				uni.showToast({ title: '已发布当前词条', icon: 'success' })
 			})
@@ -652,7 +778,7 @@ export default {
 					this.form = clone(current)
 					this.syncVideoUploadStateFromForm()
 				}
-				uni.setStorageSync(STORAGE_KEY, clone(this.words))
+				uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
 				this.saveState = '全部草稿已发布到本地列表'
 				uni.showToast({ title: '已发布全部草稿', icon: 'success' })
 			})
@@ -678,6 +804,7 @@ export default {
 				uni.showToast({ title: '请先填写单词', icon: 'none' })
 				return false
 			}
+			if (!this.flushEditingVideoClip()) return false
 			const id = String(this.form.id).trim()
 			const word = String(this.form.word).trim()
 			if (!this.startsWithEnglish(id) || !this.startsWithEnglish(word)) {
@@ -688,6 +815,11 @@ export default {
 			const duplicate = targetList.find((item) => item.id === id && item.id !== this.selectedId)
 			if (duplicate) {
 				uni.showToast({ title: '单词 ID 已存在', icon: 'none' })
+				return false
+			}
+			const videoResult = this.validateVideoTime(this.form, 1)
+			if (!videoResult.ok) {
+				uni.showToast({ title: videoResult.message, icon: 'none' })
 				return false
 			}
 			return true
@@ -707,6 +839,11 @@ export default {
 				}
 				if (seen[id]) {
 					uni.showToast({ title: '存在重复单词 ID', icon: 'none' })
+					return false
+				}
+				const videoResult = this.validateVideoTime(item, id)
+				if (!videoResult.ok) {
+					uni.showToast({ title: videoResult.message, icon: 'none' })
 					return false
 				}
 				seen[id] = true
@@ -793,7 +930,298 @@ export default {
 			})
 			return letters.slice(0, 4)
 		},
+		ensureVideoClipsArray() {
+			if (!Array.isArray(this.form.videoClips)) {
+				this.$set(this.form, 'videoClips', [])
+			}
+		},
+		hasVideoClipPayload(video) {
+			return !!(video && (video.url || video.assetId || video.storagePath || video.localPreviewUrl))
+		},
+		getDefaultClipTitle(video) {
+			const word = String(this.form.word || this.form.id || '当前词条').trim()
+			const focus = String(video && video.focus ? video.focus : '').trim()
+			const targetPart = String(video && video.targetPart ? video.targetPart : '').trim()
+			if (focus) return `${word}：${focus}`
+			if (targetPart) return `${word}：${targetPart} 片段`
+			return `${word} 的讲解片段`
+		},
+		getClipDisplayTitle(clip) {
+			if (!clip) return '未命名片段'
+			return clip.title || this.getDefaultClipTitle(clip)
+		},
+		getClipFocusLine(clip) {
+			const pieces = []
+			if (clip && clip.focus) pieces.push(`讲解焦点：${clip.focus}`)
+			if (clip && clip.targetPart) pieces.push(`对应节点：${clip.targetPart}`)
+			if (clip && clip.note) pieces.push(clip.note)
+			return pieces.join(' · ')
+		},
+		getClipDuration(clip) {
+			const start = Number(clip && clip.startSec)
+			const end = Number(clip && clip.endSec)
+			if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 1
+			return Math.max(1, end - start)
+		},
+		formatClipTimeRange(clip) {
+			const start = clip && clip.startSec !== '' && clip.startSec !== undefined ? Number(clip.startSec) : 0
+			const end = clip && clip.endSec !== '' && clip.endSec !== undefined ? Number(clip.endSec) : ''
+			return `${Number.isFinite(start) ? start : 0}s - ${end === '' || !Number.isFinite(end) ? '?' : end}s`
+		},
+		buildVideoClipId() {
+			const base = this.toSafeVideoFileName(this.form.id || this.form.word || 'word').replace(/\.[a-z0-9]+$/i, '')
+			return `${base}-clip-${Date.now()}`
+		},
+		buildCurrentVideoClip(existingClip) {
+			this.ensureVideoObject()
+			const video = this.form.video || {}
+			const start = Number(video.startSec)
+			const end = Number(video.endSec)
+			if (this.videoUpload.status === 'uploading') {
+				uni.showToast({ title: '视频上传演练还没完成，请稍等再添加片段', icon: 'none' })
+				return null
+			}
+			if (!this.hasVideoClipPayload(video)) {
+				uni.showToast({ title: '请先选择视频或填写播放地址', icon: 'none' })
+				return null
+			}
+			if (!Number.isFinite(start) || start < 0 || !Number.isFinite(end) || end <= start) {
+				uni.showToast({ title: '请设置有效的开始秒和结束秒', icon: 'none' })
+				return null
+			}
+			const clip = this.normalizeVideoClip(Object.assign({}, video, {
+				clipId: existingClip && existingClip.clipId ? existingClip.clipId : this.buildVideoClipId(),
+				title: video.title || this.getDefaultClipTitle(video)
+			}), 0)
+			if (existingClip && existingClip.localPreviewUrl) {
+				clip.localPreviewUrl = existingClip.localPreviewUrl
+			} else if (this.videoUpload && /^(blob:|data:|https?:\/\/)/i.test(String(this.videoUpload.previewUrl || ''))) {
+				clip.localPreviewUrl = this.videoUpload.previewUrl
+			}
+			return clip
+		},
+		commitCurrentVideoClip() {
+			this.ensureVideoClipsArray()
+			const existingClip = this.editingClipIndex > -1 ? this.form.videoClips[this.editingClipIndex] : null
+			const clip = this.buildCurrentVideoClip(existingClip)
+			if (!clip) return
+			if (existingClip) {
+				this.form.videoClips.splice(this.editingClipIndex, 1, clip)
+				this.saveState = `已更新第 ${this.editingClipIndex + 1} 段讲解片段`
+				uni.showToast({ title: '已更新片段', icon: 'success' })
+			} else {
+				this.form.videoClips.push(clip)
+				this.saveState = `已添加第 ${this.form.videoClips.length} 段讲解片段`
+				uni.showToast({ title: '已添加片段', icon: 'success' })
+			}
+			if (this.form.videoClips.length === 1 || this.editingClipIndex === 0) {
+				this.syncPrimaryVideoFromClips(this.form)
+			}
+			this.editingClipIndex = -1
+		},
+		flushEditingVideoClip() {
+			if (this.editingClipIndex < 0) return true
+			this.ensureVideoClipsArray()
+			const existingClip = this.form.videoClips[this.editingClipIndex]
+			if (!existingClip) {
+				this.editingClipIndex = -1
+				return true
+			}
+			const clip = this.buildCurrentVideoClip(existingClip)
+			if (!clip) return false
+			this.form.videoClips.splice(this.editingClipIndex, 1, clip)
+			if (this.editingClipIndex === 0) {
+				this.syncPrimaryVideoFromClips(this.form)
+			}
+			this.editingClipIndex = -1
+			return true
+		},
+		loadVideoClipForEditing(index) {
+			this.ensureVideoClipsArray()
+			const clip = this.form.videoClips[index]
+			if (!clip) return
+			this.ensureVideoObject()
+			this.form.video = Object.assign({}, this.form.video, clip)
+			this.editingClipIndex = index
+			this.saveState = `已载入第 ${index + 1} 段，可调整标题、焦点、秒数后点击“更新当前片段”`
+		},
+		previewVideoClip(clip) {
+			if (!clip) return
+			this.stopUserVideoPreview(false)
+			this.ensureVideoObject()
+			this.form.video = Object.assign({}, this.form.video, clip)
+			const playableUrl = this.getPlayableClipUrl(clip)
+			if (playableUrl) {
+				const sourceChanged = this.videoUpload.previewUrl !== playableUrl
+				this.videoUpload.previewUrl = playableUrl
+				this.$nextTick(() => {
+					if (sourceChanged) {
+						const video = this.getVideoElement()
+						if (video && typeof video.load === 'function') {
+							video.load()
+						}
+					}
+					this.previewSelectedSegment()
+				})
+			} else {
+				uni.showToast({ title: '这个片段暂无本地预览源，请重新选择原视频或接入云地址', icon: 'none' })
+				return
+			}
+		},
+		getPlayableClipUrl(clip) {
+			const localUrl = String(clip && clip.localPreviewUrl ? clip.localPreviewUrl : '').trim()
+			if (/^(blob:|data:|https?:\/\/)/i.test(localUrl)) return localUrl
+			const url = String(clip && clip.url ? clip.url : '').trim()
+			if (/^(blob:|data:|https?:\/\/)/i.test(url)) return url
+			return ''
+		},
+		playUserVideoPreview() {
+			if (!this.videoClipCount) {
+				uni.showToast({ title: '还没有可预览的视频片段', icon: 'none' })
+				return
+			}
+			this.playUserPreviewClip(0)
+		},
+		playUserPreviewClip(index) {
+			this.ensureVideoClipsArray()
+			const clip = this.form.videoClips[index]
+			if (!clip) return
+			const playableUrl = this.getPlayableClipUrl(clip)
+			if (!playableUrl) {
+				this.userPreview = {
+					activeIndex: index,
+					isPlaying: false,
+					status: `第 ${index + 1} 段没有可播放预览源：本地刷新后需要重新选择原视频，或未来接入真实 HTTPS 云地址。`
+				}
+				uni.showToast({ title: '此片段暂无可播放预览源', icon: 'none' })
+				return
+			}
+
+			this.ensureVideoObject()
+			this.form.video = Object.assign({}, this.form.video, clip)
+			const sourceChanged = this.videoUpload.previewUrl !== playableUrl
+			this.videoUpload.previewUrl = playableUrl
+			this.videoPreview.isPreviewingSegment = false
+			this.userPreview = {
+				activeIndex: index,
+				isPlaying: true,
+				status: `正在预览第 ${index + 1} 段：${this.getClipDisplayTitle(clip)}`
+			}
+			this.$nextTick(() => {
+				const video = this.getVideoElement()
+				if (!video) {
+					this.stopUserVideoPreview(false)
+					uni.showToast({ title: '请先选择视频文件', icon: 'none' })
+					return
+				}
+				const start = Math.max(0, Number(clip.startSec) || 0)
+				const playFromStart = () => {
+					video.currentTime = start
+					if (typeof video.play === 'function') {
+						const playResult = video.play()
+						if (playResult && typeof playResult.catch === 'function') {
+							playResult.catch(() => {
+								this.stopUserVideoPreview(false)
+								uni.showToast({ title: '视频暂时无法播放，请检查格式或重新选择文件', icon: 'none' })
+							})
+						}
+					}
+				}
+				if (sourceChanged && typeof video.load === 'function') {
+					video.load()
+				}
+				if (!sourceChanged && video.readyState >= 1) {
+					playFromStart()
+					return
+				}
+				const onLoaded = () => {
+					video.removeEventListener('loadedmetadata', onLoaded)
+					playFromStart()
+				}
+				video.addEventListener('loadedmetadata', onLoaded)
+				if (typeof video.load === 'function') {
+					video.load()
+				}
+			})
+		},
+		stopUserVideoPreview(showToast = true) {
+			if (this.userPreview && this.userPreview.isPlaying) {
+				const video = this.getVideoElement()
+				if (video && typeof video.pause === 'function') {
+					video.pause()
+				}
+			}
+			this.userPreview = {
+				activeIndex: -1,
+				isPlaying: false,
+				status: showToast ? '已停止连续预览。' : '还未开始连续预览。点击时间轴片段可单段预览，点击“连续预览”可按顺序播放。'
+			}
+			this.videoPreview.isPreviewingSegment = false
+		},
+		handleUserPreviewTimeUpdate(video, current) {
+			const index = this.userPreview.activeIndex
+			const clip = Array.isArray(this.form.videoClips) ? this.form.videoClips[index] : null
+			if (!clip) {
+				this.stopUserVideoPreview(false)
+				return
+			}
+			const end = Number(clip.endSec)
+			if (!Number.isFinite(end) || current < end) return
+			if (video && typeof video.pause === 'function') {
+				video.pause()
+			}
+			const nextIndex = index + 1
+			if (nextIndex < this.videoClipCount) {
+				this.playUserPreviewClip(nextIndex)
+				return
+			}
+			this.userPreview = {
+				activeIndex: index,
+				isPlaying: false,
+				status: '连续预览完成。用户端后续可以在这里提示“查看完整视频需付费解锁”。'
+			}
+		},
+		moveVideoClip(index, direction) {
+			this.ensureVideoClipsArray()
+			if (this.editingClipIndex > -1 && !this.flushEditingVideoClip()) return
+			const nextIndex = index + direction
+			if (nextIndex < 0 || nextIndex >= this.form.videoClips.length) return
+			const clips = this.form.videoClips
+			const target = clips.splice(index, 1)[0]
+			clips.splice(nextIndex, 0, target)
+			this.syncPrimaryVideoFromClips(this.form)
+			this.saveState = '已调整视频片段顺序'
+		},
+		removeVideoClip(index) {
+			this.ensureVideoClipsArray()
+			if (index < 0 || index >= this.form.videoClips.length) return
+			if (this.editingClipIndex > -1 && this.editingClipIndex !== index && !this.flushEditingVideoClip()) return
+			if (this.editingClipIndex === index) {
+				this.editingClipIndex = -1
+			}
+			const removedClip = this.form.videoClips.splice(index, 1)[0]
+			if (
+				removedClip &&
+				removedClip.localPreviewUrl &&
+				this.videoUpload.previewUrl !== removedClip.localPreviewUrl &&
+				!this.isPreviewUrlUsedByClip(removedClip.localPreviewUrl)
+			) {
+				this.releaseVideoPreview(removedClip.localPreviewUrl)
+			}
+			if (this.form.videoClips.length) {
+				this.syncPrimaryVideoFromClips(this.form)
+			} else {
+				this.form.video = this.emptyVideoObject()
+			}
+			this.saveState = '已移除视频片段'
+		},
+		syncPrimaryVideoFromClips(target) {
+			if (!target || !Array.isArray(target.videoClips) || !target.videoClips.length) return target
+			target.video = Object.assign({}, target.video || {}, target.videoClips[0])
+			return target
+		},
 		syncVideoUploadStateFromForm() {
+			this.cancelVideoUploadTimer()
 			this.releaseVideoPreview()
 			const video = this.form && this.form.video ? this.form.video : {}
 			if (video.assetId || video.url) {
@@ -819,14 +1247,69 @@ export default {
 				message: '选择一个本地视频文件，系统会按未来上传流程做格式、大小和元数据校验。',
 				previewUrl: ''
 			}
+			this.resetVideoPreviewState()
 		},
-		handleVideoFileChange(event) {
-			const files = event && event.target && event.target.files ? event.target.files : []
-			const file = files[0]
+		handleNativeVideoFileChange(event) {
+			this.handleVideoFileChange(event)
+			if (event && event.target) {
+				event.target.value = ''
+			}
+		},
+		installNativeVideoButtonHandler() {
+			if (typeof document === 'undefined') return
+			this.$nextTick(() => {
+				const trigger = document.getElementById('video-native-picker-host')
+				if (!trigger) return
+				if (trigger === this.videoFileTriggerEl && this.runtimeVideoInputEl) return
+				this.removeNativeVideoButtonHandler()
+				trigger.innerHTML = ''
+				const input = document.createElement('input')
+				input.type = 'file'
+				input.accept = 'video/mp4,video/webm,video/quicktime,video/*'
+				input.multiple = false
+				input.className = 'runtime-video-file-input'
+				input.setAttribute('aria-label', '选择视频文件')
+				input.style.display = 'block'
+				input.style.width = '260px'
+				input.style.maxWidth = '100%'
+				input.style.minHeight = '44px'
+				input.style.padding = '8px 12px'
+				input.style.border = '2px solid #0e3a5c'
+				input.style.borderRadius = '999px'
+				input.style.background = '#ffffff'
+				input.style.color = '#0e3a5c'
+				input.style.cursor = 'pointer'
+				input.style.margin = '0'
+				input.style.fontWeight = '800'
+				input.addEventListener('change', this.handleNativeVideoFileChange)
+				trigger.appendChild(input)
+				this.videoFileTriggerEl = trigger
+				this.runtimeVideoInputEl = input
+			})
+		},
+		removeNativeVideoButtonHandler() {
+			if (this.runtimeVideoInputEl) {
+				this.runtimeVideoInputEl.removeEventListener('change', this.handleNativeVideoFileChange)
+				if (this.runtimeVideoInputEl.parentNode) {
+					this.runtimeVideoInputEl.parentNode.removeChild(this.runtimeVideoInputEl)
+				}
+			}
+			this.videoFileTriggerEl = null
+			this.runtimeVideoInputEl = null
+		},
+		handleVideoFileChange(eventOrFile) {
+			const file = eventOrFile && eventOrFile.name
+				? eventOrFile
+				: eventOrFile && eventOrFile.target && eventOrFile.target.files
+					? eventOrFile.target.files[0]
+					: null
 			if (!file) return
 
+			this.cancelVideoUploadTimer()
 			const validation = this.validateVideoFile(file)
 			if (!validation.ok) {
+				this.releaseVideoPreview()
+				this.resetVideoPreviewState()
 				this.videoUpload = {
 					status: 'error',
 					progress: 0,
@@ -841,7 +1324,9 @@ export default {
 			}
 
 			this.releaseVideoPreview()
+			this.resetVideoPreviewState()
 			const previewUrl = URL.createObjectURL(file)
+			this.resetCurrentVideoDraftForFile(file)
 			this.videoUpload = {
 				status: 'ready',
 				progress: 0,
@@ -851,11 +1336,19 @@ export default {
 				message: '文件已选择，正在模拟上传到未来云存储。',
 				previewUrl
 			}
-			this.ensureVideoObject()
-			if (!this.form.video.title) {
-				this.form.video.title = `${this.form.word || file.name} 的象形讲解`
-			}
 			this.simulateVideoUpload(file)
+		},
+		resetCurrentVideoDraftForFile(file) {
+			this.ensureVideoObject()
+			this.editingClipIndex = -1
+			this.form.video = Object.assign({}, this.emptyVideoObject(), {
+				fileName: file && file.name ? file.name : '',
+				mimeType: file && file.type ? file.type : '',
+				size: file && file.size ? file.size : '',
+				startSec: 0,
+				endSec: ''
+			})
+			this.saveState = '已选择新视频，请重新填写这个片段的标题、焦点和时间点'
 		},
 		validateVideoFile(file) {
 			const fileName = file && file.name ? file.name.toLowerCase() : ''
@@ -872,6 +1365,12 @@ export default {
 			return { ok: true }
 		},
 		simulateVideoUpload(file) {
+			this.cancelVideoUploadTimer()
+			const uploadJob = {
+				formRef: this.form,
+				startedAt: Date.now()
+			}
+			this.videoUploadJob = uploadJob
 			if (this.videoUploadTimer) {
 				clearInterval(this.videoUploadTimer)
 			}
@@ -881,16 +1380,26 @@ export default {
 			this.videoUpload.message = '上传演练中：正在生成资产 ID、存储路径和播放地址。'
 
 			this.videoUploadTimer = setInterval(() => {
+				if (this.videoUploadJob !== uploadJob) return
 				const nextProgress = Math.min(this.videoUpload.progress + 18, 100)
 				this.videoUpload.progress = nextProgress
 
 				if (nextProgress < 100) return
 				clearInterval(this.videoUploadTimer)
 				this.videoUploadTimer = null
-				this.completeVideoUpload(file)
+				this.videoUploadJob = null
+				this.completeVideoUpload(file, uploadJob)
 			}, 220)
 		},
-		completeVideoUpload(file) {
+		cancelVideoUploadTimer() {
+			if (this.videoUploadTimer) {
+				clearInterval(this.videoUploadTimer)
+				this.videoUploadTimer = null
+			}
+			this.videoUploadJob = null
+		},
+		completeVideoUpload(file, uploadJob) {
+			if (uploadJob && uploadJob.formRef !== this.form) return
 			const safeName = this.toSafeVideoFileName(file.name || 'lesson-video.mp4')
 			const assetId = `${this.form.id || this.form.word || 'word'}-${Date.now()}`
 			const storagePath = `videos/${this.form.id || 'draft'}/${assetId}-${safeName}`
@@ -913,19 +1422,20 @@ export default {
 			this.saveState = '视频资产已写入当前词条'
 		},
 		clearVideoAsset() {
-			this.releaseVideoPreview()
+			this.cancelVideoUploadTimer()
+			this.stopUserVideoPreview(false)
 			this.ensureVideoObject()
-			this.form.video = Object.assign({}, this.form.video, {
-				url: '',
-				provider: '',
-				assetId: '',
-				storagePath: '',
-				fileName: '',
-				mimeType: '',
-				size: '',
-				uploadStatus: '',
-				uploadedAt: ''
-			})
+			const previewUrls = []
+			if (this.videoUpload && this.videoUpload.previewUrl) previewUrls.push(this.videoUpload.previewUrl)
+			if (Array.isArray(this.form.videoClips)) {
+				this.form.videoClips.forEach((clip) => {
+					if (clip && clip.localPreviewUrl) previewUrls.push(clip.localPreviewUrl)
+				})
+			}
+			this.editingClipIndex = -1
+			this.form.video = this.emptyVideoObject()
+			this.$set(this.form, 'videoClips', [])
+			previewUrls.forEach((url) => this.releaseVideoPreview(url))
 			this.videoUpload = {
 				status: 'idle',
 				progress: 0,
@@ -935,21 +1445,137 @@ export default {
 				message: '视频资产已清除，可以重新选择文件。',
 				previewUrl: ''
 			}
+			this.resetVideoPreviewState()
+		},
+		emptyVideoObject() {
+			return {
+				url: '',
+				title: '',
+				focus: '',
+				targetPart: '',
+				note: '',
+				startSec: '',
+				endSec: '',
+				provider: '',
+				assetId: '',
+				storagePath: '',
+				fileName: '',
+				mimeType: '',
+				size: '',
+				uploadStatus: '',
+				uploadedAt: ''
+			}
 		},
 		ensureVideoObject() {
 			if (!this.form.video) {
-				this.$set(this.form, 'video', {
-					url: '',
-					title: '',
-					startSec: '',
-					endSec: ''
-				})
+				this.$set(this.form, 'video', this.emptyVideoObject())
 			}
 		},
-		releaseVideoPreview() {
-			if (this.videoUpload && this.videoUpload.previewUrl) {
-				URL.revokeObjectURL(this.videoUpload.previewUrl)
+		isPreviewUrlUsedByClip(url) {
+			if (!url || !Array.isArray(this.form.videoClips)) return false
+			return this.form.videoClips.some((clip) => clip && clip.localPreviewUrl === url)
+		},
+		releaseVideoPreview(url) {
+			const targetUrl = url || (this.videoUpload && this.videoUpload.previewUrl)
+			if (!targetUrl || !/^blob:/i.test(String(targetUrl))) return
+			if (this.isPreviewUrlUsedByClip(targetUrl)) return
+			URL.revokeObjectURL(targetUrl)
+		},
+		resetVideoPreviewState() {
+			this.videoPreview = {
+				currentSec: 0,
+				durationSec: 0,
+				isPreviewingSegment: false
 			}
+		},
+		handleVideoLoadedMetadata(event) {
+			const video = this.getVideoElement(event)
+			const duration = video && Number.isFinite(video.duration) ? video.duration : 0
+			this.videoPreview.durationSec = Math.max(0, Math.round(duration))
+		},
+		handleVideoTimeUpdate(event) {
+			const video = this.getVideoElement(event)
+			const current = video && Number.isFinite(video.currentTime) ? video.currentTime : 0
+			this.videoPreview.currentSec = Math.max(0, Math.round(current))
+			if (this.userPreview && this.userPreview.isPlaying) {
+				this.handleUserPreviewTimeUpdate(video, current)
+				return
+			}
+			if (!this.videoPreview.isPreviewingSegment) return
+
+			const end = Number(this.form.video && this.form.video.endSec)
+			if (!Number.isFinite(end) || end <= 0) return
+			if (current >= end) {
+				this.videoPreview.isPreviewingSegment = false
+				if (video && typeof video.pause === 'function') {
+					video.pause()
+				}
+			}
+		},
+		getVideoElement(event) {
+			if (event && event.target && typeof event.target.currentTime === 'number') {
+				return event.target
+			}
+			const ref = this.$refs.adminVideoPreview
+			if (ref && ref.$el) return ref.$el
+			if (ref && typeof ref.currentTime === 'number') return ref
+			if (typeof document !== 'undefined') {
+				return document.querySelector('.admin-video-preview')
+			}
+			return null
+		},
+		markVideoStart() {
+			this.ensureVideoObject()
+			const current = this.getCurrentVideoSecond()
+			this.$set(this.form.video, 'startSec', current)
+			if (this.form.video.endSec !== '' && Number(this.form.video.endSec) <= current) {
+				this.$set(this.form.video, 'endSec', current + 10)
+			}
+			this.saveState = `已把 ${current}s 设为当前卡片片段开始`
+		},
+		markVideoEnd() {
+			this.ensureVideoObject()
+			const current = this.getCurrentVideoSecond()
+			const start = Number(this.form.video.startSec || 0)
+			this.$set(this.form.video, 'endSec', current > start ? current : start + 10)
+			this.saveState = `已把 ${this.form.video.endSec}s 设为当前卡片片段结束`
+		},
+		previewSelectedSegment() {
+			const video = this.getVideoElement()
+			if (!video) {
+				uni.showToast({ title: '请先选择视频文件', icon: 'none' })
+				return
+			}
+			const start = Number(this.form.video && this.form.video.startSec)
+			const end = Number(this.form.video && this.form.video.endSec)
+			if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+				uni.showToast({ title: '请先设置有效的开始秒和结束秒', icon: 'none' })
+				return
+			}
+			video.currentTime = Math.max(0, start)
+			this.videoPreview.isPreviewingSegment = true
+			if (typeof video.play === 'function') {
+				const playResult = video.play()
+				if (playResult && typeof playResult.catch === 'function') {
+					playResult.catch(() => {
+						this.videoPreview.isPreviewingSegment = false
+						uni.showToast({ title: '视频暂时无法播放，请检查格式或重新选择文件', icon: 'none' })
+					})
+				}
+			}
+		},
+		getCurrentVideoSecond() {
+			const video = this.getVideoElement()
+			const current = video && Number.isFinite(video.currentTime)
+				? video.currentTime
+				: this.videoPreview.currentSec
+			return Math.max(0, Math.round(Number(current) || 0))
+		},
+		formatVideoClock(seconds) {
+			const total = Math.max(0, Math.round(Number(seconds) || 0))
+			const minutes = Math.floor(total / 60)
+			const rest = String(total % 60).padStart(2, '0')
+			return `${minutes}:${rest}`
 		},
 		formatFileSize(size) {
 			const value = Number(size || 0)
@@ -961,6 +1587,54 @@ export default {
 		toSafeVideoFileName(fileName) {
 			const normalized = String(fileName || 'lesson-video.mp4').trim().toLowerCase()
 			return normalized.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'lesson-video.mp4'
+		},
+		stripRuntimeVideoFields(value) {
+			const stripClip = (clip) => {
+				if (!clip || typeof clip !== 'object') return clip
+				delete clip.localPreviewUrl
+				delete clip.local_preview_url
+				return clip
+			}
+			const stripWord = (word) => {
+				if (!word || typeof word !== 'object') return word
+				if (word.video) stripClip(word.video)
+				if (Array.isArray(word.videoClips)) {
+					word.videoClips = word.videoClips.map((clip) => stripClip(clip))
+				}
+				return word
+			}
+			if (value === undefined || value === null) return value
+			const next = clone(value)
+			return Array.isArray(next) ? next.map((item) => stripWord(item)) : stripWord(next)
+		},
+		normalizeVideoClip(raw, index) {
+			const source = raw || {}
+			const startSec = Number(source.startSec !== undefined ? source.startSec : source.start_sec)
+			const endSec = Number(source.endSec !== undefined ? source.endSec : source.end_sec)
+			const videoSize = Number(source.size)
+			return {
+				clipId: String(source.clipId || source.clip_id || source.id || `clip-${(index || 0) + 1}`).trim(),
+				url: String(source.url || source.videoUrl || source.video_url || '').trim(),
+				title: String(source.title || source.segmentTitle || source.segment_title || source.videoTitle || source.video_title || '').trim(),
+				focus: String(source.focus || source.topic || source.clipFocus || source.clip_focus || source.learningPoint || source.learning_point || '').trim(),
+				targetPart: String(source.targetPart || source.target_part || source.part || source.partLabel || source.part_label || source.node || source.nodeId || source.node_id || '').trim(),
+				note: String(source.note || source.description || source.summary || source.clipNote || source.clip_note || '').trim(),
+				localPreviewUrl: /^(blob:|data:|https?:\/\/)/i.test(String(source.localPreviewUrl || source.local_preview_url || ''))
+					? String(source.localPreviewUrl || source.local_preview_url).trim()
+					: '',
+				startSec: source.startSec === '' || source.start_sec === '' || (source.startSec === undefined && source.start_sec === undefined) || Number.isNaN(startSec) ? '' : startSec,
+				endSec: source.endSec === '' || source.end_sec === '' || (source.endSec === undefined && source.end_sec === undefined) || Number.isNaN(endSec) ? '' : endSec,
+				provider: String(source.provider || '').trim(),
+				assetId: String(source.assetId || source.asset_id || source.videoId || source.video_id || '').trim(),
+				wordId: String(source.wordId || source.word_id || '').trim(),
+				segmentTitle: String(source.segmentTitle || source.segment_title || source.title || '').trim(),
+				storagePath: String(source.storagePath || source.storage_path || '').trim(),
+				fileName: String(source.fileName || source.file_name || '').trim(),
+				mimeType: String(source.mimeType || source.mime_type || '').trim(),
+				size: source.size === '' || source.size === undefined || Number.isNaN(videoSize) ? '' : videoSize,
+				uploadStatus: String(source.uploadStatus || source.upload_status || '').trim(),
+				uploadedAt: String(source.uploadedAt || source.uploaded_at || '').trim()
+			}
 		},
 		normalizeWord(item) {
 			const next = clone(item)
@@ -975,24 +1649,21 @@ export default {
 				title: String(part.title || '').trim(),
 				targetId: String(part.targetId || '').trim()
 			})) : []
-			const video = next.video || {}
-			const startSec = Number(video.startSec)
-			const endSec = Number(video.endSec)
-			const videoSize = Number(video.size)
-			next.video = {
-				url: String(video.url || video.videoUrl || '').trim(),
-				title: String(video.title || video.videoTitle || '').trim(),
-				startSec: video.startSec === '' || video.startSec === undefined || Number.isNaN(startSec) ? '' : startSec,
-				endSec: video.endSec === '' || video.endSec === undefined || Number.isNaN(endSec) ? '' : endSec,
-				provider: String(video.provider || '').trim(),
-				assetId: String(video.assetId || video.asset_id || '').trim(),
-				storagePath: String(video.storagePath || video.storage_path || '').trim(),
-				fileName: String(video.fileName || video.file_name || '').trim(),
-				mimeType: String(video.mimeType || video.mime_type || '').trim(),
-				size: video.size === '' || video.size === undefined || Number.isNaN(videoSize) ? '' : videoSize,
-				uploadStatus: String(video.uploadStatus || video.upload_status || '').trim(),
-				uploadedAt: String(video.uploadedAt || video.uploaded_at || '').trim()
+			const video = this.normalizeVideoClip(next.video || {}, 0)
+			const explicitClips = Array.isArray(next.videoClips)
+			const rawClips = explicitClips
+				? next.videoClips
+				: (Array.isArray(next.video_clips) ? next.video_clips : (Array.isArray(next.clips) ? next.clips : []))
+			const videoClips = rawClips
+				.map((clip, index) => this.normalizeVideoClip(clip, index))
+				.filter((clip) => this.hasVideoClipPayload(clip))
+			if (!explicitClips && !videoClips.length && this.hasVideoClipPayload(video)) {
+				videoClips.push(Object.assign({}, video, {
+					clipId: video.clipId || `${next.id || next.word || 'word'}-clip-1`
+				}))
 			}
+			next.videoClips = videoClips
+			next.video = videoClips.length ? Object.assign({}, video, videoClips[0]) : video
 			next.entryType = this.getEntryType(next)
 			return next
 		},
@@ -1051,7 +1722,29 @@ export default {
 						title: 'apple 的象形讲解',
 						startSec: 0,
 						endSec: 120
-					}
+					},
+					videoClips: [
+						{
+							clipId: 'apple-clip-1',
+							url: 'https://example.com/videos/apple.mp4',
+							title: '第 1 段：a 的象形',
+							focus: 'a 像苹果或人头',
+							targetPart: 'a',
+							note: '先解释 apple 里 a 的图像含义。',
+							startSec: 0,
+							endSec: 10
+						},
+						{
+							clipId: 'apple-clip-2',
+							url: 'https://example.com/videos/apple.mp4',
+							title: '第 2 段：pple 的后续拆解',
+							focus: 'pple 后续拆解',
+							targetPart: 'pple',
+							note: '再补充 pple 如何继续拆成下一层节点。',
+							startSec: 30,
+							endSec: 45
+						}
+					]
 				}]
 			}, null, 2)
 			this.importResult = '已填入示例。正式使用时，把 AI 生成的 words 数组粘贴进来即可。'
@@ -1152,6 +1845,9 @@ export default {
 		normalizeImportedWord(raw) {
 			raw = raw || {}
 			const rawVideo = raw.video || {}
+			const rawVideoClips = Array.isArray(raw.videoClips)
+				? raw.videoClips
+				: (Array.isArray(raw.video_clips) ? raw.video_clips : (Array.isArray(raw.clips) ? raw.clips : undefined))
 			const firstNonEmpty = (...values) => values.find((value) => value !== undefined && value !== null && String(value).trim() !== '')
 			const valueOrBlank = (value) => value === undefined ? '' : value
 			const normalized = this.normalizeWord({
@@ -1164,8 +1860,11 @@ export default {
 				status: 'draft',
 				parts: this.normalizeImportedParts(raw.parts || raw.breakdown || raw.children || []),
 				video: {
-					url: valueOrBlank(firstNonEmpty(rawVideo.url, rawVideo.videoUrl, raw.videoUrl)),
-					title: valueOrBlank(firstNonEmpty(rawVideo.title, rawVideo.videoTitle, raw.videoTitle)),
+					url: valueOrBlank(firstNonEmpty(rawVideo.url, rawVideo.videoUrl, rawVideo.video_url, raw.videoUrl, raw.video_url)),
+					title: valueOrBlank(firstNonEmpty(rawVideo.title, rawVideo.segmentTitle, rawVideo.segment_title, rawVideo.videoTitle, rawVideo.video_title, raw.videoTitle, raw.video_title, raw.segment_title)),
+					focus: valueOrBlank(firstNonEmpty(rawVideo.focus, rawVideo.topic, rawVideo.clipFocus, rawVideo.clip_focus, rawVideo.learningPoint, rawVideo.learning_point, raw.focus, raw.topic, raw.clipFocus, raw.clip_focus, raw.learning_point)),
+					targetPart: valueOrBlank(firstNonEmpty(rawVideo.targetPart, rawVideo.target_part, rawVideo.partLabel, rawVideo.part_label, rawVideo.nodeId, rawVideo.node_id, raw.targetPart, raw.target_part, raw.partLabel, raw.part_label)),
+					note: valueOrBlank(firstNonEmpty(rawVideo.note, rawVideo.description, rawVideo.summary, rawVideo.clipNote, rawVideo.clip_note, raw.videoNote, raw.video_note, raw.clip_note)),
 					startSec: valueOrBlank(firstNonEmpty(rawVideo.startSec, raw.startSec)),
 					endSec: valueOrBlank(firstNonEmpty(rawVideo.endSec, raw.endSec)),
 					provider: valueOrBlank(firstNonEmpty(rawVideo.provider, raw.provider)),
@@ -1176,7 +1875,8 @@ export default {
 					size: valueOrBlank(firstNonEmpty(rawVideo.size, raw.size)),
 					uploadStatus: valueOrBlank(firstNonEmpty(rawVideo.uploadStatus, rawVideo.upload_status, raw.uploadStatus)),
 					uploadedAt: valueOrBlank(firstNonEmpty(rawVideo.uploadedAt, rawVideo.uploaded_at, raw.uploadedAt))
-				}
+				},
+				videoClips: rawVideoClips === undefined ? undefined : rawVideoClips
 			})
 			normalized._providedFields = this.getImportedProvidedFields(raw)
 			return normalized
@@ -1194,9 +1894,15 @@ export default {
 				parts: (hasOwn(raw, 'parts') && Array.isArray(raw.parts) && raw.parts.length > 0) ||
 					(hasOwn(raw, 'breakdown') && Array.isArray(raw.breakdown) && raw.breakdown.length > 0) ||
 					(hasOwn(raw, 'children') && Array.isArray(raw.children) && raw.children.length > 0),
+				videoClips: (hasOwn(raw, 'videoClips') && Array.isArray(raw.videoClips)) ||
+					(hasOwn(raw, 'video_clips') && Array.isArray(raw.video_clips)) ||
+					(hasOwn(raw, 'clips') && Array.isArray(raw.clips)),
 				video: {
-					url: hasNonEmpty(video.url, video.videoUrl, raw.videoUrl),
-					title: hasNonEmpty(video.title, video.videoTitle, raw.videoTitle),
+					url: hasNonEmpty(video.url, video.videoUrl, video.video_url, raw.videoUrl, raw.video_url),
+					title: hasNonEmpty(video.title, video.segmentTitle, video.segment_title, video.videoTitle, video.video_title, raw.videoTitle, raw.video_title, raw.segment_title),
+					focus: hasNonEmpty(video.focus, video.topic, video.clipFocus, video.clip_focus, video.learningPoint, video.learning_point, raw.focus, raw.topic, raw.clipFocus, raw.clip_focus, raw.learning_point),
+					targetPart: hasNonEmpty(video.targetPart, video.target_part, video.partLabel, video.part_label, video.nodeId, video.node_id, raw.targetPart, raw.target_part, raw.partLabel, raw.part_label),
+					note: hasNonEmpty(video.note, video.description, video.summary, video.clipNote, video.clip_note, raw.videoNote, raw.video_note, raw.clip_note),
 					startSec: hasNonEmpty(video.startSec, raw.startSec),
 					endSec: hasNonEmpty(video.endSec, raw.endSec),
 					provider: hasNonEmpty(video.provider, raw.provider),
@@ -1238,18 +1944,23 @@ export default {
 		},
 		validateVideoTime(item, rowNumber) {
 			const video = item.video || {}
-			const hasStart = video.startSec !== '' && video.startSec !== undefined
-			const hasEnd = video.endSec !== '' && video.endSec !== undefined
-			const start = Number(video.startSec)
-			const end = Number(video.endSec)
-			if (hasStart && (Number.isNaN(start) || start < 0)) {
-				return { ok: false, message: `第 ${rowNumber} 条视频开始秒必须是非负数字` }
-			}
-			if (hasEnd && (Number.isNaN(end) || end < 0)) {
-				return { ok: false, message: `第 ${rowNumber} 条视频结束秒必须是非负数字` }
-			}
-			if (hasStart && hasEnd && end < start) {
-				return { ok: false, message: `第 ${rowNumber} 条视频结束秒不能小于开始秒` }
+			const clips = Array.isArray(item.videoClips) && item.videoClips.length ? item.videoClips : [video]
+			for (let index = 0; index < clips.length; index += 1) {
+				const clip = clips[index] || {}
+				const hasStart = clip.startSec !== '' && clip.startSec !== undefined
+				const hasEnd = clip.endSec !== '' && clip.endSec !== undefined
+				const start = Number(clip.startSec)
+				const end = Number(clip.endSec)
+				const label = clips.length > 1 ? `第 ${rowNumber} 条第 ${index + 1} 段视频` : `第 ${rowNumber} 条视频`
+				if (hasStart && (Number.isNaN(start) || start < 0)) {
+					return { ok: false, message: `${label}开始秒必须是非负数字` }
+				}
+				if (hasEnd && (Number.isNaN(end) || end < 0)) {
+					return { ok: false, message: `${label}结束秒必须是非负数字` }
+				}
+				if (hasStart && hasEnd && end <= start) {
+					return { ok: false, message: `${label}结束秒必须大于开始秒` }
+				}
 			}
 			return { ok: true }
 		},
@@ -1383,7 +2094,7 @@ export default {
 			})
 		},
 		persistPendingWords() {
-			uni.setStorageSync(PENDING_STORAGE_KEY, clone(this.pendingWords))
+			uni.setStorageSync(PENDING_STORAGE_KEY, this.stripRuntimeVideoFields(this.pendingWords))
 		},
 		applyImportedWords(incoming, newCount, updateCount, options) {
 			const firstImportedId = incoming[0] ? incoming[0].id : ''
@@ -1409,7 +2120,7 @@ export default {
 			}
 			this.expandedLetters = this.defaultExpandedLetters(this.words)
 			this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
-			uni.setStorageSync(STORAGE_KEY, clone(this.words))
+			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
 			this.saveState = '已导入批量草稿'
 			this.importResult = `导入完成：新增 ${newCount} 条，更新 ${updateCount} 条。请抽查后再发布。`
 			if (!options || !options.silentToast) {
@@ -1428,14 +2139,29 @@ export default {
 			if ((!hasProvidedMeta || provided.parts) && Array.isArray(incoming.parts) && incoming.parts.length) {
 				next.parts = incoming.parts
 			}
+			if ((!hasProvidedMeta || provided.videoClips) && Array.isArray(incoming.videoClips)) {
+				next.videoClips = incoming.videoClips
+			}
 			const incomingVideo = incoming.video || {}
 			const providedVideo = provided.video || {}
 			next.video = next.video || {}
-			;['url', 'title', 'startSec', 'endSec', 'provider', 'assetId', 'storagePath', 'fileName', 'mimeType', 'size', 'uploadStatus', 'uploadedAt'].forEach((field) => {
+			;['url', 'title', 'focus', 'targetPart', 'note', 'startSec', 'endSec', 'provider', 'assetId', 'wordId', 'segmentTitle', 'storagePath', 'fileName', 'mimeType', 'size', 'uploadStatus', 'uploadedAt'].forEach((field) => {
 				if ((!hasProvidedMeta || providedVideo[field]) && incomingVideo[field] !== '' && incomingVideo[field] !== undefined) {
 					next.video[field] = incomingVideo[field]
 				}
 			})
+			const hasProvidedVideoField = Object.keys(providedVideo).some((field) => providedVideo[field])
+			if ((!hasProvidedMeta || hasProvidedVideoField) && !provided.videoClips) {
+				const normalizedVideo = this.normalizeVideoClip(next.video, 0)
+				if (this.hasVideoClipPayload(normalizedVideo)) {
+					const currentClips = Array.isArray(next.videoClips) ? next.videoClips : []
+					const firstClip = currentClips[0] || {}
+					const mergedFirstClip = Object.assign({}, firstClip, normalizedVideo, {
+						clipId: firstClip.clipId || normalizedVideo.clipId || `${next.id || next.word || 'word'}-clip-1`
+					})
+					next.videoClips = [mergedFirstClip].concat(currentClips.slice(1))
+				}
+			}
 			next.status = 'draft'
 			return this.stripImportMeta(this.normalizeWord(next))
 		},
@@ -1601,8 +2327,8 @@ button::after {
 
 .workbench {
 	display: grid;
-	grid-template-columns: 310px minmax(420px, 1fr) 360px;
-	gap: 18px;
+	grid-template-columns: minmax(390px, 420px) minmax(500px, 1fr) minmax(320px, 360px);
+	gap: 16px;
 	align-items: start;
 }
 
@@ -1801,8 +2527,8 @@ button::after {
 .accordion-word-row {
 	display: grid;
 	grid-template-columns: 34px minmax(0, 1fr) auto 14px;
-	align-items: center;
-	gap: 10px;
+	align-items: start;
+	gap: 12px;
 	padding: 12px 10px;
 	margin-top: 8px;
 	border-radius: 16px;
@@ -1861,14 +2587,17 @@ button::after {
 .entry-title-line {
 	display: flex;
 	align-items: center;
+	flex-wrap: wrap;
 	gap: 8px;
 	min-width: 0;
 }
 
 .entry-word {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	overflow: visible;
+	text-overflow: clip;
+	white-space: normal;
+	word-break: break-word;
+	line-height: 1.2;
 	font-size: 18px;
 	font-weight: 800;
 	color: #0e3a5c;
@@ -1898,10 +2627,12 @@ button::after {
 }
 
 .entry-meaning {
-	display: block;
+	display: -webkit-box;
 	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	white-space: normal;
+	line-height: 1.45;
 	margin-top: 4px;
 	font-size: 12px;
 	color: #7892a4;
@@ -1922,6 +2653,8 @@ button::after {
 
 .status-pill {
 	flex: 0 0 auto;
+	align-self: start;
+	margin-top: 2px;
 	padding: 4px 10px;
 	border-radius: 999px;
 	font-size: 12px;
@@ -1959,6 +2692,10 @@ button::after {
 .field {
 	display: block;
 	margin-bottom: 14px;
+}
+
+.field.span-2 {
+	grid-column: 1 / -1;
 }
 
 .field text {
@@ -2037,10 +2774,42 @@ button::after {
 
 .admin-video-preview {
 	width: 100%;
-	height: 220px;
+	height: 300px;
 	margin-top: 14px;
 	border-radius: 16px;
 	background: #0e3a5c;
+}
+
+.video-preview-tools {
+	margin-top: 12px;
+	padding: 12px;
+	border: 1px solid #d8e9f2;
+	border-radius: 16px;
+	background: #ffffff;
+}
+
+.video-time-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	color: #466578;
+	font-size: 12px;
+	font-weight: 700;
+}
+
+.clip-action-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-top: 10px;
+}
+
+.video-preview-tip {
+	display: block;
+	margin-top: 8px;
+	color: #7b96a8;
+	font-size: 12px;
+	line-height: 1.6;
 }
 
 .video-asset-box {
@@ -2071,6 +2840,156 @@ button::after {
 
 .clear-video-button {
 	margin-top: 10px;
+}
+
+.clip-list-card {
+	margin: 0 0 18px;
+	padding: 16px;
+	border: 1px solid #d8e9f2;
+	border-radius: 20px;
+	background: #ffffff;
+}
+
+.clip-list-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	margin-bottom: 12px;
+}
+
+.clip-list-title,
+.clip-list-note {
+	display: block;
+}
+
+.clip-list-title {
+	color: #0e3a5c;
+	font-size: 15px;
+	font-weight: 900;
+}
+
+.clip-list-note {
+	margin-top: 4px;
+	color: #66869b;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.clip-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.clip-item {
+	display: grid;
+	grid-template-columns: 34px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 12px;
+	padding: 12px;
+	border: 1px solid #e0edf5;
+	border-radius: 16px;
+	background: #f8fcff;
+}
+
+.clip-index {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 34px;
+	height: 34px;
+	border-radius: 50%;
+	background: #eaf7ff;
+	color: #0e3a5c;
+	font-weight: 900;
+}
+
+.clip-title,
+.clip-meta {
+	display: block;
+}
+
+.clip-title {
+	color: #12344d;
+	font-size: 14px;
+	font-weight: 800;
+}
+
+.clip-tags {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 6px;
+}
+
+.clip-tag {
+	display: inline-flex;
+	padding: 3px 8px;
+	border-radius: 999px;
+	background: #eef7fb;
+	color: #466578;
+	font-size: 11px;
+	font-weight: 800;
+}
+
+.clip-tag.focus {
+	background: #fff4db;
+	color: #9c5b00;
+}
+
+.clip-note {
+	display: block;
+	margin-top: 6px;
+	color: #466578;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.clip-meta {
+	margin-top: 4px;
+	color: #66869b;
+	font-size: 12px;
+	word-break: break-all;
+}
+
+.clip-buttons {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+.clip-mini-button {
+	min-width: 48px;
+	padding: 0 10px;
+	border-radius: 999px;
+	background: #eef7fb;
+	color: #0e3a5c;
+	font-size: 12px;
+	line-height: 30px;
+}
+
+.clip-mini-button::after {
+	border: 0;
+}
+
+.clip-mini-button[disabled] {
+	opacity: 0.45;
+}
+
+.clip-mini-button.danger {
+	background: #fff0ed;
+	color: #c74a36;
+}
+
+.clip-empty {
+	padding: 14px;
+	border-radius: 14px;
+	background: #f5fbff;
+	color: #66869b;
+	font-size: 13px;
+	line-height: 1.6;
 }
 
 .save-state {
@@ -2175,13 +3094,37 @@ button::after {
 	margin-top: 18px;
 }
 
+.video-native-picker-host {
+	display: flex;
+	align-items: center;
+	min-width: 260px;
+	min-height: 46px;
+	cursor: default;
+	user-select: none;
+}
+
+.native-picker-loading {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	padding: 0 16px;
+	border: 1px dashed #9fc5d9;
+	border-radius: 999px;
+	color: #466578;
+	font-size: 13px;
+	font-weight: 700;
+}
+
 .file-button {
 	position: relative;
 	overflow: hidden;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
+	box-sizing: border-box;
+	margin: 0;
 	padding: 0 18px;
+	border: 0;
 	border-radius: 999px;
 	background: #0e3a5c;
 	color: #fff;
@@ -2191,9 +3134,16 @@ button::after {
 	cursor: pointer;
 }
 
+button.file-button::after {
+	border: 0;
+}
+
 .file-button input {
 	position: absolute;
 	inset: 0;
+	z-index: 2;
+	width: 100%;
+	height: 100%;
 	opacity: 0;
 	cursor: pointer;
 }
@@ -2326,6 +3276,126 @@ button::after {
 	color: rgba(255, 255, 255, 0.72);
 }
 
+.preview-video-row {
+	display: grid;
+	grid-template-columns: 24px minmax(0, 1fr);
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.preview-video-index {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	border-radius: 50%;
+	background: rgba(255, 255, 255, 0.18);
+	color: #ffeba2;
+	font-size: 12px;
+	font-weight: 900;
+}
+
+.preview-video-copy {
+	min-width: 0;
+}
+
+.preview-video-note {
+	display: block;
+	margin-top: 3px;
+	color: rgba(255, 255, 255, 0.58);
+	font-size: 11px;
+	line-height: 1.5;
+}
+
+.viewer-preview-box {
+	margin-top: 18px;
+	padding: 16px;
+	border-radius: 22px;
+	background: #f8fcff;
+	border: 1px solid #d8e9f2;
+}
+
+.viewer-preview-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.viewer-preview-title,
+.viewer-preview-note,
+.viewer-preview-status,
+.viewer-preview-footnote {
+	display: block;
+}
+
+.viewer-preview-title {
+	color: #0e3a5c;
+	font-size: 15px;
+	font-weight: 900;
+}
+
+.viewer-preview-note,
+.viewer-preview-status,
+.viewer-preview-footnote {
+	color: #66869b;
+	font-size: 12px;
+	line-height: 1.6;
+}
+
+.viewer-preview-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	justify-content: flex-end;
+}
+
+.viewer-timeline {
+	display: flex;
+	gap: 6px;
+	margin: 14px 0 10px;
+	padding: 8px;
+	border-radius: 16px;
+	background: #eaf7ff;
+}
+
+.viewer-timeline-segment {
+	min-width: 74px;
+	padding: 10px;
+	border-radius: 12px;
+	background: #ffffff;
+	border: 1px solid #d8e9f2;
+	cursor: pointer;
+	transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.viewer-timeline-segment.active {
+	border-color: #fe8500;
+	box-shadow: 0 8px 18px rgba(254, 133, 0, 0.18);
+	transform: translateY(-1px);
+}
+
+.viewer-timeline-title,
+.viewer-timeline-time {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.viewer-timeline-title {
+	color: #0e3a5c;
+	font-size: 12px;
+	font-weight: 900;
+}
+
+.viewer-timeline-time {
+	margin-top: 4px;
+	color: #66869b;
+	font-size: 11px;
+}
+
 .next-box {
 	margin-top: 18px;
 	padding: 18px;
@@ -2337,7 +3407,7 @@ button::after {
 	color: #66869b;
 }
 
-@media screen and (max-width: 1180px) {
+@media screen and (max-width: 1360px) {
 	.workbench {
 		grid-template-columns: 1fr;
 	}
@@ -2354,7 +3424,9 @@ button::after {
 
 	.hero,
 	.panel-head,
-	.section-head {
+	.section-head,
+	.clip-list-head,
+	.viewer-preview-head {
 		flex-direction: column;
 		align-items: flex-start;
 	}
@@ -2368,7 +3440,20 @@ button::after {
 		width: 100%;
 	}
 
+	.clip-item {
+		grid-template-columns: 34px minmax(0, 1fr);
+	}
+
+	.clip-buttons {
+		grid-column: 1 / -1;
+		justify-content: flex-start;
+	}
+
 	.editor-actions {
+		justify-content: flex-start;
+	}
+
+	.viewer-preview-actions {
 		justify-content: flex-start;
 	}
 
