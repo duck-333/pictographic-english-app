@@ -4,14 +4,38 @@ import {
   TODAY_WORD_ID as LOCAL_TODAY_WORD_ID,
   WORDS as LOCAL_WORDS
 } from './mock-data.js'
+import { DEV_PREVIEW_WORDS } from './dev-preview-data.js'
 import { createWordDraft, normalizeWordQuery, normalizeWordRecord, validateWordRecord } from './content-schema.js'
 
-export const CONTENT_REPOSITORY_MODE = 'local-mock'
+function mergePreviewWords(localWords, previewWords) {
+  const result = []
+  const used = new Set()
+
+  ;(previewWords || []).forEach((word) => {
+    if (!word || !word.id || !word.word) return
+    result.push(word)
+    used.add(String(word.id))
+    used.add(String(word.word).toLowerCase())
+  })
+
+  ;(localWords || []).forEach((word) => {
+    const id = String(word && word.id ? word.id : '')
+    const text = String(word && word.word ? word.word : '').toLowerCase()
+    if (used.has(id) || used.has(text)) return
+    result.push(word)
+  })
+
+  return result
+}
+
+const SOURCE_WORDS = mergePreviewWords(LOCAL_WORDS, DEV_PREVIEW_WORDS)
+
+export const CONTENT_REPOSITORY_MODE = DEV_PREVIEW_WORDS.length ? 'local-preview-bridge' : 'local-mock'
 export const HOT_WORDS = LOCAL_HOT_WORDS
 export const TODAY_WORD_ID = LOCAL_TODAY_WORD_ID
 export const NAV_ITEMS = LOCAL_NAV_ITEMS
 
-const WORD_RECORDS = LOCAL_WORDS.map((item) => normalizeWordRecord(item))
+const WORD_RECORDS = SOURCE_WORDS.map((item) => normalizeWordRecord(item))
 
 function clonePart(part) {
   return { ...part }
@@ -21,6 +45,10 @@ function cloneExample(example) {
   return { ...example }
 }
 
+function cloneVideoClip(clip) {
+  return { ...clip }
+}
+
 function cloneWord(word) {
   if (!word) return null
   return {
@@ -28,7 +56,8 @@ function cloneWord(word) {
     parts: Array.isArray(word.parts) ? word.parts.map((part) => clonePart(part)) : [],
     examples: Array.isArray(word.examples) ? word.examples.map((item) => cloneExample(item)) : [],
     siblingIds: Array.isArray(word.siblingIds) ? [...word.siblingIds] : [],
-    videoSegment: word.videoSegment ? { ...word.videoSegment } : {}
+    videoSegment: word.videoSegment ? { ...word.videoSegment } : {},
+    videoClips: Array.isArray(word.videoClips) ? word.videoClips.map((clip) => cloneVideoClip(clip)) : []
   }
 }
 
@@ -38,7 +67,9 @@ export function getContentRepositoryInfo() {
   return {
     mode: CONTENT_REPOSITORY_MODE,
     remoteEnabled: false,
-    note: 'Current MVP reads local mock records through this repository facade.'
+    note: DEV_PREVIEW_WORDS.length
+      ? 'Current MVP reads admin-synced local preview records before mock records.'
+      : 'Current MVP reads local mock records through this repository facade.'
   }
 }
 

@@ -42,6 +42,53 @@ export const WORDS = [
       's 表示向外发力，tud 表示敲击、钻研，y 是构词后缀。study 的完整意象是：主动向外探索，用持续敲击的方式钻研知识，所以它表达“学习、研究”的动作。',
     videoTitle: 'study 象形拆解讲解',
     videoDuration: '02:36',
+    videoClips: [
+      {
+        clipId: 'study-overview-001',
+        title: 'study 整体讲解',
+        segmentTitle: 'study 整体讲解',
+        focus: '先看 s + tud + y 如何组成 study 的学习动作',
+        targetPart: 'study',
+        note: '本地 mock 片段：同一个测试视频的 0-8 秒，用来验证详情页播放器和时间定位。',
+        url: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+        videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+        startSec: 0,
+        endSec: 8,
+        provider: 'local-mock',
+        assetId: 'mock-flower-video',
+        storagePath: 'mock/videos/flower.mp4'
+      },
+      {
+        clipId: 'study-tud-002',
+        title: 'tud 词根讲解',
+        segmentTitle: 'tud 词根讲解',
+        focus: '重点观察 tud 表示敲击、钻研、反复触碰知识',
+        targetPart: 'tud',
+        note: '本地 mock 片段：同一个测试视频的 8-16 秒，验证同一视频截多个片段。',
+        url: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+        videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+        startSec: 8,
+        endSec: 16,
+        provider: 'local-mock',
+        assetId: 'mock-flower-video',
+        storagePath: 'mock/videos/flower.mp4'
+      },
+      {
+        clipId: 'study-letter-s-003',
+        title: 's 节点补充',
+        segmentTitle: 's 节点补充',
+        focus: '补充 s 的向外、滑出、延展感',
+        targetPart: 's',
+        note: '本地 mock 片段：不同测试视频的 3-10 秒，验证不同视频片段也能组合到同一词条。',
+        url: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+        videoUrl: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+        startSec: 3,
+        endSec: 10,
+        provider: 'local-mock',
+        assetId: 'mock-sintel-video',
+        storagePath: 'mock/videos/sintel-trailer.mp4'
+      }
+    ],
     examples: [
       { english: 'She studies hard every day to improve her English.', chinese: '她每天努力学习，以提高英语水平。' },
       { english: 'This study shows that exercise improves memory.', chinese: '这项研究表明，运动能改善记忆力。' }

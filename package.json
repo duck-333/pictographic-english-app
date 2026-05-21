@@ -11,6 +11,7 @@
     "check:admin": "node --check admin-portal/pictographic-admin/main.js",
     "check:miniapp": "node --check miniapp-uni/word-app1/common/mock-data.js && node --check miniapp-uni/word-app1/common/user-store.js && node --check miniapp-uni/word-app1/common/content-schema.js && node --check miniapp-uni/word-app1/common/word-repository.js",
     "dev": "vite",
+    "dev:preview-bridge": "node scripts/dev-preview-bridge.mjs",
     "dev:legacy-demo": "vite",
     "validate:content": "node scripts/validate-content.mjs content-seed/words.example.json content-seed/letter-c-import.json content-seed/letter-c-import-paste-ready.json"
   },

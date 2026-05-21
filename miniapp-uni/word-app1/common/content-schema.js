@@ -43,8 +43,8 @@ export function normalizeWordPart(part) {
   const source = part || {}
   return {
     ...source,
-    text: source.text || '',
-    meaning: source.meaning || '',
+    text: source.text || source.label || '',
+    meaning: source.meaning || source.title || '',
     targetId: source.targetId || '',
     color: source.color || '#0e3a5c',
     bgColor: source.bgColor || '#f5fbff',
@@ -63,12 +63,18 @@ export function normalizeExample(example) {
 
 export function normalizeVideoSegment(segment) {
   const source = segment || {}
+  const segmentTitle = source.segmentTitle || source.segment_title || source.title || ''
   return {
     ...source,
+    clipId: source.clipId || source.clip_id || source.id || '',
     videoUrl: source.videoUrl || source.video_url || source.url || '',
     startSec: Number(source.startSec || source.start_sec || 0),
     endSec: Number(source.endSec || source.end_sec || 0),
-    segmentTitle: source.segmentTitle || source.segment_title || source.title || '',
+    segmentTitle,
+    title: source.title || segmentTitle,
+    focus: source.focus || '',
+    targetPart: source.targetPart || source.target_part || '',
+    note: source.note || '',
     provider: source.provider || '',
     assetId: source.assetId || source.asset_id || '',
     storagePath: source.storagePath || source.storage_path || '',
@@ -78,6 +84,57 @@ export function normalizeVideoSegment(segment) {
     uploadStatus: source.uploadStatus || source.upload_status || '',
     uploadedAt: source.uploadedAt || source.uploaded_at || ''
   }
+}
+
+function hasVideoSegmentPayload(segment) {
+  return Boolean(
+    segment.videoUrl ||
+      segment.assetId ||
+      segment.storagePath ||
+      segment.segmentTitle ||
+      segment.focus ||
+      segment.targetPart ||
+      segment.note ||
+      segment.startSec > 0 ||
+      segment.endSec > 0
+  )
+}
+
+export function normalizeVideoClips(recordOrClips) {
+  const source = recordOrClips || {}
+  const rawClips = Array.isArray(recordOrClips)
+    ? recordOrClips
+    : Array.isArray(source.videoClips)
+      ? source.videoClips
+      : Array.isArray(source.video_clips)
+        ? source.video_clips
+        : []
+
+  const clips = rawClips
+    .map((clip, index) => {
+      const normalized = normalizeVideoSegment(clip)
+      return {
+        ...normalized,
+        clipId: normalized.clipId || `clip-${index + 1}`
+      }
+    })
+    .filter((clip) => hasVideoSegmentPayload(clip))
+
+  if (clips.length || Array.isArray(recordOrClips)) {
+    return clips
+  }
+
+  const legacyClip = normalizeVideoSegment(source.videoSegment || source.video || {})
+  if (!hasVideoSegmentPayload(legacyClip)) {
+    return []
+  }
+
+  return [
+    {
+      ...legacyClip,
+      clipId: legacyClip.clipId || 'clip-1'
+    }
+  ]
 }
 
 export function createWordDraft(overrides = {}) {
@@ -99,6 +156,7 @@ export function createWordDraft(overrides = {}) {
     videoTitle: overrides.videoTitle || '',
     videoDuration: overrides.videoDuration || '',
     videoSegment: overrides.videoSegment || {},
+    videoClips: overrides.videoClips || [],
     examples: overrides.examples || [],
     siblingIds: overrides.siblingIds || [],
     updatedAt: overrides.updatedAt || ''
@@ -111,6 +169,10 @@ export function normalizeWordRecord(record) {
   const parts = Array.isArray(source.parts) ? source.parts.map((part) => normalizeWordPart(part)) : []
   const examples = Array.isArray(source.examples) ? source.examples.map((item) => normalizeExample(item)) : []
   const siblingIds = Array.isArray(source.siblingIds) ? source.siblingIds.filter((id) => id) : []
+  const videoClips = normalizeVideoClips(source)
+  const videoSegment = videoClips.length
+    ? normalizeVideoSegment(videoClips[0])
+    : normalizeVideoSegment(source.videoSegment || source.video || {})
 
   return {
     ...source,
@@ -129,7 +191,8 @@ export function normalizeWordRecord(record) {
     richTextHtml: source.richTextHtml || '',
     videoTitle: source.videoTitle || (source.video && source.video.title) || '',
     videoDuration: source.videoDuration || '',
-    videoSegment: normalizeVideoSegment(source.videoSegment || source.video || {}),
+    videoSegment,
+    videoClips,
     examples,
     siblingIds,
     updatedAt: source.updatedAt || ''
@@ -176,6 +239,17 @@ export function validateWordRecord(record) {
   if (normalized.videoSegment.endSec > 0 && normalized.videoSegment.startSec >= normalized.videoSegment.endSec) {
     errors.push('videoSegment.endSec must be greater than videoSegment.startSec')
   }
+  normalized.videoClips.forEach((clip, index) => {
+    if (Number.isNaN(clip.startSec) || clip.startSec < 0) {
+      errors.push(`videoClips[${index}].startSec must be a non-negative number`)
+    }
+    if (Number.isNaN(clip.endSec) || clip.endSec < 0) {
+      errors.push(`videoClips[${index}].endSec must be a non-negative number`)
+    }
+    if (clip.endSec > 0 && clip.startSec >= clip.endSec) {
+      errors.push(`videoClips[${index}].endSec must be greater than startSec`)
+    }
+  })
 
   return {
     ok: errors.length === 0,

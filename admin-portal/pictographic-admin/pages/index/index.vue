@@ -191,9 +191,8 @@
 							<button class="secondary-button" @click="markVideoStart">设为开始秒</button>
 							<button class="secondary-button" @click="markVideoEnd">设为结束秒</button>
 							<button class="publish-button" @click="previewSelectedSegment">预览当前片段</button>
-							<button class="small-button" @click="commitCurrentVideoClip">{{ currentClipActionText }}</button>
 						</view>
-						<text class="video-preview-tip">先选视频并拖到要展示的位置，设置开始/结束秒，再点击“添加为片段”。同一个词条可以添加多个片段，也可以更换视频后继续添加。</text>
+						<text class="video-preview-tip">先选视频并拖到要展示的位置，设置开始/结束秒；再到下方填写说明并保存为片段。一个词条可以保存多个片段，也可以更换视频来源后继续保存。</text>
 					</view>
 					<view v-if="form.video && form.video.assetId" class="video-asset-box">
 						<text class="video-asset-title">已生成视频资产</text>
@@ -232,16 +231,26 @@
 						<input v-model="form.video.note" placeholder="例：这一段解释 c 像弯曲包住冷气的形象。" />
 					</label>
 				</view>
+				<view class="clip-draft-actions" :class="{ editing: editingClipIndex > -1 }">
+					<view class="clip-draft-copy">
+						<text class="clip-draft-title">{{ clipDraftTitle }}</text>
+						<text class="clip-draft-note">{{ clipDraftHint }}</text>
+					</view>
+					<view class="clip-draft-buttons">
+						<button v-if="editingClipIndex > -1" class="secondary-button" @click="cancelVideoClipEditing">取消编辑</button>
+						<button class="small-button" @click="commitCurrentVideoClip">{{ currentClipActionText }}</button>
+					</view>
+				</view>
 				<view class="clip-list-card">
 					<view class="clip-list-head">
 						<view>
 							<text class="clip-list-title">已关联视频片段</text>
 							<text class="clip-list-note">用户会按这里的顺序观看片段；如果想看完整视频，后续再接付费完整播放。</text>
 						</view>
-						<button class="secondary-button" @click="commitCurrentVideoClip">{{ currentClipActionText }}</button>
+						<text class="clip-list-count">{{ videoClipCount }} 段</text>
 					</view>
 					<view v-if="videoClipCount" class="clip-list">
-						<view class="clip-item" v-for="(clip, index) in form.videoClips" :key="clip.clipId || index">
+						<view class="clip-item" :class="{ editing: editingClipIndex === index }" v-for="(clip, index) in form.videoClips" :key="clip.clipId || index">
 							<view class="clip-index">{{ index + 1 }}</view>
 							<view class="clip-main">
 								<text class="clip-title">{{ getClipDisplayTitle(clip) }}</text>
@@ -253,7 +262,7 @@
 								<text class="clip-meta">{{ clip.fileName || clip.url || '手动链接' }} · {{ formatClipTimeRange(clip) }}</text>
 							</view>
 							<view class="clip-buttons">
-								<button class="clip-mini-button" @click="loadVideoClipForEditing(index)">载入</button>
+								<button class="clip-mini-button" @click="loadVideoClipForEditing(index)">编辑</button>
 								<button class="clip-mini-button" @click="previewVideoClip(clip)">预览</button>
 								<button class="clip-mini-button" :disabled="index === 0" @click="moveVideoClip(index, -1)">上移</button>
 								<button class="clip-mini-button" :disabled="index === videoClipCount - 1" @click="moveVideoClip(index, 1)">下移</button>
@@ -262,7 +271,21 @@
 						</view>
 					</view>
 					<view v-else class="clip-empty">
-						还没有关联片段。先选择视频、设置开始秒和结束秒，再点击“添加当前片段”。
+						还没有关联片段。先选择视频、设置开始秒和结束秒，再点击“保存为片段”。
+					</view>
+					<view class="miniapp-sync-card final-sync-card">
+						<view class="miniapp-sync-copy">
+							<text class="miniapp-sync-title">最后一步：同步到小程序本地预览</text>
+							<text class="miniapp-sync-note">
+								{{ bridgeSync.message }}。请先把当前草稿保存为片段；再运行 npm run dev:preview-bridge，并同步到用户端详情页。
+							</text>
+						</view>
+						<button class="miniapp-sync-button" :disabled="bridgeSync.busy" @click="syncCurrentToMiniappPreview">
+							{{ bridgeSync.busy ? '同步中...' : '同步到小程序预览' }}
+						</button>
+						<button class="miniapp-sync-button secondary" :disabled="bridgeSync.busy" @click="syncAllToMiniappPreview">
+							同步全部词条
+						</button>
 					</view>
 				</view>
 
@@ -401,6 +424,8 @@ const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 const VIDEO_MAX_SIZE_MB = 200
 const VIDEO_MAX_SIZE_BYTES = VIDEO_MAX_SIZE_MB * 1024 * 1024
 const VIDEO_UPLOAD_PROVIDER = 'local-upload-rehearsal'
+const BRIDGE_RUNTIME_ASSET_MAX_MB = 80
+const BRIDGE_RUNTIME_ASSET_MAX_BYTES = BRIDGE_RUNTIME_ASSET_MAX_MB * 1024 * 1024
 
 const seedWords = [{
 	id: 'study',
@@ -502,6 +527,11 @@ export default {
 				status: '还未开始连续预览。点击时间轴片段可单段预览，点击“连续预览”可按顺序播放。'
 			},
 			saveState: '未保存',
+			bridgeSync: {
+				busy: false,
+				port: 8787,
+				message: '本地预览桥未同步'
+			},
 			statusOptions: [
 				{ label: '草稿', value: 'draft' },
 				{ label: '已发布', value: 'published' },
@@ -546,7 +576,15 @@ export default {
 			return Array.isArray(this.form.videoClips) ? this.form.videoClips.length : 0
 		},
 		currentClipActionText() {
-			return this.editingClipIndex > -1 ? '更新当前片段' : '添加为片段'
+			return this.editingClipIndex > -1 ? '保存片段修改' : '保存为片段'
+		},
+		clipDraftTitle() {
+			return this.editingClipIndex > -1 ? `正在编辑第 ${this.editingClipIndex + 1} 段` : '当前片段草稿'
+		},
+		clipDraftHint() {
+			return this.editingClipIndex > -1
+				? '修改标题、焦点、节点、时间或说明后，点击“保存片段修改”。不想改了可以取消编辑。'
+				: '先选视频、设开始/结束秒、填好说明，再点击“保存为片段”。保存后的片段会进入下方清单。'
 		},
 		videoUploadStatusText() {
 			const statusMap = {
@@ -795,7 +833,7 @@ export default {
 				}
 			})
 		},
-		validateCurrent() {
+		validateCurrent(options = {}) {
 			if (!String(this.form.id || '').trim()) {
 				uni.showToast({ title: '请先填写单词 ID', icon: 'none' })
 				return false
@@ -804,7 +842,7 @@ export default {
 				uni.showToast({ title: '请先填写单词', icon: 'none' })
 				return false
 			}
-			if (!this.flushEditingVideoClip()) return false
+			if (!options.skipVideoClipFlush && !this.flushEditingVideoClip()) return false
 			const id = String(this.form.id).trim()
 			const word = String(this.form.word).trim()
 			if (!this.startsWithEnglish(id) || !this.startsWithEnglish(word)) {
@@ -1003,21 +1041,37 @@ export default {
 		commitCurrentVideoClip() {
 			this.ensureVideoClipsArray()
 			const existingClip = this.editingClipIndex > -1 ? this.form.videoClips[this.editingClipIndex] : null
+			let savedIndex = this.editingClipIndex
 			const clip = this.buildCurrentVideoClip(existingClip)
-			if (!clip) return
+			if (!clip) return false
 			if (existingClip) {
 				this.form.videoClips.splice(this.editingClipIndex, 1, clip)
 				this.saveState = `已更新第 ${this.editingClipIndex + 1} 段讲解片段`
 				uni.showToast({ title: '已更新片段', icon: 'success' })
 			} else {
 				this.form.videoClips.push(clip)
+				savedIndex = this.form.videoClips.length - 1
 				this.saveState = `已添加第 ${this.form.videoClips.length} 段讲解片段`
 				uni.showToast({ title: '已添加片段', icon: 'success' })
 			}
 			if (this.form.videoClips.length === 1 || this.editingClipIndex === 0) {
 				this.syncPrimaryVideoFromClips(this.form)
 			}
+			if (this.form.videoClips[savedIndex]) {
+				this.form.video = Object.assign({}, this.form.video, this.form.videoClips[savedIndex])
+			}
 			this.editingClipIndex = -1
+			return true
+		},
+		cancelVideoClipEditing() {
+			if (this.editingClipIndex < 0) return
+			const index = this.editingClipIndex
+			this.editingClipIndex = -1
+			this.ensureVideoClipsArray()
+			if (this.form.videoClips[index]) {
+				this.form.video = Object.assign({}, this.form.video, this.form.videoClips[index])
+			}
+			this.saveState = `已取消编辑第 ${index + 1} 段，片段清单未改动`
 		},
 		flushEditingVideoClip() {
 			if (this.editingClipIndex < 0) return true
@@ -2170,6 +2224,241 @@ export default {
 			delete next._providedFields
 			return next
 		},
+		buildMiniappPreviewWord(sourceWord) {
+			const source = this.stripRuntimeVideoFields(this.normalizeWord(sourceWord || this.form))
+			const parts = Array.isArray(source.parts) ? source.parts.map((part) => ({
+				...part,
+				text: part.text || part.label || '',
+				meaning: part.meaning || part.title || '',
+				targetId: part.targetId || ''
+			})) : []
+			return {
+				...source,
+				cardType: source.cardType || this.entryTypeText(source),
+				level: source.level || this.entryTypeText(source),
+				parts,
+				tip: source.tip || source.explanation || '',
+				pictograph: source.pictograph || source.explanation || '',
+				videoTitle: source.videoTitle || (source.video && source.video.title) || '',
+				videoDuration: source.videoDuration || ''
+			}
+		},
+		async buildRuntimeVideoAssets(sourceWord, warnings) {
+			const source = sourceWord || this.form
+			const clips = Array.isArray(source.videoClips) ? source.videoClips : []
+			const assets = []
+			for (let index = 0; index < clips.length; index += 1) {
+				const clip = clips[index]
+				const previewUrl = this.getRuntimePreviewUrlForClip(source, clip)
+				if (!/^(blob:|data:)/i.test(previewUrl)) {
+					if (this.hasMockCloudVideo(clip) && Array.isArray(warnings)) {
+						warnings.push(`${source.word || source.id || '词条'} 第 ${index + 1} 段只有 mock-cloud 占位地址；请重新选择本地视频后再同步，或上线后接入云存储 HTTPS 地址`)
+					}
+					continue
+				}
+				const clipSize = Number(clip && clip.size ? clip.size : 0)
+				if (clipSize > BRIDGE_RUNTIME_ASSET_MAX_BYTES) {
+					if (Array.isArray(warnings)) {
+						warnings.push(`${source.word || source.id || '词条'} 第 ${index + 1} 段超过 ${BRIDGE_RUNTIME_ASSET_MAX_MB}MB，只同步片段信息`)
+					}
+					continue
+				}
+				const dataUrl = await this.readPreviewUrlAsDataUrl(previewUrl)
+				if (!dataUrl) {
+					if (Array.isArray(warnings)) {
+						warnings.push(`${source.word || source.id || '词条'} 第 ${index + 1} 段本地视频读取失败；请重新选择视频文件后再同步`)
+					}
+					continue
+				}
+				assets.push({
+					clipId: clip.clipId || `clip-${index + 1}`,
+					fileName: clip.fileName || `${source.id || source.word || 'word'}-${index + 1}.mp4`,
+					dataUrl
+				})
+			}
+			return assets
+		},
+		readPreviewUrlAsDataUrl(previewUrl) {
+			if (/^data:/i.test(previewUrl)) {
+				return Promise.resolve(previewUrl)
+			}
+			if (!/^blob:/i.test(previewUrl) || typeof fetch !== 'function' || typeof FileReader === 'undefined') {
+				return Promise.resolve('')
+			}
+			return fetch(previewUrl)
+				.then((response) => response.blob())
+				.then((blob) => new Promise((resolve) => {
+					const reader = new FileReader()
+					reader.onload = () => resolve(String(reader.result || ''))
+					reader.onerror = () => resolve('')
+					reader.readAsDataURL(blob)
+				}))
+				.catch(() => '')
+		},
+		hasMockCloudVideo(clip) {
+			const url = String(clip && clip.url ? clip.url : '').trim()
+			return url.indexOf('mock-cloud://') === 0
+		},
+		getRuntimePreviewUrlForClip(source, clip) {
+			const directUrl = String(clip && clip.localPreviewUrl ? clip.localPreviewUrl : '').trim()
+			if (/^(blob:|data:)/i.test(directUrl)) return directUrl
+
+			const sourceId = String(source && source.id ? source.id : '').trim()
+			const currentId = String(this.form && this.form.id ? this.form.id : '').trim()
+			const currentPreviewUrl = String(this.videoUpload && this.videoUpload.previewUrl ? this.videoUpload.previewUrl : '').trim()
+			if (!sourceId || sourceId !== currentId || !/^(blob:|data:)/i.test(currentPreviewUrl)) return ''
+
+			const uploadFileName = String(this.videoUpload && this.videoUpload.fileName ? this.videoUpload.fileName : '').trim()
+			const uploadSizeLabel = String(this.videoUpload && this.videoUpload.fileSizeLabel ? this.videoUpload.fileSizeLabel : '').trim()
+			const clipFileName = String(clip && clip.fileName ? clip.fileName : '').trim()
+			const clipSize = Number(clip && clip.size ? clip.size : 0)
+			const currentVideo = source && source.video ? source.video : {}
+			const sameFileName = uploadFileName && clipFileName && uploadFileName === clipFileName
+			const sameAsset = clip && currentVideo && clip.assetId && currentVideo.assetId && clip.assetId === currentVideo.assetId
+			const sameStorage = clip && currentVideo && clip.storagePath && currentVideo.storagePath && clip.storagePath === currentVideo.storagePath
+			const sameSize = clipSize > 0 && uploadSizeLabel && this.formatFileSize(clipSize) === uploadSizeLabel
+
+			return sameFileName || sameAsset || sameStorage || sameSize ? currentPreviewUrl : ''
+		},
+		hasCurrentVideoDraftPayload() {
+			const video = this.form && this.form.video ? this.form.video : {}
+			if (this.hasVideoClipPayload(video)) return true
+			if (this.videoUpload && this.videoUpload.previewUrl) return true
+			return ['title', 'focus', 'targetPart', 'note', 'startSec', 'endSec'].some((field) => {
+				const value = video[field]
+				return value !== undefined && value !== null && String(value).trim() !== ''
+			})
+		},
+		getComparableVideoClipKey(clip) {
+			const source = clip || {}
+			const fields = ['url', 'localPreviewUrl', 'title', 'focus', 'targetPart', 'note', 'startSec', 'endSec', 'provider', 'assetId', 'storagePath', 'fileName', 'mimeType', 'size']
+			return fields.map((field) => {
+				const value = source[field]
+				return value === undefined || value === null ? '' : String(value).trim()
+			}).join('|')
+		},
+		isCurrentVideoDraftAlreadySaved() {
+			if (!this.hasCurrentVideoDraftPayload()) return true
+			const clips = Array.isArray(this.form.videoClips) ? this.form.videoClips : []
+			const currentKey = this.getComparableVideoClipKey(this.form.video || {})
+			return clips.some((clip) => this.getComparableVideoClipKey(clip) === currentKey)
+		},
+		confirmUnsavedVideoDraftBeforeSync() {
+			if (this.isCurrentVideoDraftAlreadySaved()) return Promise.resolve(true)
+			const isEditing = this.editingClipIndex > -1
+			return new Promise((resolve) => {
+				uni.showModal({
+					title: isEditing ? '当前片段修改未保存' : '当前片段还没保存',
+					content: isEditing
+						? '你正在编辑一个已关联片段。建议先保存片段修改，再同步到小程序预览。'
+						: '你已经填写了当前片段信息，但还没有保存到下方片段清单。建议先保存为片段，再同步到小程序预览。',
+					confirmText: isEditing ? '保存修改' : '保存片段',
+					cancelText: '暂不同步',
+					success: (res) => {
+						if (!res || !res.confirm) {
+							resolve(false)
+							return
+						}
+						resolve(this.commitCurrentVideoClip())
+					},
+					fail: () => resolve(false)
+				})
+			})
+		},
+		async syncCurrentToMiniappPreview() {
+			if (this.bridgeSync.busy) return
+			if (!this.validateCurrent({ skipVideoClipFlush: true })) return
+			if (!(await this.confirmUnsavedVideoDraftBeforeSync())) return
+			this.persistFormToList()
+
+			this.bridgeSync.busy = true
+			this.bridgeSync.message = '正在同步到小程序预览桥...'
+			this.saveState = '正在同步到小程序预览桥...'
+
+			try {
+				const warnings = []
+				const result = await this.syncWordToMiniappPreview(this.form, warnings)
+				const word = this.buildMiniappPreviewWord(this.form)
+				const warningText = warnings.length ? `；${warnings[0]}` : ''
+
+				this.bridgeSync.message = `已同步 ${result.word || word.word}，${result.clipCount || 0} 段视频${warningText}`
+				this.saveState = warnings.length
+					? '已同步到小程序预览，但部分视频未写入本地桥'
+					: '已同步到小程序预览，HBuilderX 保存后微信开发者工具会刷新'
+				uni.showToast({ title: '已同步到小程序预览', icon: 'success' })
+			} catch (error) {
+				const message = error && error.message ? error.message : '同步失败'
+				this.bridgeSync.message = message
+				this.saveState = '同步失败：请先运行 npm run dev:preview-bridge'
+				uni.showModal({
+					title: '本地预览桥未连接',
+					content: '请先在项目根目录运行 npm run dev:preview-bridge，然后再点击同步到小程序预览。',
+					showCancel: false
+				})
+			} finally {
+				this.bridgeSync.busy = false
+			}
+		},
+		async syncAllToMiniappPreview() {
+			if (this.bridgeSync.busy) return
+			if (!this.validateCurrent({ skipVideoClipFlush: true })) return
+			if (!(await this.confirmUnsavedVideoDraftBeforeSync())) return
+			this.persistFormToList()
+			if (!this.validateAllWords()) return
+
+			const sourceWords = this.words.filter((item) => item && item.id && item.word)
+			if (!sourceWords.length) {
+				uni.showToast({ title: '暂无可同步词条', icon: 'none' })
+				return
+			}
+
+			this.bridgeSync.busy = true
+			this.bridgeSync.message = `正在同步 ${sourceWords.length} 个词条到小程序预览...`
+			this.saveState = '正在批量同步到小程序预览桥...'
+
+			try {
+				let clipCount = 0
+				const warnings = []
+				for (let index = 0; index < sourceWords.length; index += 1) {
+					const item = sourceWords[index]
+					this.bridgeSync.message = `正在同步 ${index + 1}/${sourceWords.length}：${item.word}`
+					const result = await this.syncWordToMiniappPreview(item, warnings)
+					clipCount += Number(result.clipCount || 0)
+				}
+
+				const warningText = warnings.length ? `；${warnings.length} 个视频片段未写入本地桥` : ''
+				this.bridgeSync.message = `已同步 ${sourceWords.length} 个词条，${clipCount} 段视频${warningText}`
+				this.saveState = warnings.length
+					? '已批量同步到小程序预览，但部分视频只同步了片段信息'
+					: '已批量同步到小程序预览，HBuilderX 保存后微信开发者工具会刷新'
+				uni.showToast({ title: warnings.length ? '已同步，部分视频待重选' : '已同步全部词条', icon: 'success' })
+			} catch (error) {
+				const message = error && error.message ? error.message : '批量同步失败'
+				this.bridgeSync.message = message
+				this.saveState = '批量同步失败：请确认本地预览桥已运行'
+				uni.showModal({
+					title: '批量同步失败',
+					content: '请先在项目根目录运行 npm run dev:preview-bridge，然后重新点击“同步全部到小程序预览”。',
+					showCancel: false
+				})
+			} finally {
+				this.bridgeSync.busy = false
+			}
+		},
+		async syncWordToMiniappPreview(sourceWord, warnings) {
+			const word = this.buildMiniappPreviewWord(sourceWord)
+			const runtimeAssets = await this.buildRuntimeVideoAssets(sourceWord, warnings)
+			const response = await fetch(`http://127.0.0.1:${this.bridgeSync.port}/sync-word`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ word, runtimeAssets })
+			})
+			const result = await response.json()
+			if (!response.ok || !result.ok) {
+				throw new Error(result.message || 'Preview bridge sync failed')
+			}
+			return result
+		},
 		copyJson() {
 			uni.setClipboardData({
 				data: this.currentJson,
@@ -2842,6 +3131,121 @@ button::after {
 	margin-top: 10px;
 }
 
+.miniapp-sync-card {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	margin-top: 14px;
+	padding: 14px;
+	border: 1px solid #bfe3f7;
+	border-radius: 18px;
+	background: linear-gradient(135deg, #f8fcff 0%, #e9f7ff 100%);
+}
+
+.miniapp-sync-copy {
+	min-width: 0;
+}
+
+.miniapp-sync-title,
+.miniapp-sync-note {
+	display: block;
+}
+
+.miniapp-sync-title {
+	color: #0e3a5c;
+	font-size: 14px;
+	font-weight: 800;
+}
+
+.miniapp-sync-note {
+	margin-top: 4px;
+	color: #66869b;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.miniapp-sync-button {
+	flex-shrink: 0;
+	padding: 0 20px;
+	line-height: 38px;
+	border-radius: 999px;
+	background: #0e3a5c;
+	color: #fff;
+	font-size: 13px;
+	font-weight: 800;
+}
+
+.miniapp-sync-button + .miniapp-sync-button {
+	margin-left: 10px;
+}
+
+.miniapp-sync-button.secondary {
+	background: #e8f6ff;
+	color: #0e3a5c;
+}
+
+.miniapp-sync-button::after {
+	border: 0;
+}
+
+.miniapp-sync-button[disabled] {
+	opacity: 0.62;
+}
+
+.final-sync-card {
+	margin-top: 14px;
+	border-color: #0e3a5c;
+	background: linear-gradient(135deg, #eef9ff 0%, #dff3ff 100%);
+}
+
+.clip-draft-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 14px;
+	margin: -4px 0 16px;
+	padding: 14px 16px;
+	border: 1px solid #cde6f5;
+	border-radius: 18px;
+	background: #f8fcff;
+}
+
+.clip-draft-actions.editing {
+	border-color: #fe8500;
+	background: #fff9ef;
+}
+
+.clip-draft-copy {
+	min-width: 0;
+}
+
+.clip-draft-title,
+.clip-draft-note {
+	display: block;
+}
+
+.clip-draft-title {
+	color: #0e3a5c;
+	font-size: 14px;
+	font-weight: 900;
+}
+
+.clip-draft-note {
+	margin-top: 4px;
+	color: #66869b;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.clip-draft-buttons {
+	display: flex;
+	flex-shrink: 0;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
 .clip-list-card {
 	margin: 0 0 18px;
 	padding: 16px;
@@ -2876,6 +3280,16 @@ button::after {
 	line-height: 1.5;
 }
 
+.clip-list-count {
+	flex-shrink: 0;
+	padding: 6px 12px;
+	border-radius: 999px;
+	background: #eaf7ff;
+	color: #0e3a5c;
+	font-size: 12px;
+	font-weight: 900;
+}
+
 .clip-list {
 	display: flex;
 	flex-direction: column;
@@ -2891,6 +3305,11 @@ button::after {
 	border: 1px solid #e0edf5;
 	border-radius: 16px;
 	background: #f8fcff;
+}
+
+.clip-item.editing {
+	border-color: #fe8500;
+	background: #fffaf0;
 }
 
 .clip-index {
@@ -3425,6 +3844,7 @@ button.file-button::after {
 	.hero,
 	.panel-head,
 	.section-head,
+	.clip-draft-actions,
 	.clip-list-head,
 	.viewer-preview-head {
 		flex-direction: column;
@@ -3449,12 +3869,31 @@ button.file-button::after {
 		justify-content: flex-start;
 	}
 
+	.clip-draft-buttons {
+		width: 100%;
+		justify-content: flex-start;
+	}
+
 	.editor-actions {
 		justify-content: flex-start;
 	}
 
 	.viewer-preview-actions {
 		justify-content: flex-start;
+	}
+
+	.miniapp-sync-card {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.miniapp-sync-button {
+		width: 100%;
+	}
+
+	.miniapp-sync-button + .miniapp-sync-button {
+		margin-left: 0;
+		margin-top: 10px;
 	}
 
 	.hero-actions {

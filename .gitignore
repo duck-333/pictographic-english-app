@@ -4,6 +4,8 @@ miniapp-uni/unpackage
 miniapp-uni/.hbuilderx
 miniapp-uni/node_modules
 miniapp-uni/word-app1/unpackage
+content-seed/dev-preview-words.json
+content-seed/dev-preview-videos
 admin-portal/pictographic-admin/unpackage
 admin-portal/pictographic-admin/.hbuilderx
 admin-portal/pictographic-admin/node_modules
