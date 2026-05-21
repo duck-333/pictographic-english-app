@@ -1034,6 +1034,7 @@ export default {
 			if (existingClip && existingClip.localPreviewUrl) {
 				clip.localPreviewUrl = existingClip.localPreviewUrl
 			} else if (this.videoUpload && /^(blob:|data:|https?:\/\/)/i.test(String(this.videoUpload.previewUrl || ''))) {
+				// 开发态本地预览地址：blob/data 只在后台当前会话有效，正式上线必须替换为云端 HTTPS 地址。
 				clip.localPreviewUrl = this.videoUpload.previewUrl
 			}
 			return clip
@@ -1460,6 +1461,7 @@ export default {
 
 			this.ensureVideoObject()
 			this.form.video = Object.assign({}, this.form.video, {
+				// mock-cloud 只是上传演练占位符，不是真实云文件地址；正式上线时由云存储 HTTPS 地址替换。
 				url: `mock-cloud://${storagePath}`,
 				provider: VIDEO_UPLOAD_PROVIDER,
 				assetId,
@@ -1759,6 +1761,7 @@ export default {
 			return shortMap[this.getEntryType(item)] || '词'
 		},
 		fillImportExample() {
+			// 示例 URL 只用于演示 JSON 字段格式，正式内容必须替换为真实 HTTPS 或云存储地址。
 			this.importText = JSON.stringify({
 				words: [{
 					id: 'apple',
@@ -2250,6 +2253,7 @@ export default {
 			for (let index = 0; index < clips.length; index += 1) {
 				const clip = clips[index]
 				const previewUrl = this.getRuntimePreviewUrlForClip(source, clip)
+				// 只把后台当前会话中的 blob/data 临时视频同步给本地 bridge；线上不能依赖这种地址。
 				if (!/^(blob:|data:)/i.test(previewUrl)) {
 					if (this.hasMockCloudVideo(clip) && Array.isArray(warnings)) {
 						warnings.push(`${source.word || source.id || '词条'} 第 ${index + 1} 段只有 mock-cloud 占位地址；请重新选择本地视频后再同步，或上线后接入云存储 HTTPS 地址`)
@@ -2448,6 +2452,7 @@ export default {
 		async syncWordToMiniappPreview(sourceWord, warnings) {
 			const word = this.buildMiniappPreviewWord(sourceWord)
 			const runtimeAssets = await this.buildRuntimeVideoAssets(sourceWord, warnings)
+			// 本地 preview bridge 只给电脑端微信开发者工具调试使用；正式上线不能请求 127.0.0.1。
 			const response = await fetch(`http://127.0.0.1:${this.bridgeSync.port}/sync-word`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },

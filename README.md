@@ -24,6 +24,14 @@ admin-portal/pictographic-admin
 content-seed
 ```
 
+这三个入口不要混在一起打开：
+
+- 用户端微信小程序：`miniapp-uni/word-app1`
+- 管理员内容后台：`admin-portal/pictographic-admin`
+- 内容种子数据：`content-seed`
+
+后续 UI 优化优先从 `miniapp-uni/word-app1/pages` 开始；可复用小组件放 `miniapp-uni/word-app1/components`；查词、详情、缓存等数据逻辑放 `miniapp-uni/word-app1/common`。
+
 ## 项目结构
 
 ```text
@@ -61,6 +69,17 @@ pictographic-english-app/
   Prompt.md                        # 需求和目标变化记录
   AGENTS.md                        # Codex 协作规则
 ```
+
+## 哪些是历史 demo 或暂不确定用途
+
+下面这些内容先保留，不要急着删：
+
+- `src/`：早期 React/Vite demo，可作为视觉和交互参考，但不是当前微信小程序主线。
+- `public/`：早期 demo 静态资源，里面可能有历史视频或图片素材。
+- `dist/`：旧构建产物，当前不要手动编辑，也不要拿它当小程序源码。
+- `miniapp-uni/App.vue`、`miniapp-uni/pages.json`、`miniapp-uni/pages/`：外层旧 uni-app 尝试项目，容易和 `miniapp-uni/word-app1` 混淆。
+- `miniapp-uni/word-app1/components/BottomNav.vue`、`EmptyState.vue`：当前看起来不是主路径依赖，但先保留，避免误删后影响后续回滚或对照。
+- `miniapp-uni/word-app1/pages/network`、`pages/word-list`、`pages/classroom`：暂时不是 MVP 入口，但用于兼容微信开发者工具可能缓存到旧页面的情况。
 
 ## 当前主线
 
@@ -118,6 +137,38 @@ admin-portal/pictographic-admin
 3. 作为独立 Web 后台运行和预览。
 
 后台里的视频上传目前是“真实流程演练”：可以选择本地视频文件、校验格式和大小、生成上传进度和视频资产字段，但不会真正把文件传到云端。正式上线时，把演练上传函数替换成云存储/对象存储上传即可。
+
+### 本地 preview bridge 是什么
+
+`preview bridge` 是开发阶段的小桥梁，作用是把后台里刚编辑好的词条和本地视频片段，临时同步给微信开发者工具里的小程序预览。
+
+使用方式是在项目根目录运行：
+
+```text
+npm.cmd run dev:preview-bridge
+```
+
+然后在后台点击“同步到小程序预览”或“同步全部词条”。桥接脚本会把预览数据写入：
+
+```text
+miniapp-uni/word-app1/common/dev-preview-data.js
+content-seed/dev-preview-words.json
+content-seed/dev-preview-videos
+```
+
+它只解决“电脑本机开发时快速看效果”的问题，不是正式后端，也不是云服务器。
+
+### 开发地址警戒线
+
+下面这些地址或协议只能在开发阶段使用，不能用于上线版本：
+
+- `http://127.0.0.1:8787`：只代表你当前电脑上的本地 preview bridge。
+- `http://localhost:...`：只代表本机服务，真机和线上用户访问不到。
+- `blob:`、`data:`：浏览器当前会话里的临时视频预览地址，刷新或关闭后台后可能失效。
+- `mock-cloud://`：后台上传演练生成的占位地址，不是真实云文件。
+- `https://example.com/...`：文档或导入示例里的示例 URL，正式内容必须替换为真实 HTTPS 或云存储地址。
+
+正式上线时，视频地址应来自云存储、对象存储或后端生成的可播放 HTTPS 地址，并配置到微信小程序合法域名里。
 
 ## 交付检查
 
@@ -198,6 +249,8 @@ admin-portal/pictographic-admin
 content-seed
 scripts/validate-content.mjs
 ```
+
+如果只是做用户端 UI，优先从 `miniapp-uni/word-app1/pages/index`、`miniapp-uni/word-app1/pages/word-detail`、`miniapp-uni/word-app1/pages/mine` 开始；不要从外层 `miniapp-uni/pages` 开始。
 
 ## 当前一句话总结
 

@@ -373,6 +373,7 @@ export default {
     hasPlayableVideo() {
       const url = String(this.activeVideoUrl || '')
       const isCloudVideo = /^https:\/\//.test(url)
+      // 本地 preview bridge 仅用于电脑端微信开发者工具调试，正式上线只应使用 HTTPS/云存储地址。
       const isLocalBridgeVideo = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(url)
       return (isCloudVideo || isLocalBridgeVideo) && this.activeClipHasValidRange
     },

@@ -1,9 +1,5 @@
 <script>
-export default {
-	onLaunch() {
-		console.log('Pictographic admin prototype launched')
-	}
-}
+export default {}
 </script>
 
 <style lang="scss">

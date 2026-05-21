@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const rootDir = resolve(__dirname, '..')
 const port = Number(process.env.PICTO_PREVIEW_BRIDGE_PORT || 8787)
+// Development-only bridge: this local server feeds WeChat DevTools previews and must not be used in production.
 const dataJsonPath = join(rootDir, 'content-seed', 'dev-preview-words.json')
 const generatedDataPath = join(rootDir, 'miniapp-uni', 'word-app1', 'common', 'dev-preview-data.js')
 const videoDir = join(rootDir, 'content-seed', 'dev-preview-videos')
@@ -119,6 +120,7 @@ async function saveRuntimeAsset(asset, wordId) {
     fileName,
     mimeType: parts.mimeType,
     size: buffer.length,
+    // 127.0.0.1 is intentionally local-only; production video URLs must come from cloud/object storage over HTTPS.
     url: `http://127.0.0.1:${port}/videos/${encodeURIComponent(fileName)}`,
     storagePath: `content-seed/dev-preview-videos/${fileName}`
   }
