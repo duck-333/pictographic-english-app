@@ -138,6 +138,44 @@
 					</label>
 				</view>
 
+				<view class="section-head audio-section-head">
+					<view>
+						<text class="section-title">发音音频</text>
+						<text class="panel-note">给单词卡片音标旁边的小喇叭使用。当前先做本地上传演练，正式上线后替换成云存储 HTTPS 地址。</text>
+					</view>
+				</view>
+				<view class="audio-upload-card">
+					<view class="video-upload-main">
+						<view id="audio-native-picker-host" class="audio-native-picker-host">
+							<text class="native-picker-loading">正在加载音频选择控件...</text>
+						</view>
+						<view class="video-upload-copy">
+							<text class="video-upload-title">{{ audioUpload.fileName || '还没有选择发音音频' }}</text>
+							<text class="video-upload-note">{{ audioUpload.message }}</text>
+						</view>
+					</view>
+					<view class="upload-progress-track">
+						<view class="upload-progress-bar audio" :style="{ width: audioUpload.progress + '%' }"></view>
+					</view>
+					<view class="video-upload-meta">
+						<text>状态：{{ audioUploadStatusText }}</text>
+						<text>大小：{{ audioUpload.fileSizeLabel || '未选择' }}</text>
+						<text>类型：{{ audioUpload.mimeType || '未知' }}</text>
+					</view>
+					<audio
+						v-if="audioPreviewUrl"
+						class="admin-audio-preview"
+						:src="audioPreviewUrl"
+						controls
+					></audio>
+					<view v-if="form.pronunciationAudio && form.pronunciationAudio.assetId" class="video-asset-box">
+						<text class="video-asset-title">已生成发音音频资产</text>
+						<text class="video-asset-line">Asset ID：{{ form.pronunciationAudio.assetId }}</text>
+						<text class="video-asset-line">未来存储路径：{{ form.pronunciationAudio.storagePath }}</text>
+						<button class="secondary-button clear-video-button" @click="clearPronunciationAudioAsset">清除发音音频</button>
+					</view>
+				</view>
+
 				<label class="field">
 					<text>中文释义</text>
 					<input v-model="form.meaning" placeholder="学习；研究" />
@@ -328,6 +366,10 @@
 						<view class="preview-title-row">
 							<text class="preview-word">{{ form.word || 'new word' }}</text>
 							<text class="preview-phonetic">{{ form.phonetic }}</text>
+							<view v-if="hasPronunciationAudioForPreview" class="preview-audio-pill">
+								<view class="preview-speaker-dot"></view>
+								<text>发音</text>
+							</view>
 						</view>
 						<text class="preview-meaning">{{ form.meaning || '这里显示中文释义' }}</text>
 						<view class="preview-parts">
@@ -424,6 +466,9 @@ const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 const VIDEO_MAX_SIZE_MB = 200
 const VIDEO_MAX_SIZE_BYTES = VIDEO_MAX_SIZE_MB * 1024 * 1024
 const VIDEO_UPLOAD_PROVIDER = 'local-upload-rehearsal'
+const AUDIO_MAX_SIZE_MB = 10
+const AUDIO_MAX_SIZE_BYTES = AUDIO_MAX_SIZE_MB * 1024 * 1024
+const AUDIO_UPLOAD_PROVIDER = 'local-audio-upload-rehearsal'
 const BRIDGE_RUNTIME_ASSET_MAX_MB = 80
 const BRIDGE_RUNTIME_ASSET_MAX_BYTES = BRIDGE_RUNTIME_ASSET_MAX_MB * 1024 * 1024
 
@@ -511,10 +556,23 @@ export default {
 				message: '选择一个本地视频文件，系统会按未来上传流程做格式、大小和元数据校验。',
 				previewUrl: ''
 			},
+			audioUpload: {
+				status: 'idle',
+				progress: 0,
+				fileName: '',
+				fileSizeLabel: '',
+				mimeType: '',
+				message: '选择一个 mp3、wav、m4a、aac、ogg 或 webm 音频文件，保存后小程序详情页才显示小喇叭。',
+				previewUrl: ''
+			},
 			videoUploadTimer: null,
 			videoUploadJob: null,
 			videoFileTriggerEl: null,
 			runtimeVideoInputEl: null,
+			audioUploadTimer: null,
+			audioUploadJob: null,
+			audioFileTriggerEl: null,
+			runtimeAudioInputEl: null,
 			editingClipIndex: -1,
 			videoPreview: {
 				currentSec: 0,
@@ -596,6 +654,27 @@ export default {
 			}
 			return statusMap[this.videoUpload.status] || '待选择'
 		},
+		audioUploadStatusText() {
+			const statusMap = {
+				idle: '待选择',
+				ready: '已选择，待上传',
+				uploading: '上传演练中',
+				done: '上传演练完成',
+				error: '需要处理'
+			}
+			return statusMap[this.audioUpload.status] || '待选择'
+		},
+		audioPreviewUrl() {
+			const uploadUrl = String(this.audioUpload && this.audioUpload.previewUrl ? this.audioUpload.previewUrl : '').trim()
+			if (this.isPlayableAdminAudioUrl(uploadUrl)) return uploadUrl
+			const audio = this.form && this.form.pronunciationAudio ? this.form.pronunciationAudio : {}
+			const previewUrl = String(audio.localPreviewUrl || audio.url || audio.audioUrl || '').trim()
+			return this.isPlayableAdminAudioUrl(previewUrl) ? previewUrl : ''
+		},
+		hasPronunciationAudioForPreview() {
+			const audio = this.form && this.form.pronunciationAudio ? this.form.pronunciationAudio : {}
+			return this.isPlayableAdminAudioUrl(audio.url || audio.audioUrl || audio.localPreviewUrl || this.audioPreviewUrl)
+		},
 		formattedVideoCurrentTime() {
 			return this.formatVideoClock(this.videoPreview.currentSec)
 		},
@@ -640,11 +719,15 @@ export default {
 	},
 	mounted() {
 		this.installNativeVideoButtonHandler()
+		this.installNativeAudioButtonHandler()
 	},
 	beforeDestroy() {
 		this.releaseVideoPreview()
+		this.releaseAudioPreview(null, { force: true })
 		this.removeNativeVideoButtonHandler()
+		this.removeNativeAudioButtonHandler()
 		this.cancelVideoUploadTimer()
+		this.cancelAudioUploadTimer()
 	},
 	methods: {
 		loadDraft() {
@@ -1291,6 +1374,7 @@ export default {
 						: '当前词条只有视频地址，还没有上传资产元数据。',
 					previewUrl: ''
 				}
+				this.syncAudioUploadStateFromForm()
 				return
 			}
 			this.videoUpload = {
@@ -1303,6 +1387,226 @@ export default {
 				previewUrl: ''
 			}
 			this.resetVideoPreviewState()
+			this.syncAudioUploadStateFromForm()
+		},
+		syncAudioUploadStateFromForm() {
+			this.cancelAudioUploadTimer()
+			const audio = this.form && this.form.pronunciationAudio ? this.form.pronunciationAudio : {}
+			const currentPreviewUrl = this.audioUpload && this.audioUpload.previewUrl ? this.audioUpload.previewUrl : ''
+			if (audio.assetId || audio.url || audio.audioUrl) {
+				const previewUrl = this.isPlayableAdminAudioUrl(audio.localPreviewUrl || audio.url || audio.audioUrl)
+					? String(audio.localPreviewUrl || audio.url || audio.audioUrl).trim()
+					: ''
+				if (currentPreviewUrl && currentPreviewUrl !== previewUrl) {
+					this.releaseAudioPreview(currentPreviewUrl)
+				}
+				this.audioUpload = {
+					status: audio.assetId ? 'done' : 'ready',
+					progress: audio.assetId ? 100 : 0,
+					fileName: audio.fileName || '',
+					fileSizeLabel: audio.size ? this.formatFileSize(audio.size) : '',
+					mimeType: audio.mimeType || '',
+					message: audio.assetId
+						? '当前词条已经有发音音频资产信息。'
+						: '当前词条只有音频地址，还没有上传资产元数据。',
+					previewUrl
+				}
+				return
+			}
+			if (currentPreviewUrl) {
+				this.releaseAudioPreview(currentPreviewUrl)
+			}
+			this.audioUpload = {
+				status: 'idle',
+				progress: 0,
+				fileName: '',
+				fileSizeLabel: '',
+				mimeType: '',
+				message: '选择一个 mp3、wav、m4a、aac、ogg 或 webm 音频文件，保存后小程序详情页才显示小喇叭。',
+				previewUrl: ''
+			}
+		},
+		handleNativeAudioFileChange(event) {
+			this.handleAudioFileChange(event)
+			if (event && event.target) {
+				event.target.value = ''
+			}
+		},
+		installNativeAudioButtonHandler() {
+			if (typeof document === 'undefined') return
+			this.$nextTick(() => {
+				const trigger = document.getElementById('audio-native-picker-host')
+				if (!trigger) return
+				if (trigger === this.audioFileTriggerEl && this.runtimeAudioInputEl) return
+				this.removeNativeAudioButtonHandler()
+				trigger.innerHTML = ''
+				const input = document.createElement('input')
+				input.type = 'file'
+				input.accept = 'audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/mp4,audio/aac,audio/ogg,audio/webm,audio/*'
+				input.multiple = false
+				input.className = 'runtime-audio-file-input'
+				input.setAttribute('aria-label', '选择发音音频文件')
+				input.style.display = 'block'
+				input.style.width = '260px'
+				input.style.maxWidth = '100%'
+				input.style.minHeight = '44px'
+				input.style.padding = '8px 12px'
+				input.style.border = '2px solid #0e3a5c'
+				input.style.borderRadius = '999px'
+				input.style.background = '#ffffff'
+				input.style.color = '#0e3a5c'
+				input.style.cursor = 'pointer'
+				input.style.margin = '0'
+				input.style.fontWeight = '800'
+				input.addEventListener('change', this.handleNativeAudioFileChange)
+				trigger.appendChild(input)
+				this.audioFileTriggerEl = trigger
+				this.runtimeAudioInputEl = input
+			})
+		},
+		removeNativeAudioButtonHandler() {
+			if (this.runtimeAudioInputEl) {
+				this.runtimeAudioInputEl.removeEventListener('change', this.handleNativeAudioFileChange)
+				if (this.runtimeAudioInputEl.parentNode) {
+					this.runtimeAudioInputEl.parentNode.removeChild(this.runtimeAudioInputEl)
+				}
+			}
+			this.audioFileTriggerEl = null
+			this.runtimeAudioInputEl = null
+		},
+		handleAudioFileChange(eventOrFile) {
+			const file = eventOrFile && eventOrFile.name
+				? eventOrFile
+				: eventOrFile && eventOrFile.target && eventOrFile.target.files
+					? eventOrFile.target.files[0]
+					: null
+			if (!file) return
+
+			this.cancelAudioUploadTimer()
+			const validation = this.validateAudioFile(file)
+			if (!validation.ok) {
+				this.audioUpload = {
+					status: 'error',
+					progress: 0,
+					fileName: file.name || '',
+					fileSizeLabel: this.formatFileSize(file.size || 0),
+					mimeType: file.type || '未知',
+					message: validation.message,
+					previewUrl: ''
+				}
+				uni.showToast({ title: validation.message, icon: 'none' })
+				return
+			}
+
+			this.releaseAudioPreview(null, { force: true })
+			const previewUrl = URL.createObjectURL(file)
+			this.ensurePronunciationAudioObject()
+			this.form.pronunciationAudio = Object.assign({}, this.emptyPronunciationAudioObject(), {
+				fileName: file.name || '',
+				mimeType: file.type || '',
+				size: file.size || '',
+				localPreviewUrl: previewUrl
+			})
+			this.form.audioUrl = ''
+			this.audioUpload = {
+				status: 'ready',
+				progress: 0,
+				fileName: file.name,
+				fileSizeLabel: this.formatFileSize(file.size),
+				mimeType: file.type || 'audio/*',
+				message: '文件已选择，正在模拟上传到未来云存储。',
+				previewUrl
+			}
+			this.simulateAudioUpload(file)
+		},
+		validateAudioFile(file) {
+			const fileName = file && file.name ? file.name.toLowerCase() : ''
+			const mimeType = file && file.type ? file.type : ''
+			const allowedExtension = /\.(mp3|wav|m4a|aac|ogg|oga|webm)$/i.test(fileName)
+			const allowedMime = mimeType.indexOf('audio/') === 0 || mimeType === 'video/webm' || mimeType === 'video/mp4'
+
+			if (!allowedExtension && !allowedMime) {
+				return { ok: false, message: '请选择 mp3、wav、m4a、aac、ogg 或 webm 音频文件' }
+			}
+			if (file.size > AUDIO_MAX_SIZE_BYTES) {
+				return { ok: false, message: `发音音频不能超过 ${AUDIO_MAX_SIZE_MB}MB` }
+			}
+			return { ok: true }
+		},
+		simulateAudioUpload(file) {
+			this.cancelAudioUploadTimer()
+			const uploadJob = {
+				formRef: this.form,
+				startedAt: Date.now()
+			}
+			this.audioUploadJob = uploadJob
+
+			this.audioUpload.status = 'uploading'
+			this.audioUpload.progress = 10
+			this.audioUpload.message = '上传演练中：正在生成音频资产 ID、存储路径和播放地址。'
+
+			this.audioUploadTimer = setInterval(() => {
+				if (this.audioUploadJob !== uploadJob) return
+				const nextProgress = Math.min(this.audioUpload.progress + 30, 100)
+				this.audioUpload.progress = nextProgress
+
+				if (nextProgress < 100) return
+				clearInterval(this.audioUploadTimer)
+				this.audioUploadTimer = null
+				this.audioUploadJob = null
+				this.completeAudioUpload(file, uploadJob)
+			}, 180)
+		},
+		cancelAudioUploadTimer() {
+			if (this.audioUploadTimer) {
+				clearInterval(this.audioUploadTimer)
+				this.audioUploadTimer = null
+			}
+			this.audioUploadJob = null
+		},
+		completeAudioUpload(file, uploadJob) {
+			if (uploadJob && uploadJob.formRef !== this.form) return
+			const safeName = this.toSafeAudioFileName(file.name || 'pronunciation.mp3')
+			const assetId = `${this.form.id || this.form.word || 'word'}-audio-${Date.now()}`
+			const storagePath = `audios/pronunciation/${this.form.id || 'draft'}/${assetId}-${safeName}`
+			const mockUrl = `mock-cloud://${storagePath}`
+
+			this.ensurePronunciationAudioObject()
+			this.form.pronunciationAudio = Object.assign({}, this.form.pronunciationAudio, {
+				url: mockUrl,
+				audioUrl: mockUrl,
+				provider: AUDIO_UPLOAD_PROVIDER,
+				assetId,
+				storagePath,
+				fileName: file.name || safeName,
+				mimeType: file.type || 'audio/*',
+				size: file.size || 0,
+				uploadStatus: 'uploaded',
+				uploadedAt: new Date().toISOString(),
+				localPreviewUrl: this.audioUpload.previewUrl
+			})
+			this.form.audioUrl = mockUrl
+			this.audioUpload.status = 'done'
+			this.audioUpload.progress = 100
+			this.audioUpload.message = '上传演练完成：字段已写入当前词条。同步到小程序预览时，本地音频会通过 preview bridge 变成可播放地址。'
+			this.saveState = '发音音频资产已写入当前词条'
+		},
+		clearPronunciationAudioAsset() {
+			this.cancelAudioUploadTimer()
+			this.ensurePronunciationAudioObject()
+			this.releaseAudioPreview(null, { force: true })
+			this.form.pronunciationAudio = {}
+			this.form.audioUrl = ''
+			this.audioUpload = {
+				status: 'idle',
+				progress: 0,
+				fileName: '',
+				fileSizeLabel: '',
+				mimeType: '',
+				message: '发音音频已清除，可以重新选择文件。',
+				previewUrl: ''
+			}
+			this.saveState = '已清除发音音频资产'
 		},
 		handleNativeVideoFileChange(event) {
 			this.handleVideoFileChange(event)
@@ -1644,6 +1948,58 @@ export default {
 			const normalized = String(fileName || 'lesson-video.mp4').trim().toLowerCase()
 			return normalized.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'lesson-video.mp4'
 		},
+		toSafeAudioFileName(fileName) {
+			const normalized = String(fileName || 'pronunciation.mp3').trim().toLowerCase()
+			return normalized.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'pronunciation.mp3'
+		},
+		isPlayableAdminAudioUrl(url) {
+			const value = String(url || '').trim()
+			return /^(blob:|data:|https?:\/\/)/i.test(value)
+		},
+		emptyPronunciationAudioObject() {
+			return {
+				url: '',
+				audioUrl: '',
+				provider: '',
+				assetId: '',
+				storagePath: '',
+				fileName: '',
+				mimeType: '',
+				size: '',
+				durationSec: '',
+				uploadStatus: '',
+				uploadedAt: '',
+				localPreviewUrl: ''
+			}
+		},
+		ensurePronunciationAudioObject() {
+			if (!this.form.pronunciationAudio || typeof this.form.pronunciationAudio !== 'object') {
+				this.$set(this.form, 'pronunciationAudio', this.emptyPronunciationAudioObject())
+			}
+			if (!Object.prototype.hasOwnProperty.call(this.form, 'audioUrl')) {
+				this.$set(this.form, 'audioUrl', '')
+			}
+		},
+		isPreviewUrlUsedByAudio(url) {
+			if (!url) return false
+			const matches = (word) => {
+				const audio = word && word.pronunciationAudio ? word.pronunciationAudio : {}
+				return audio.localPreviewUrl === url || audio.local_preview_url === url
+			}
+			if (matches(this.form)) return true
+			const lists = [this.words, this.pendingWords]
+			return lists.some((list) => Array.isArray(list) && list.some((item) => matches(item)))
+		},
+		releaseAudioPreview(url, options = {}) {
+			const targetUrl = url || (this.audioUpload && this.audioUpload.previewUrl)
+			if (targetUrl && /^blob:/i.test(targetUrl) && typeof URL !== 'undefined') {
+				if (!options.force && this.isPreviewUrlUsedByAudio(targetUrl)) return
+				URL.revokeObjectURL(targetUrl)
+			}
+			if (!url && this.audioUpload) {
+				this.audioUpload.previewUrl = ''
+			}
+		},
 		stripRuntimeVideoFields(value) {
 			const stripClip = (clip) => {
 				if (!clip || typeof clip !== 'object') return clip
@@ -1657,6 +2013,7 @@ export default {
 				if (Array.isArray(word.videoClips)) {
 					word.videoClips = word.videoClips.map((clip) => stripClip(clip))
 				}
+				if (word.pronunciationAudio) stripClip(word.pronunciationAudio)
 				return word
 			}
 			if (value === undefined || value === null) return value
@@ -1692,6 +2049,33 @@ export default {
 				uploadedAt: String(source.uploadedAt || source.uploaded_at || '').trim()
 			}
 		},
+		normalizePronunciationAudio(raw) {
+			const source = raw || {}
+			const size = Number(source.size)
+			const durationSec = Number(source.durationSec !== undefined ? source.durationSec : source.duration_sec)
+			const url = String(source.url || source.audioUrl || source.audio_url || '').trim()
+			const next = {
+				url,
+				audioUrl: url,
+				provider: String(source.provider || '').trim(),
+				assetId: String(source.assetId || source.asset_id || '').trim(),
+				storagePath: String(source.storagePath || source.storage_path || '').trim(),
+				fileName: String(source.fileName || source.file_name || '').trim(),
+				mimeType: String(source.mimeType || source.mime_type || '').trim(),
+				size: source.size === '' || source.size === undefined || Number.isNaN(size) ? '' : size,
+				durationSec: source.durationSec === '' || source.duration_sec === '' || (source.durationSec === undefined && source.duration_sec === undefined) || Number.isNaN(durationSec) ? '' : durationSec,
+				uploadStatus: String(source.uploadStatus || source.upload_status || '').trim(),
+				uploadedAt: String(source.uploadedAt || source.uploaded_at || '').trim(),
+				localPreviewUrl: /^(blob:|data:|https?:\/\/)/i.test(String(source.localPreviewUrl || source.local_preview_url || ''))
+					? String(source.localPreviewUrl || source.local_preview_url).trim()
+					: ''
+			}
+			const hasPayload = ['url', 'assetId', 'storagePath', 'fileName', 'mimeType', 'uploadStatus', 'uploadedAt'].some((field) => next[field]) ||
+				next.size !== '' ||
+				next.durationSec !== '' ||
+				next.localPreviewUrl
+			return hasPayload ? next : {}
+		},
 		normalizeWord(item) {
 			const next = clone(item)
 			next.id = String(next.id || '').trim()
@@ -1720,6 +2104,15 @@ export default {
 			}
 			next.videoClips = videoClips
 			next.video = videoClips.length ? Object.assign({}, video, videoClips[0]) : video
+			next.pronunciationAudio = this.normalizePronunciationAudio(
+				next.pronunciationAudio ||
+					next.pronunciation_audio ||
+					next.audio ||
+					{
+						url: next.audioUrl || next.audio_url || next.pronunciationAudioUrl || next.pronunciation_audio_url || ''
+					}
+			)
+			next.audioUrl = next.pronunciationAudio.url || ''
 			next.entryType = this.getEntryType(next)
 			return next
 		},
@@ -1902,6 +2295,7 @@ export default {
 		normalizeImportedWord(raw) {
 			raw = raw || {}
 			const rawVideo = raw.video || {}
+			const rawAudio = raw.pronunciationAudio || raw.pronunciation_audio || raw.audio || {}
 			const rawVideoClips = Array.isArray(raw.videoClips)
 				? raw.videoClips
 				: (Array.isArray(raw.video_clips) ? raw.video_clips : (Array.isArray(raw.clips) ? raw.clips : undefined))
@@ -1916,6 +2310,18 @@ export default {
 				explanation: raw.explanation || raw.analysis || raw.note || '',
 				status: 'draft',
 				parts: this.normalizeImportedParts(raw.parts || raw.breakdown || raw.children || []),
+				pronunciationAudio: {
+					url: valueOrBlank(firstNonEmpty(rawAudio.url, rawAudio.audioUrl, rawAudio.audio_url, raw.audioUrl, raw.audio_url, raw.pronunciationAudioUrl, raw.pronunciation_audio_url)),
+					provider: valueOrBlank(firstNonEmpty(rawAudio.provider, raw.audioProvider, raw.audio_provider)),
+					assetId: valueOrBlank(firstNonEmpty(rawAudio.assetId, rawAudio.asset_id, raw.audioAssetId, raw.audio_asset_id)),
+					storagePath: valueOrBlank(firstNonEmpty(rawAudio.storagePath, rawAudio.storage_path, raw.audioStoragePath, raw.audio_storage_path)),
+					fileName: valueOrBlank(firstNonEmpty(rawAudio.fileName, rawAudio.file_name, raw.audioFileName, raw.audio_file_name)),
+					mimeType: valueOrBlank(firstNonEmpty(rawAudio.mimeType, rawAudio.mime_type, raw.audioMimeType, raw.audio_mime_type)),
+					size: valueOrBlank(firstNonEmpty(rawAudio.size, raw.audioSize, raw.audio_size)),
+					durationSec: valueOrBlank(firstNonEmpty(rawAudio.durationSec, rawAudio.duration_sec, raw.audioDurationSec, raw.audio_duration_sec)),
+					uploadStatus: valueOrBlank(firstNonEmpty(rawAudio.uploadStatus, rawAudio.upload_status, raw.audioUploadStatus, raw.audio_upload_status)),
+					uploadedAt: valueOrBlank(firstNonEmpty(rawAudio.uploadedAt, rawAudio.uploaded_at, raw.audioUploadedAt, raw.audio_uploaded_at))
+				},
 				video: {
 					url: valueOrBlank(firstNonEmpty(rawVideo.url, rawVideo.videoUrl, rawVideo.video_url, raw.videoUrl, raw.video_url)),
 					title: valueOrBlank(firstNonEmpty(rawVideo.title, rawVideo.segmentTitle, rawVideo.segment_title, rawVideo.videoTitle, rawVideo.video_title, raw.videoTitle, raw.video_title, raw.segment_title)),
@@ -1942,12 +2348,14 @@ export default {
 			const hasOwn = (target, key) => Object.prototype.hasOwnProperty.call(target || {}, key)
 			const hasNonEmpty = (...values) => values.some((value) => value !== undefined && value !== null && String(value).trim() !== '')
 			const video = raw.video || {}
+			const audio = raw.pronunciationAudio || raw.pronunciation_audio || raw.audio || {}
 			return {
 				word: hasNonEmpty(raw.word),
 				entryType: hasNonEmpty(raw.entryType, raw.type),
 				phonetic: hasNonEmpty(raw.phonetic, raw.pronunciation),
 				meaning: hasNonEmpty(raw.meaning, raw.definition, raw.translation),
 				explanation: hasNonEmpty(raw.explanation, raw.analysis, raw.note),
+				pronunciationAudio: hasNonEmpty(audio.url, audio.audioUrl, audio.audio_url, raw.audioUrl, raw.audio_url, raw.pronunciationAudioUrl, raw.pronunciation_audio_url),
 				parts: (hasOwn(raw, 'parts') && Array.isArray(raw.parts) && raw.parts.length > 0) ||
 					(hasOwn(raw, 'breakdown') && Array.isArray(raw.breakdown) && raw.breakdown.length > 0) ||
 					(hasOwn(raw, 'children') && Array.isArray(raw.children) && raw.children.length > 0),
@@ -2196,6 +2604,14 @@ export default {
 			if ((!hasProvidedMeta || provided.parts) && Array.isArray(incoming.parts) && incoming.parts.length) {
 				next.parts = incoming.parts
 			}
+			const incomingAudio = incoming.pronunciationAudio || {}
+			const incomingAudioUrl = incoming.audioUrl || incomingAudio.url || incomingAudio.audioUrl || ''
+			const hasAudioValue = (value) => value !== undefined && value !== null && String(value).trim() !== ''
+			const hasIncomingAudio = ['url', 'audioUrl', 'assetId', 'storagePath', 'fileName', 'mimeType', 'uploadStatus', 'uploadedAt', 'size', 'durationSec', 'localPreviewUrl'].some((field) => hasAudioValue(incomingAudio[field]))
+			if ((!hasProvidedMeta || provided.pronunciationAudio) && (hasIncomingAudio || incomingAudioUrl)) {
+				next.pronunciationAudio = incomingAudio
+				next.audioUrl = incomingAudioUrl
+			}
 			if ((!hasProvidedMeta || provided.videoClips) && Array.isArray(incoming.videoClips)) {
 				next.videoClips = incoming.videoClips
 			}
@@ -2281,6 +2697,36 @@ export default {
 				})
 			}
 			return assets
+		},
+		async buildRuntimeAudioAsset(sourceWord, warnings) {
+			const source = sourceWord || this.form
+			const audio = source && source.pronunciationAudio ? source.pronunciationAudio : {}
+			const previewUrl = String(audio.localPreviewUrl || '').trim()
+			if (!/^(blob:|data:)/i.test(previewUrl)) {
+				const audioUrl = String(audio.url || audio.audioUrl || '').trim()
+				if (audioUrl.indexOf('mock-cloud://') === 0 && Array.isArray(warnings)) {
+					warnings.push(`${source.word || source.id || '词条'} 的发音音频只有 mock-cloud 占位地址；请重新选择本地音频后再同步，或上线后接入云存储 HTTPS 地址`)
+				}
+				return null
+			}
+			const audioSize = Number(audio.size || 0)
+			if (audioSize > AUDIO_MAX_SIZE_BYTES) {
+				if (Array.isArray(warnings)) {
+					warnings.push(`${source.word || source.id || '词条'} 的发音音频超过 ${AUDIO_MAX_SIZE_MB}MB，只同步字段信息`)
+				}
+				return null
+			}
+			const dataUrl = await this.readPreviewUrlAsDataUrl(previewUrl)
+			if (!dataUrl) {
+				if (Array.isArray(warnings)) {
+					warnings.push(`${source.word || source.id || '词条'} 的本地发音音频读取失败；请重新选择音频后再同步`)
+				}
+				return null
+			}
+			return {
+				fileName: audio.fileName || `${source.id || source.word || 'word'}-pronunciation.mp3`,
+				dataUrl
+			}
 		},
 		readPreviewUrlAsDataUrl(previewUrl) {
 			if (/^data:/i.test(previewUrl)) {
@@ -2384,8 +2830,9 @@ export default {
 				const result = await this.syncWordToMiniappPreview(this.form, warnings)
 				const word = this.buildMiniappPreviewWord(this.form)
 				const warningText = warnings.length ? `；${warnings[0]}` : ''
+				const audioText = result.audioReady ? '，发音音频已就绪' : ''
 
-				this.bridgeSync.message = `已同步 ${result.word || word.word}，${result.clipCount || 0} 段视频${warningText}`
+				this.bridgeSync.message = `已同步 ${result.word || word.word}，${result.clipCount || 0} 段视频${audioText}${warningText}`
 				this.saveState = warnings.length
 					? '已同步到小程序预览，但部分视频未写入本地桥'
 					: '已同步到小程序预览，HBuilderX 保存后微信开发者工具会刷新'
@@ -2422,16 +2869,18 @@ export default {
 
 			try {
 				let clipCount = 0
+				let audioReadyCount = 0
 				const warnings = []
 				for (let index = 0; index < sourceWords.length; index += 1) {
 					const item = sourceWords[index]
 					this.bridgeSync.message = `正在同步 ${index + 1}/${sourceWords.length}：${item.word}`
 					const result = await this.syncWordToMiniappPreview(item, warnings)
 					clipCount += Number(result.clipCount || 0)
+					if (result.audioReady) audioReadyCount += 1
 				}
 
-				const warningText = warnings.length ? `；${warnings.length} 个视频片段未写入本地桥` : ''
-				this.bridgeSync.message = `已同步 ${sourceWords.length} 个词条，${clipCount} 段视频${warningText}`
+				const warningText = warnings.length ? `；${warnings.length} 个媒体资源未写入本地桥` : ''
+				this.bridgeSync.message = `已同步 ${sourceWords.length} 个词条，${clipCount} 段视频，${audioReadyCount} 条发音音频${warningText}`
 				this.saveState = warnings.length
 					? '已批量同步到小程序预览，但部分视频只同步了片段信息'
 					: '已批量同步到小程序预览，HBuilderX 保存后微信开发者工具会刷新'
@@ -2452,11 +2901,12 @@ export default {
 		async syncWordToMiniappPreview(sourceWord, warnings) {
 			const word = this.buildMiniappPreviewWord(sourceWord)
 			const runtimeAssets = await this.buildRuntimeVideoAssets(sourceWord, warnings)
+			const runtimeAudioAsset = await this.buildRuntimeAudioAsset(sourceWord, warnings)
 			// 本地 preview bridge 只给电脑端微信开发者工具调试使用；正式上线不能请求 127.0.0.1。
 			const response = await fetch(`http://127.0.0.1:${this.bridgeSync.port}/sync-word`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ word, runtimeAssets })
+				body: JSON.stringify({ word, runtimeAssets, runtimeAudioAsset })
 			})
 			const result = await response.json()
 			if (!response.ok || !result.ok) {
@@ -3006,12 +3456,17 @@ button::after {
 	line-height: 1.7;
 }
 
-.video-upload-card {
+.video-upload-card,
+.audio-upload-card {
 	margin-bottom: 16px;
 	padding: 16px;
 	border: 1px solid #d8e9f2;
 	border-radius: 20px;
 	background: #f8fcff;
+}
+
+.audio-section-head {
+	margin-top: 10px;
 }
 
 .video-upload-main {
@@ -3057,6 +3512,10 @@ button::after {
 	transition: width 0.2s ease;
 }
 
+.upload-progress-bar.audio {
+	background: #6baed6;
+}
+
 .video-upload-meta {
 	display: flex;
 	flex-wrap: wrap;
@@ -3072,6 +3531,11 @@ button::after {
 	margin-top: 14px;
 	border-radius: 16px;
 	background: #0e3a5c;
+}
+
+.admin-audio-preview {
+	width: 100%;
+	margin-top: 14px;
 }
 
 .video-preview-tools {
@@ -3632,6 +4096,26 @@ button.file-button::after {
 
 .preview-phonetic {
 	color: rgba(255, 255, 255, 0.62);
+}
+
+.preview-audio-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 10px;
+	border-radius: 999px;
+	background: #ffeba2;
+	color: #0e3a5c;
+	font-size: 12px;
+	font-weight: 800;
+}
+
+.preview-speaker-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 999px;
+	background: #fe8500;
+	box-shadow: 0 0 0 4px rgba(254, 133, 0, 0.2);
 }
 
 .preview-meaning,

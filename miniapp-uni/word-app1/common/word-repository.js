@@ -49,6 +49,10 @@ function cloneVideoClip(clip) {
   return { ...clip }
 }
 
+function clonePronunciationAudio(audio) {
+  return audio ? { ...audio } : {}
+}
+
 function cloneWord(word) {
   if (!word) return null
   return {
@@ -56,6 +60,8 @@ function cloneWord(word) {
     parts: Array.isArray(word.parts) ? word.parts.map((part) => clonePart(part)) : [],
     examples: Array.isArray(word.examples) ? word.examples.map((item) => cloneExample(item)) : [],
     siblingIds: Array.isArray(word.siblingIds) ? [...word.siblingIds] : [],
+    pronunciationAudio: clonePronunciationAudio(word.pronunciationAudio),
+    audioUrl: word.audioUrl || '',
     videoSegment: word.videoSegment ? { ...word.videoSegment } : {},
     videoClips: Array.isArray(word.videoClips) ? word.videoClips.map((clip) => cloneVideoClip(clip)) : []
   }

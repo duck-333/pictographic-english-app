@@ -11,6 +11,7 @@ const port = Number(process.env.PICTO_PREVIEW_BRIDGE_PORT || 8787)
 const dataJsonPath = join(rootDir, 'content-seed', 'dev-preview-words.json')
 const generatedDataPath = join(rootDir, 'miniapp-uni', 'word-app1', 'common', 'dev-preview-data.js')
 const videoDir = join(rootDir, 'content-seed', 'dev-preview-videos')
+const audioDir = join(rootDir, 'content-seed', 'dev-preview-audios')
 const maxBodyBytes = Number(process.env.PICTO_PREVIEW_BRIDGE_MAX_MB || 320) * 1024 * 1024
 
 function sendJson(response, statusCode, payload) {
@@ -60,6 +61,21 @@ function videoContentType(filePath) {
   return 'video/mp4'
 }
 
+function audioContentType(filePath) {
+  const ext = extname(filePath).toLowerCase()
+  if (ext === '.wav') return 'audio/wav'
+  if (ext === '.m4a') return 'audio/mp4'
+  if (ext === '.aac') return 'audio/aac'
+  if (ext === '.ogg' || ext === '.oga') return 'audio/ogg'
+  if (ext === '.webm') return 'audio/webm'
+  return 'audio/mpeg'
+}
+
+function isPlayableAudioUrl(url) {
+  const value = String(url || '').trim()
+  return /^https:\/\//i.test(value) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/audios\//i.test(value)
+}
+
 function toVideoExtension(mimeType, fileName) {
   const existing = extname(fileName || '').toLowerCase()
   if (existing) return existing
@@ -67,6 +83,17 @@ function toVideoExtension(mimeType, fileName) {
   if (mimeType === 'video/quicktime') return '.mov'
   if (mimeType === 'video/x-m4v') return '.m4v'
   return '.mp4'
+}
+
+function toAudioExtension(mimeType, fileName) {
+  const existing = extname(fileName || '').toLowerCase()
+  if (existing) return existing
+  if (mimeType === 'audio/wav' || mimeType === 'audio/x-wav') return '.wav'
+  if (mimeType === 'audio/mp4') return '.m4a'
+  if (mimeType === 'audio/aac') return '.aac'
+  if (mimeType === 'audio/ogg') return '.ogg'
+  if (mimeType === 'audio/webm') return '.webm'
+  return '.mp3'
 }
 
 function normalizeWordsPayload(raw) {
@@ -126,6 +153,32 @@ async function saveRuntimeAsset(asset, wordId) {
   }
 }
 
+async function saveRuntimeAudioAsset(asset, wordId) {
+  const dataUrl = asset && asset.dataUrl
+  const parts = toDataUrlParts(dataUrl)
+  if (!parts) return null
+
+  await mkdir(audioDir, { recursive: true })
+  const sourceName = safeFileName(asset.fileName || `${wordId || 'word'}-pronunciation.mp3`, 'pronunciation.mp3')
+  const ext = toAudioExtension(parts.mimeType, sourceName)
+  const base = safeFileName(`${wordId || 'word'}-pronunciation`.replace(/\.[a-z0-9]+$/i, ''), 'preview-audio')
+  const fileName = `${base}${ext}`
+  const targetPath = join(audioDir, fileName)
+  const buffer = parts.isBase64
+    ? Buffer.from(parts.payload, 'base64')
+    : Buffer.from(decodeURIComponent(parts.payload))
+
+  await writeFile(targetPath, buffer)
+
+  return {
+    fileName,
+    mimeType: parts.mimeType,
+    size: buffer.length,
+    url: `http://127.0.0.1:${port}/audios/${encodeURIComponent(fileName)}`,
+    storagePath: `content-seed/dev-preview-audios/${fileName}`
+  }
+}
+
 function cleanClipForMiniapp(clip, savedAsset) {
   const next = { ...(clip || {}) }
   delete next.localPreviewUrl
@@ -147,16 +200,39 @@ function cleanClipForMiniapp(clip, savedAsset) {
   return next
 }
 
+function cleanAudioForMiniapp(audio, savedAsset) {
+  const next = { ...(audio || {}) }
+  delete next.localPreviewUrl
+  delete next.local_preview_url
+  delete next.devAudioDataUrl
+  delete next.dataUrl
+
+  if (savedAsset) {
+    next.url = savedAsset.url
+    next.audioUrl = savedAsset.url
+    next.storagePath = savedAsset.storagePath
+    next.fileName = savedAsset.fileName
+    next.mimeType = savedAsset.mimeType
+    next.size = savedAsset.size
+    next.provider = 'local-preview-bridge'
+    next.uploadStatus = 'dev-preview-ready'
+  }
+
+  return next
+}
+
 async function buildMiniappWord(payload) {
   const rawWord = payload && payload.word ? payload.word : {}
   const wordId = String(rawWord.id || rawWord.word || 'word').trim()
   const runtimeAssets = Array.isArray(payload.runtimeAssets) ? payload.runtimeAssets : []
+  const runtimeAudioAsset = payload && payload.runtimeAudioAsset ? payload.runtimeAudioAsset : null
   const savedAssets = []
 
   for (const asset of runtimeAssets) {
     const saved = await saveRuntimeAsset(asset, wordId)
     if (saved) savedAssets.push(saved)
   }
+  const savedAudioAsset = runtimeAudioAsset ? await saveRuntimeAudioAsset(runtimeAudioAsset, wordId) : null
 
   const assetByClipId = new Map(savedAssets.map((asset) => [String(asset.clipId || ''), asset]))
   const rawClips = Array.isArray(rawWord.videoClips) ? rawWord.videoClips : []
@@ -167,9 +243,11 @@ async function buildMiniappWord(payload) {
 
   const nextWord = {
     ...rawWord,
+    pronunciationAudio: cleanAudioForMiniapp(rawWord.pronunciationAudio || rawWord.pronunciation_audio || rawWord.audio || {}, savedAudioAsset),
     videoClips,
     video: videoClips.length ? { ...(rawWord.video || {}), ...videoClips[0] } : rawWord.video
   }
+  nextWord.audioUrl = nextWord.pronunciationAudio && nextWord.pronunciationAudio.url ? nextWord.pronunciationAudio.url : ''
 
   delete nextWord.localPreviewUrl
   delete nextWord.local_preview_url
@@ -212,6 +290,7 @@ async function handleSyncWord(request, response) {
         wordId: nextWord.id,
         word: nextWord.word,
         clipCount: Array.isArray(nextWord.videoClips) ? nextWord.videoClips.length : 0,
+        audioReady: isPlayableAudioUrl(nextWord.audioUrl),
         generatedDataPath,
         dataJsonPath
       })
@@ -281,6 +360,66 @@ async function handleVideo(request, response, pathname) {
   createReadStream(filePath, { start, end }).pipe(response)
 }
 
+async function handleAudio(request, response, pathname) {
+  const fileName = safeFileName(decodeURIComponent(pathname.replace(/^\/audios\//, '')), '')
+  if (!fileName) {
+    sendText(response, 404, 'Missing audio file')
+    return
+  }
+  const filePath = join(audioDir, fileName)
+  let fileStats
+  try {
+    fileStats = await stat(filePath)
+  } catch (error) {
+    sendText(response, 404, 'Audio not found')
+    return
+  }
+
+  const range = request.headers.range
+  const contentType = audioContentType(filePath)
+  if (!range) {
+    response.writeHead(200, {
+      'Access-Control-Allow-Origin': '*',
+      'Accept-Ranges': 'bytes',
+      'Content-Length': fileStats.size,
+      'Content-Type': contentType
+    })
+    createReadStream(filePath).pipe(response)
+    return
+  }
+
+  const match = String(range).match(/bytes=(\d*)-(\d*)/)
+  if (!match) {
+    response.writeHead(416, {
+      'Access-Control-Allow-Origin': '*',
+      'Content-Range': `bytes */${fileStats.size}`
+    })
+    response.end()
+    return
+  }
+
+  const start = match[1] ? Number(match[1]) : 0
+  const requestedEnd = match[2] ? Number(match[2]) : fileStats.size - 1
+  const end = Math.min(requestedEnd, fileStats.size - 1)
+  if (Number.isNaN(start) || Number.isNaN(requestedEnd) || start > end || start >= fileStats.size) {
+    response.writeHead(416, {
+      'Access-Control-Allow-Origin': '*',
+      'Content-Range': `bytes */${fileStats.size}`
+    })
+    response.end()
+    return
+  }
+
+  response.writeHead(206, {
+    'Access-Control-Allow-Origin': '*',
+    'Accept-Ranges': 'bytes',
+    'Content-Length': end - start + 1,
+    'Content-Range': `bytes ${start}-${end}/${fileStats.size}`,
+    'Content-Type': contentType
+  })
+  createReadStream(filePath, { start, end }).pipe(response)
+}
+
 const server = createServer((request, response) => {
   const { pathname } = new URL(request.url || '/', `http://${request.headers.host || '127.0.0.1'}`)
 
@@ -289,12 +428,18 @@ const server = createServer((request, response) => {
     return
   }
   if (request.method === 'GET' && pathname === '/status') {
-    sendJson(response, 200, { ok: true, port, generatedDataPath, dataJsonPath, videoDir })
+    sendJson(response, 200, { ok: true, port, generatedDataPath, dataJsonPath, videoDir, audioDir })
     return
   }
   if (request.method === 'GET' && pathname.startsWith('/videos/')) {
     handleVideo(request, response, pathname).catch((error) => {
       sendText(response, 500, error.message || 'Video failed')
+    })
+    return
+  }
+  if (request.method === 'GET' && pathname.startsWith('/audios/')) {
+    handleAudio(request, response, pathname).catch((error) => {
+      sendText(response, 500, error.message || 'Audio failed')
     })
     return
   }

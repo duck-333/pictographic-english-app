@@ -86,6 +86,46 @@ export function normalizeVideoSegment(segment) {
   }
 }
 
+export function normalizePronunciationAudio(audio) {
+  const source = audio || {}
+  const audioUrl = source.audioUrl || source.audio_url || source.url || ''
+  const duration = Number(source.durationSec || source.duration_sec || 0)
+  return hasPronunciationAudioPayload({
+    ...source,
+    audioUrl,
+    url: audioUrl,
+    durationSec: duration
+  })
+    ? {
+        ...source,
+        url: audioUrl,
+        audioUrl,
+        provider: source.provider || '',
+        assetId: source.assetId || source.asset_id || '',
+        storagePath: source.storagePath || source.storage_path || '',
+        fileName: source.fileName || source.file_name || '',
+        mimeType: source.mimeType || source.mime_type || '',
+        size: source.size || '',
+        durationSec: Number.isNaN(duration) ? 0 : duration,
+        uploadStatus: source.uploadStatus || source.upload_status || '',
+        uploadedAt: source.uploadedAt || source.uploaded_at || ''
+      }
+    : {}
+}
+
+function hasPronunciationAudioPayload(audio) {
+  return Boolean(
+    audio.url ||
+      audio.audioUrl ||
+      audio.assetId ||
+      audio.storagePath ||
+      audio.fileName ||
+      audio.mimeType ||
+      audio.size ||
+      audio.durationSec > 0
+  )
+}
+
 function hasVideoSegmentPayload(segment) {
   return Boolean(
     segment.videoUrl ||
@@ -155,6 +195,8 @@ export function createWordDraft(overrides = {}) {
     richTextHtml: overrides.richTextHtml || '',
     videoTitle: overrides.videoTitle || '',
     videoDuration: overrides.videoDuration || '',
+    pronunciationAudio: overrides.pronunciationAudio || {},
+    audioUrl: overrides.audioUrl || '',
     videoSegment: overrides.videoSegment || {},
     videoClips: overrides.videoClips || [],
     examples: overrides.examples || [],
@@ -173,6 +215,14 @@ export function normalizeWordRecord(record) {
   const videoSegment = videoClips.length
     ? normalizeVideoSegment(videoClips[0])
     : normalizeVideoSegment(source.videoSegment || source.video || {})
+  const pronunciationAudio = normalizePronunciationAudio(
+    source.pronunciationAudio ||
+      source.pronunciation_audio ||
+      source.audio ||
+      {
+        url: source.audioUrl || source.audio_url || source.pronunciationAudioUrl || source.pronunciation_audio_url || ''
+      }
+  )
 
   return {
     ...source,
@@ -189,6 +239,8 @@ export function normalizeWordRecord(record) {
     tip: source.tip || '',
     pictograph: source.pictograph || '',
     richTextHtml: source.richTextHtml || '',
+    pronunciationAudio,
+    audioUrl: pronunciationAudio.url || '',
     videoTitle: source.videoTitle || (source.video && source.video.title) || '',
     videoDuration: source.videoDuration || '',
     videoSegment,

@@ -19,6 +19,20 @@
         <view class="word-line">
           <text class="word">{{ word.word }}</text>
           <text class="phonetic">{{ word.phonetic }}</text>
+          <button
+            v-if="hasPronunciationAudio"
+            class="pronunciation-button"
+            :class="{ active: pronunciationIsPlaying }"
+            hover-class="audio-button-pressed"
+            @tap.stop="togglePronunciationAudio"
+          >
+            <view class="speaker-icon">
+              <view class="speaker-box"></view>
+              <view class="speaker-cone"></view>
+              <view class="speaker-wave one"></view>
+              <view class="speaker-wave two"></view>
+            </view>
+          </button>
         </view>
         <text class="meaning">{{ word.meaning }}</text>
         <text v-if="word.bookPage" class="book-page">书中索引：第 {{ word.bookPage }} 页</text>
@@ -286,6 +300,8 @@ export default {
       pendingClipAutoplay: false,
       clipIsSeeking: false,
       resumeAfterSeeking: false,
+      pronunciationAudioContext: null,
+      pronunciationIsPlaying: false,
       notFoundQuery: '',
       notFoundDescription: '这个单词还没有讲解内容，可以提交缺词反馈。'
     }
@@ -295,9 +311,11 @@ export default {
   },
   onUnload() {
     this.clearClipPlaybackTimer()
+    this.destroyPronunciationAudio()
   },
   onHide() {
     this.pauseActiveClip()
+    this.stopPronunciationAudio()
   },
   computed: {
     displayParts() {
@@ -473,10 +491,22 @@ export default {
         return '后台已生成视频资产信息；正式云存储接入后会变成可播放地址。'
       }
       return '这个片段暂时没有可播放视频地址。'
+    },
+    pronunciationAudio() {
+      if (!this.word) return {}
+      return this.word.pronunciationAudio || this.word.audio || {}
+    },
+    pronunciationAudioUrl() {
+      const audio = this.pronunciationAudio || {}
+      return String(audio.url || audio.audioUrl || this.word.audioUrl || '').trim()
+    },
+    hasPronunciationAudio() {
+      return this.isPlayableAudioUrl(this.pronunciationAudioUrl)
     }
   },
   methods: {
     loadWord(options) {
+      this.stopPronunciationAudio()
       const optionValue = options && (options.id || options.word) ? options.id || options.word : ''
       const fallbackValue = optionValue || getPendingWordId() || 'word-study'
       const raw = decodeURIComponent(fallbackValue)
@@ -502,6 +532,7 @@ export default {
       this.pendingClipAutoplay = false
       this.clipIsSeeking = false
       this.resumeAfterSeeking = false
+      this.pronunciationIsPlaying = false
       this.clearClipPlaybackTimer()
 
       if (target) {
@@ -819,6 +850,66 @@ export default {
         icon: 'none'
       })
     },
+    isPlayableAudioUrl(url) {
+      const value = String(url || '').trim()
+      return /^https:\/\//i.test(value) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(value)
+    },
+    getPronunciationAudioContext() {
+      if (this.pronunciationAudioContext) return this.pronunciationAudioContext
+      if (!uni.createInnerAudioContext) return null
+
+      const context = uni.createInnerAudioContext()
+      context.autoplay = false
+      context.obeyMuteSwitch = false
+      context.onPlay(() => {
+        this.pronunciationIsPlaying = true
+      })
+      context.onPause(() => {
+        this.pronunciationIsPlaying = false
+      })
+      context.onStop(() => {
+        this.pronunciationIsPlaying = false
+      })
+      context.onEnded(() => {
+        this.pronunciationIsPlaying = false
+      })
+      context.onError(() => {
+        this.pronunciationIsPlaying = false
+        uni.showToast({
+          title: '发音音频暂时无法播放，请检查音频地址',
+          icon: 'none'
+        })
+      })
+      this.pronunciationAudioContext = context
+      return context
+    },
+    togglePronunciationAudio() {
+      if (!this.hasPronunciationAudio) return
+      if (this.pronunciationIsPlaying) {
+        this.stopPronunciationAudio()
+        return
+      }
+      const context = this.getPronunciationAudioContext()
+      if (!context) return
+      context.src = this.pronunciationAudioUrl
+      context.play()
+    },
+    stopPronunciationAudio() {
+      if (!this.pronunciationAudioContext) return
+      this.pronunciationIsPlaying = false
+      if (this.pronunciationAudioContext.stop) {
+        this.pronunciationAudioContext.stop()
+      } else if (this.pronunciationAudioContext.pause) {
+        this.pronunciationAudioContext.pause()
+      }
+    },
+    destroyPronunciationAudio() {
+      this.stopPronunciationAudio()
+      if (this.pronunciationAudioContext && this.pronunciationAudioContext.destroy) {
+        this.pronunciationAudioContext.destroy()
+      }
+      this.pronunciationAudioContext = null
+    },
     handleVideoLoadedMetadata() {
       const context = this.getVideoContext()
       if (!context) return
@@ -1056,6 +1147,96 @@ export default {
   margin-bottom: 8rpx;
   color: rgba(255, 255, 255, 0.54);
   font-size: 26rpx;
+}
+
+.pronunciation-button {
+  position: relative;
+  flex-shrink: 0;
+  width: 48rpx;
+  height: 48rpx;
+  margin: 0 0 2rpx;
+  padding: 0;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.14);
+  border: 2rpx solid rgba(255, 255, 255, 0.2);
+  line-height: 1;
+}
+
+.pronunciation-button::after {
+  border: 0;
+}
+
+.pronunciation-button.active {
+  background: #ffeba2;
+  border-color: #ffeba2;
+}
+
+.speaker-icon,
+.speaker-box,
+.speaker-cone,
+.speaker-wave {
+  position: absolute;
+}
+
+.speaker-icon {
+  left: 10rpx;
+  top: 11rpx;
+  width: 28rpx;
+  height: 26rpx;
+}
+
+.speaker-box {
+  left: 0;
+  top: 8rpx;
+  width: 8rpx;
+  height: 10rpx;
+  border-radius: 3rpx 0 0 3rpx;
+  background: #ffeba2;
+}
+
+.speaker-cone {
+  left: 7rpx;
+  top: 5rpx;
+  width: 0;
+  height: 0;
+  border-top: 8rpx solid transparent;
+  border-bottom: 8rpx solid transparent;
+  border-right: 12rpx solid #ffeba2;
+}
+
+.speaker-wave {
+  border: 3rpx solid #ffeba2;
+  border-left: 0;
+  border-top-color: transparent;
+  border-bottom-color: transparent;
+  border-radius: 0 999rpx 999rpx 0;
+}
+
+.speaker-wave.one {
+  left: 19rpx;
+  top: 8rpx;
+  width: 6rpx;
+  height: 10rpx;
+}
+
+.speaker-wave.two {
+  left: 22rpx;
+  top: 4rpx;
+  width: 10rpx;
+  height: 18rpx;
+  opacity: 0.72;
+}
+
+.pronunciation-button.active .speaker-box {
+  background: #0e3a5c;
+}
+
+.pronunciation-button.active .speaker-cone {
+  border-right-color: #0e3a5c;
+}
+
+.pronunciation-button.active .speaker-wave {
+  border-right-color: #0e3a5c;
 }
 
 .meaning,
@@ -1650,6 +1831,7 @@ export default {
 }
 
 .button-pressed,
+.audio-button-pressed,
 .chip-pressed,
 .text-pressed,
 .clip-pressed {

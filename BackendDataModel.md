@@ -33,6 +33,8 @@
 | `status` | `draft`、`published`、`archived` |
 | `cardType` | 前台展示类型，例如“单词” |
 | `phonetic` | 音标 |
+| `pronunciationAudio` | 发音音频对象，给音标旁小喇叭播放 |
+| `audioUrl` | 发音音频播放地址兼容字段，优先由 `pronunciationAudio.url` 派生 |
 | `meaning` | 短释义 |
 | `level` | 难度或教材层级 |
 | `bookPage` | 书中页码 |
@@ -43,6 +45,21 @@
 | `examples` | 例句数组 |
 | `siblingIds` | 同族词或关联节点 ID |
 | `videoSegment` | 当前词对应视频片段 |
+
+`pronunciationAudio` 建议字段：
+
+| 字段 | 用途 |
+| --- | --- |
+| `url` / `audioUrl` | 可播放音频地址；小程序端只有存在可播放地址时才显示小喇叭 |
+| `provider` | 存储来源，例如 cloud-storage、vod、local-preview-bridge |
+| `assetId` | 云存储或后台资产 ID |
+| `storagePath` | 未来云端保存路径 |
+| `fileName` | 原始或安全化后的文件名 |
+| `mimeType` | 音频格式，例如 `audio/mpeg` |
+| `size` | 文件大小 |
+| `durationSec` | 音频时长，后续可用于后台校验 |
+| `uploadStatus` | 上传状态 |
+| `uploadedAt` | 上传时间 |
 
 ### `word_nodes`
 
