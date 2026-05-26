@@ -22,26 +22,62 @@
         </view>
         <text class="meaning">{{ word.meaning }}</text>
         <text v-if="word.bookPage" class="book-page">书中索引：第 {{ word.bookPage }} 页</text>
+        <view class="hero-actions">
+          <button
+            v-if="hasVideoData"
+            class="hero-video-button"
+            hover-class="button-pressed"
+            @tap="openVideoSection"
+          >
+            <view class="hero-play-icon">
+              <view class="play-triangle tiny"></view>
+            </view>
+            <text>看视频讲解</text>
+          </button>
+          <button
+            class="hero-outline-button"
+            hover-class="button-pressed"
+            data-target-id="section-breakdown"
+            @tap="scrollToLearningSection"
+          >
+            看象形拆解
+          </button>
+        </view>
       </view>
 
-      <view v-if="word.parts && word.parts.length" class="section card">
+      <scroll-view class="learning-tabs" scroll-x :show-scrollbar="false">
+        <button
+          v-for="tab in learningTabs"
+          :key="tab.targetId"
+          class="learning-tab"
+          :class="{ highlight: tab.highlight }"
+          hover-class="tab-pressed"
+          :data-target-id="tab.targetId"
+          @tap="scrollToLearningSection"
+        >
+          <text class="learning-tab-label">{{ tab.label }}</text>
+          <text v-if="tab.hint" class="learning-tab-hint">{{ tab.hint }}</text>
+        </button>
+      </scroll-view>
+
+      <view v-if="word.parts && word.parts.length" id="section-breakdown" class="section card">
         <text class="section-eyebrow">象形拆解</text>
         <view class="parts">
-          <block v-for="(part, index) in word.parts" :key="part.text">
+          <block v-for="part in displayParts" :key="part.text">
             <view
               class="part-chip"
               :class="{ selected: expandedPart === part.text }"
-              :style="{ backgroundColor: part.bgColor, borderColor: expandedPart === part.text ? part.color : part.borderColor }"
+              :style="part.chipStyle"
               hover-class="chip-pressed"
               :data-part-text="part.text"
               :data-target-id="part.targetId || ''"
               @tap="handlePartTap"
             >
-              <text class="part-text" :style="{ color: part.color }">{{ part.text }}</text>
+              <text class="part-text" :style="part.textStyle">{{ part.text }}</text>
               <text class="part-meaning">{{ part.meaning }}</text>
               <text v-if="part.targetId" class="part-action">点进</text>
             </view>
-            <text v-if="index < word.parts.length - 1" class="plus">+</text>
+            <text v-if="part.showPlus" class="plus">+</text>
           </block>
           <text class="equals">=</text>
           <text class="equals-word">{{ word.word }}</text>
@@ -53,12 +89,12 @@
         </view>
       </view>
 
-      <view v-else class="section card">
+      <view v-else id="section-breakdown" class="section card">
         <text class="section-eyebrow">节点说明</text>
         <text class="desc">{{ word.tip }}</text>
       </view>
 
-      <view class="section card">
+      <view id="section-imagery" class="section card">
         <view class="title-row">
           <text class="section-title">完整意象</text>
           <text class="mini-action" hover-class="text-pressed" @tap="toggleDesc">{{ showFullDesc ? '收起' : '展开' }}</text>
@@ -66,7 +102,7 @@
         <text class="desc" :class="{ folded: !showFullDesc }">{{ word.pictograph }}</text>
       </view>
 
-      <view class="section card">
+      <view id="section-examples" class="section card">
         <text class="section-title">例句</text>
         <view v-if="word.examples && word.examples.length">
           <view v-for="item in word.examples" :key="item.english" class="example">
@@ -77,7 +113,7 @@
         <text v-else class="desc">例句稍后补充。</text>
       </view>
 
-      <view v-if="relatedWords.length" class="section card">
+      <view v-if="relatedWords.length" id="section-related" class="section card">
         <text class="section-title">同族词</text>
         <view class="related-list">
           <view
@@ -94,7 +130,7 @@
         </view>
       </view>
 
-      <view class="section video-card">
+      <view id="section-video" class="section video-card">
         <view class="video-head">
           <view>
             <text class="video-title">{{ activeVideoTitle }}</text>
@@ -264,6 +300,20 @@ export default {
     this.pauseActiveClip()
   },
   computed: {
+    displayParts() {
+      if (!this.word || !Array.isArray(this.word.parts) || !this.word.parts.length) {
+        return []
+      }
+      return this.word.parts.map((part, index) => {
+        const style = this.getPartVisualStyle(part, index)
+        return {
+          ...part,
+          chipStyle: `background-color:${style.bgColor};border-color:${this.expandedPart === part.text ? style.color : style.borderColor};`,
+          textStyle: `color:${style.color};`,
+          showPlus: index < this.word.parts.length - 1
+        }
+      })
+    },
     videoClips() {
       if (!this.word) return []
       if (Array.isArray(this.word.videoClips) && this.word.videoClips.length) {
@@ -292,6 +342,32 @@ export default {
     },
     hasVideoData() {
       return this.videoClips.length > 0
+    },
+    learningTabs() {
+      if (!this.word) return []
+      const tabs = [
+        {
+          label: this.word.parts && this.word.parts.length ? '拆解' : '说明',
+          targetId: 'section-breakdown',
+          hint: this.word.parts && this.word.parts.length ? `${this.word.parts.length}块` : ''
+        },
+        { label: '意象', targetId: 'section-imagery', hint: '' },
+        {
+          label: '例句',
+          targetId: 'section-examples',
+          hint: this.word.examples && this.word.examples.length ? `${this.word.examples.length}句` : ''
+        }
+      ]
+      if (this.relatedWords.length) {
+        tabs.push({ label: '同族词', targetId: 'section-related', hint: `${this.relatedWords.length}个` })
+      }
+      tabs.push({
+        label: '视频',
+        targetId: 'section-video',
+        hint: this.hasVideoData ? `${this.videoClips.length}段` : '待补充',
+        highlight: this.hasVideoData
+      })
+      return tabs
     },
     activeVideo() {
       if (!this.hasVideoData) return {}
@@ -476,8 +552,66 @@ export default {
       this.expandedPart = partText
       this.activePartMeaning = part ? part.meaning : ''
     },
+    getPartFallbackStyle(index) {
+      const fallbackStyles = [
+        {
+          color: '#7C3AED',
+          bgColor: '#F3F0FF',
+          borderColor: '#C4B5FD'
+        },
+        {
+          color: '#C9973A',
+          bgColor: '#FFFBEB',
+          borderColor: '#FCD34D'
+        },
+        {
+          color: '#0E7490',
+          bgColor: '#ECFEFF',
+          borderColor: '#A5F3FC'
+        },
+        {
+          color: '#2563EB',
+          bgColor: '#EFF6FF',
+          borderColor: '#BFDBFE'
+        },
+        {
+          color: '#E11D48',
+          bgColor: '#FFF1F2',
+          borderColor: '#FECACA'
+        }
+      ]
+      return fallbackStyles[index % fallbackStyles.length]
+    },
+    getPartVisualStyle(part, index) {
+      const fallback = this.getPartFallbackStyle(index)
+      return {
+        color: part && part.color ? part.color : fallback.color,
+        bgColor: part && part.bgColor ? part.bgColor : fallback.bgColor,
+        borderColor: part && part.borderColor ? part.borderColor : fallback.borderColor
+      }
+    },
     toggleDesc() {
       this.showFullDesc = !this.showFullDesc
+    },
+    scrollToLearningSection(event) {
+      const dataset = event && event.currentTarget ? event.currentTarget.dataset : {}
+      this.scrollToSection(dataset.targetId)
+    },
+    openVideoSection() {
+      this.scrollToSection('section-video')
+    },
+    scrollToSection(targetId) {
+      if (!targetId) return
+      uni.pageScrollTo({
+        selector: `#${targetId}`,
+        duration: 260,
+        fail: () => {
+          uni.showToast({
+            title: '暂时无法跳到这一块',
+            icon: 'none'
+          })
+        }
+      })
     },
     hasVideoPayload(clip) {
       const source = clip || {}
@@ -814,7 +948,11 @@ export default {
 .topbar,
 .tools,
 .title-row,
-.related-list {
+.related-list,
+.hero-actions,
+.hero-video-button,
+.hero-outline-button,
+.hero-play-icon {
   display: flex;
   align-items: center;
 }
@@ -938,6 +1076,96 @@ export default {
   font-size: 22rpx;
 }
 
+.hero-actions {
+  position: relative;
+  z-index: 1;
+  flex-wrap: wrap;
+  gap: 16rpx;
+  margin-top: 28rpx;
+}
+
+.hero-video-button,
+.hero-outline-button {
+  justify-content: center;
+  min-width: 216rpx;
+  min-height: 76rpx;
+  margin: 0;
+  padding: 14rpx 28rpx;
+  border-radius: 999rpx;
+  font-size: 26rpx;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.hero-video-button {
+  gap: 12rpx;
+  background: #ffeba2;
+  color: #0e3a5c;
+  box-shadow: 0 14rpx 34rpx rgba(0, 0, 0, 0.16);
+}
+
+.hero-outline-button {
+  border: 2rpx solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.hero-play-icon {
+  position: relative;
+  justify-content: center;
+  width: 34rpx;
+  height: 34rpx;
+  border-radius: 999rpx;
+  background: #0e3a5c;
+}
+
+.play-triangle.tiny {
+  top: 9rpx;
+  left: 13rpx;
+  border-top-width: 8rpx;
+  border-bottom-width: 8rpx;
+  border-left-width: 12rpx;
+  border-left-color: #ffeba2;
+}
+
+.learning-tabs {
+  width: 100%;
+  margin: 22rpx 0 4rpx;
+  white-space: nowrap;
+}
+
+.learning-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
+  min-height: 68rpx;
+  margin: 0 12rpx 0 0;
+  padding: 0 24rpx;
+  border: 2rpx solid #dbeeff;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.88);
+  color: #0e3a5c;
+  line-height: 1.2;
+  vertical-align: top;
+  box-shadow: 0 6rpx 18rpx rgba(14, 58, 92, 0.05);
+}
+
+.learning-tab.highlight {
+  border-color: rgba(254, 133, 0, 0.34);
+  background: #fff7df;
+}
+
+.learning-tab-label {
+  font-size: 25rpx;
+  font-weight: 900;
+}
+
+.learning-tab-hint {
+  color: #6baed6;
+  font-size: 20rpx;
+  font-weight: 700;
+}
+
 .section {
   margin-top: 24rpx;
   padding: 30rpx;
@@ -966,7 +1194,7 @@ export default {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 12rpx;
+  gap: 14rpx;
   margin-top: 24rpx;
 }
 
@@ -976,6 +1204,7 @@ export default {
   border: 3rpx solid;
   border-radius: 22rpx;
   text-align: center;
+  box-shadow: 0 8rpx 20rpx rgba(14, 58, 92, 0.06);
 }
 
 .part-chip.selected {
@@ -1023,8 +1252,9 @@ export default {
 
 .plus,
 .equals {
-  color: #a9e2ff;
-  font-size: 32rpx;
+  color: #7bbfe8;
+  font-size: 36rpx;
+  font-weight: 900;
 }
 
 .equals-word {
@@ -1425,5 +1655,10 @@ export default {
 .clip-pressed {
   opacity: 0.76;
   transform: scale(0.98);
+}
+
+.tab-pressed {
+  opacity: 0.78;
+  transform: translateY(2rpx);
 }
 </style>

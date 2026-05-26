@@ -131,6 +131,14 @@ export function getRecentWords() {
     .filter((item) => item)
 }
 
+export function clearRecentWords() {
+  const state = getUserState()
+  return saveUserState({
+    ...state,
+    recentWordIds: []
+  })
+}
+
 export function getFavoriteWords() {
   return getUserState()
     .favoriteWordIds.map((id) => getWordById(id))

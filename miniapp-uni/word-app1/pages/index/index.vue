@@ -3,6 +3,7 @@
     <view class="content">
       <view class="hero">
         <view class="hero-ghost">tud port struct</view>
+
         <view class="top-row">
           <view>
             <view class="brand-row">
@@ -11,36 +12,139 @@
             </view>
             <text class="tagline">用象形逻辑，读懂每个英语单词</text>
           </view>
+
           <view class="bell" hover-class="pressed">
             <view class="bell-body"></view>
             <view class="bell-dot"></view>
           </view>
         </view>
 
-        <view class="search-shell" :class="{ focused }">
-          <view class="search-icon">
-            <view class="search-circle"></view>
-            <view class="search-handle"></view>
+        <view class="search-stack">
+          <view class="search-shell" :class="{ focused }">
+            <view class="search-icon">
+              <view class="search-circle"></view>
+              <view class="search-handle"></view>
+            </view>
+
+            <input
+              :value="query"
+              class="search-input"
+              placeholder="输入英语单词，例如 study"
+              placeholder-class="search-placeholder"
+              confirm-type="search"
+              @confirm="submitSearch"
+              @input="handleQueryInput"
+              @focus="handleSearchFocus"
+              @blur="handleSearchBlur"
+            />
+
+            <button
+              class="inline-search"
+              :class="{ inactive: !canSubmitSearch || searching }"
+              :hover-class="searchButtonHoverClass"
+              @tap="submitSearch"
+            >
+              {{ searching ? '查找中' : '搜索' }}
+            </button>
           </view>
-          <input
-            :value="query"
-            class="search-input"
-            placeholder="搜索单词… 试试 study"
-            confirm-type="search"
-            @confirm="submitSearch"
-            @input="handleQueryInput"
-            @focus="handleSearchFocus"
-            @blur="handleSearchBlur"
-          />
-          <button
-            v-if="query"
-            class="inline-search"
-            :disabled="searching"
-            hover-class="text-pressed"
-            @tap="submitSearch"
+
+          <view
+            v-if="searchPanelOpen"
+            class="search-panel"
+            @touchstart="holdSearchPanel"
+            @touchend="releaseSearchPanel"
+            @touchcancel="releaseSearchPanel"
           >
-            {{ searching ? '查找中' : '搜索' }}
-          </button>
+            <view v-if="showRecentPanel" class="panel-section">
+              <view class="panel-head">
+                <text class="panel-title">最近查看</text>
+                <view
+                  v-if="recentWords.length"
+                  class="clear-recent"
+                  hover-class="text-pressed"
+                  @tap="clearRecentHistory"
+                >
+                  <view class="trash-icon">
+                    <view class="trash-lid"></view>
+                    <view class="trash-body"></view>
+                    <view class="trash-line left"></view>
+                    <view class="trash-line right"></view>
+                  </view>
+                  <text>清除历史记录</text>
+                </view>
+                <text v-else class="panel-hint">搜索后自动记录</text>
+              </view>
+
+              <scroll-view
+                v-if="recentWords.length"
+                class="panel-list-scroll"
+                scroll-y
+                :show-scrollbar="false"
+              >
+                <view class="panel-list">
+                  <view
+                    v-for="item in recentWords"
+                    :key="item.id"
+                    class="panel-row"
+                    hover-class="row-pressed"
+                    :data-id="item.id"
+                    :data-count-search="false"
+                    @tap="openDetailFromEvent"
+                  >
+                    <view class="panel-row-main">
+                      <text class="panel-word">{{ item.word }}</text>
+                      <text class="panel-meaning">{{ item.meaning }}</text>
+                    </view>
+                    <text class="panel-row-arrow">></text>
+                  </view>
+                </view>
+              </scroll-view>
+
+              <view v-else class="panel-empty">
+                <text>暂无历史记录，输入单词开始查询。</text>
+              </view>
+            </view>
+
+            <view v-else class="panel-section">
+              <view class="panel-head">
+                <text class="panel-title">推荐结果</text>
+                <text class="panel-hint" v-if="results.length">{{ results.length }} 个</text>
+                <text class="panel-hint" v-else>没有匹配结果</text>
+              </view>
+
+              <scroll-view
+                v-if="results.length"
+                class="panel-list-scroll"
+                scroll-y
+                :show-scrollbar="false"
+              >
+                <view class="panel-list">
+                  <view
+                    v-for="item in results"
+                    :key="item.id"
+                    class="panel-row"
+                    hover-class="row-pressed"
+                    :data-id="item.id"
+                    :data-count-search="true"
+                    @tap="openDetailFromEvent"
+                  >
+                    <view class="panel-row-main">
+                      <text class="panel-word">{{ item.word }}</text>
+                      <text class="panel-meaning">{{ item.meaning }}</text>
+                    </view>
+                    <text class="panel-row-arrow">></text>
+                  </view>
+                </view>
+              </scroll-view>
+
+              <view v-else class="panel-empty">
+                <text>{{ missingDescription }}</text>
+                <button class="panel-empty-action" hover-class="empty-action-pressed" @tap="openFeedback">
+                  提交缺词反馈
+                </button>
+              </view>
+            </view>
+          </view>
         </view>
 
         <view class="stats-row">
@@ -56,54 +160,27 @@
       </view>
 
       <view class="body">
-        <view v-if="searched" class="search-results">
-          <view class="section-head compact">
-            <text class="section-title">搜索结果</text>
-            <text class="result-count">{{ resultCount }} 个</text>
-          </view>
-          <view v-if="resultCount" class="result-list">
-            <view
-              v-for="item in results"
-              :key="item.id"
-              class="result-row"
-              hover-class="row-pressed"
-              :data-id="item.id"
-              :data-count-search="true"
-              @tap="openDetailFromEvent"
-            >
-              <view>
-                <text class="recent-word">{{ item.word }}</text>
-                <text class="recent-meaning">{{ item.meaning }}</text>
-              </view>
-              <text class="row-arrow">›</text>
-            </view>
-          </view>
-          <view v-else class="empty-state">
-            <view class="empty-mark">象</view>
-            <text class="empty-title">暂未收录这个单词</text>
-            <text class="empty-description">{{ missingDescription }}</text>
-            <button class="empty-action" hover-class="empty-action-pressed" @tap="openFeedback">提交缺词反馈</button>
-          </view>
-        </view>
-
         <view v-if="todayWord" class="section-block">
           <view class="section-head">
             <view class="head-left">
               <view class="spark"></view>
               <text class="section-title">今日象形词</text>
             </view>
+
             <view class="detail-link" hover-class="text-pressed" @tap="openTodayWord">
               <text>查看详情</text>
-              <text class="chevron">›</text>
+              <text class="chevron">></text>
             </view>
           </view>
 
           <view class="today-card" hover-class="card-pressed" @tap="openTodayWord">
             <view class="card-ghost">t</view>
+
             <view class="word-row">
               <text class="today-word">{{ todayWord.word }}</text>
               <text class="today-phonetic">{{ todayWord.phonetic }}</text>
             </view>
+
             <view class="parts-line">
               <block v-for="(part, index) in todayParts" :key="part.text">
                 <view class="part-chip" :style="{ backgroundColor: part.bgColor, borderColor: part.borderColor }">
@@ -113,56 +190,13 @@
                 <text v-if="index < todayPartsLastIndex" class="plus">+</text>
               </block>
             </view>
+
             <text class="tip">{{ todayWord.tip }}</text>
+
             <view class="card-foot">
               <text class="level-badge">{{ todayWord.level }} 必备</text>
-              <text class="tap-tip">点击查看完整解析 →</text>
+              <text class="tap-tip">点击查看完整解析 -></text>
             </view>
-          </view>
-        </view>
-
-        <view class="section-block">
-          <text class="section-title">热门搜索</text>
-          <view class="hot-list">
-            <view
-              v-for="word in hotWords"
-              :key="word"
-              class="hot-chip"
-              hover-class="chip-pressed"
-              :data-word="word"
-              @tap="searchHotFromEvent"
-            >
-              {{ word }}
-            </view>
-          </view>
-        </view>
-
-        <view class="section-block">
-          <view class="section-head">
-            <text class="section-title">最近查看</text>
-            <text v-if="recentWords.length" class="hint-text">保存在本机</text>
-          </view>
-          <view v-if="recentWords.length" class="recent-list">
-            <view
-              v-for="item in recentWords"
-              :key="item.id"
-              class="recent-row"
-              hover-class="row-pressed"
-              :data-id="item.id"
-              :data-count-search="false"
-              @tap="openDetailFromEvent"
-            >
-              <view>
-                <text class="recent-word">{{ item.word }}</text>
-                <text class="recent-meaning">{{ item.meaning }}</text>
-              </view>
-              <text class="row-arrow">›</text>
-            </view>
-          </view>
-          <view v-else class="empty-state">
-            <view class="empty-mark">象</view>
-            <text class="empty-title">还没有查看记录</text>
-            <text class="empty-description">搜索一个单词后，这里会自动保存最近查看。</text>
           </view>
         </view>
       </view>
@@ -178,6 +212,7 @@
         <text class="nav-label">查词</text>
         <view class="nav-dot"></view>
       </view>
+
       <view class="nav-item" hover-class="nav-item-pressed" @tap="goMine">
         <view class="nav-icon mine">
           <view class="i-a"></view>
@@ -191,8 +226,8 @@
 </template>
 
 <script>
-import { HOT_WORDS, TODAY_WORD_ID, getWordById, getWordByWord, searchWords, normalizeWordQuery } from '../../common/word-repository.js'
-import { addRecentWord, getRecentWords, getUserState, savePendingWordId } from '../../common/user-store.js'
+import { TODAY_WORD_ID, getWordById, getWordByWord, searchWords, normalizeWordQuery } from '../../common/word-repository.js'
+import { addRecentWord, clearRecentWords, getRecentWords, getUserState, savePendingWordId } from '../../common/user-store.js'
 
 const initialTodayWord = getWordById(TODAY_WORD_ID)
 
@@ -201,12 +236,12 @@ export default {
     return {
       query: '',
       focused: false,
-      searched: false,
+      searchPanelOpen: false,
+      searchBlurTimer: null,
+      interactingWithSearchPanel: false,
       searching: false,
       missingWord: '',
       results: [],
-      resultCount: 0,
-      hotWords: HOT_WORDS,
       recentWords: [],
       userState: getUserState(),
       todayWord: initialTodayWord,
@@ -218,55 +253,108 @@ export default {
   onShow() {
     this.refreshUserData()
   },
+  onUnload() {
+    this.clearSearchBlurTimer()
+  },
+  computed: {
+    normalizedQuery() {
+      return normalizeWordQuery(this.query)
+    },
+    canSubmitSearch() {
+      return Boolean(this.normalizedQuery)
+    },
+    searchButtonHoverClass() {
+      return this.canSubmitSearch && !this.searching ? 'text-pressed' : ''
+    },
+    showRecentPanel() {
+      return !this.normalizedQuery
+    }
+  },
   methods: {
     refreshUserData() {
       this.recentWords = getRecentWords()
       this.userState = getUserState()
     },
+    resetSuggestionState() {
+      this.results = []
+      this.missingWord = ''
+      this.missingDescription = ''
+    },
+    buildMissingDescription(word) {
+      if (!word) return ''
+      return `可以先提交“${word}”，后续优先补充讲解。`
+    },
+    updateSuggestionState(word) {
+      this.results = searchWords(word)
+      this.missingWord = word
+      this.missingDescription = this.buildMissingDescription(word)
+    },
     handleQueryInput(event) {
       this.query = event && event.detail ? event.detail.value : ''
+      this.searchPanelOpen = true
+
+      if (!this.normalizedQuery) {
+        this.resetSuggestionState()
+        return
+      }
+
+      this.updateSuggestionState(this.normalizedQuery)
     },
     handleSearchFocus() {
+      this.clearSearchBlurTimer()
       this.focused = true
+      this.searchPanelOpen = true
     },
     handleSearchBlur() {
       this.focused = false
+      this.clearSearchBlurTimer()
+      this.searchBlurTimer = setTimeout(() => {
+        if (this.interactingWithSearchPanel) return
+        this.searchPanelOpen = false
+      }, 240)
+    },
+    holdSearchPanel() {
+      this.interactingWithSearchPanel = true
+      this.clearSearchBlurTimer()
+      this.searchPanelOpen = true
+    },
+    releaseSearchPanel() {
+      setTimeout(() => {
+        this.interactingWithSearchPanel = false
+      }, 260)
+    },
+    clearSearchBlurTimer() {
+      if (!this.searchBlurTimer) return
+      clearTimeout(this.searchBlurTimer)
+      this.searchBlurTimer = null
     },
     submitSearch() {
-      const word = normalizeWordQuery(this.query)
+      if (this.searching) return
+
+      this.clearSearchBlurTimer()
+
+      const word = this.normalizedQuery
       if (!word) {
-        this.searched = false
-        this.results = []
-        this.resultCount = 0
-        this.missingWord = ''
+        this.searchPanelOpen = true
         return
       }
 
       this.searching = true
       const exact = getWordByWord(word)
       if (exact) {
-        addRecentWord(exact.id)
-        this.refreshUserData()
         this.searching = false
-        this.openDetail(exact.id, false)
+        this.openDetail(exact.id, true)
         return
       }
 
-      const matches = searchWords(word)
-      this.results = matches
-      this.resultCount = matches.length
-      this.missingWord = word
-      this.missingDescription = `可以先提交“${word}”，后续优先补充讲解。`
-      this.searched = true
+      this.updateSuggestionState(word)
       this.searching = false
+      this.searchPanelOpen = true
     },
-    searchHot(word) {
-      this.query = word
-      this.submitSearch()
-    },
-    searchHotFromEvent(event) {
-      const dataset = event && event.currentTarget ? event.currentTarget.dataset : {}
-      this.searchHot(dataset.word)
+    clearRecentHistory() {
+      clearRecentWords()
+      this.refreshUserData()
+      this.searchPanelOpen = true
     },
     openTodayWord() {
       if (!this.todayWord) return
@@ -279,6 +367,8 @@ export default {
     },
     openDetail(id, countSearch = false) {
       if (!id) return
+      this.searchPanelOpen = false
+      this.clearSearchBlurTimer()
       savePendingWordId(id)
       addRecentWord(id, { countSearch })
       this.refreshUserData()
@@ -287,7 +377,7 @@ export default {
       })
     },
     openFeedback() {
-      const word = encodeURIComponent(this.missingWord || this.query || '')
+      const word = encodeURIComponent(this.missingWord || this.normalizedQuery || '')
       uni.navigateTo({
         url: `/pages/mine/index?feedbackWord=${word}`
       })
@@ -309,13 +399,14 @@ export default {
 
 .content {
   min-height: 100vh;
-  padding-bottom: 168rpx;
+  padding-bottom: 176rpx;
 }
 
 .hero {
   position: relative;
-  overflow: hidden;
-  padding: 92rpx 40rpx 34rpx;
+  z-index: 2;
+  overflow: visible;
+  padding: 92rpx 40rpx 48rpx;
   background: linear-gradient(160deg, #0e3a5c 0%, #1a5a8a 100%);
 }
 
@@ -323,8 +414,8 @@ export default {
   position: absolute;
   top: -28rpx;
   right: -18rpx;
-  font-size: 72rpx;
   color: rgba(255, 255, 255, 0.06);
+  font-size: 72rpx;
   letter-spacing: 8rpx;
 }
 
@@ -338,13 +429,13 @@ export default {
 .word-row,
 .parts-line,
 .card-foot,
-.recent-row,
-.result-row {
+.panel-head,
+.panel-row,
+.panel-row-main {
   display: flex;
 }
 
 .top-row {
-  position: relative;
   align-items: center;
   justify-content: space-between;
 }
@@ -406,43 +497,51 @@ export default {
   background: #fe8500;
 }
 
+.search-stack {
+  position: relative;
+  z-index: 12;
+  margin-top: 96rpx;
+}
+
 .search-shell {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 20rpx;
-  height: 96rpx;
-  margin-top: 38rpx;
-  padding: 0 28rpx;
-  border: 3rpx solid rgba(255, 255, 255, 0.15);
-  border-radius: 32rpx;
-  background: rgba(255, 255, 255, 0.13);
+  gap: 22rpx;
+  min-height: 136rpx;
+  padding: 0 18rpx 0 30rpx;
+  border: 2rpx solid rgba(255, 255, 255, 0.1);
+  border-radius: 34rpx;
+  background: #09314f;
+  box-shadow: 0 24rpx 54rpx rgba(3, 23, 45, 0.3);
 }
 
 .search-shell.focused {
-  border-color: #a9e2ff;
+  border-color: rgba(255, 171, 80, 0.9);
+  box-shadow: 0 24rpx 60rpx rgba(3, 23, 45, 0.34), 0 0 0 8rpx rgba(255, 171, 80, 0.14);
 }
 
 .search-icon {
   position: relative;
-  width: 36rpx;
-  height: 36rpx;
-  color: rgba(255, 255, 255, 0.72);
+  flex-shrink: 0;
+  width: 44rpx;
+  height: 44rpx;
+  color: #ffffff;
 }
 
 .search-circle {
-  width: 24rpx;
-  height: 24rpx;
-  border: 4rpx solid currentColor;
+  width: 30rpx;
+  height: 30rpx;
+  border: 5rpx solid currentColor;
   border-radius: 999rpx;
 }
 
 .search-handle {
   position: absolute;
-  right: 2rpx;
+  right: 0;
   bottom: 2rpx;
-  width: 16rpx;
-  height: 4rpx;
+  width: 18rpx;
+  height: 5rpx;
   border-radius: 999rpx;
   background: currentColor;
   transform: rotate(45deg);
@@ -451,26 +550,208 @@ export default {
 .search-input {
   flex: 1;
   min-width: 0;
+  height: 100%;
   color: #ffffff;
-  font-size: 30rpx;
+  font-size: 36rpx;
+  font-weight: 800;
+}
+
+.search-placeholder {
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 32rpx;
+  font-weight: 600;
 }
 
 .inline-search {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 156rpx;
+  min-height: 88rpx;
   padding: 0;
   margin: 0;
-  background: transparent;
+  border-radius: 28rpx;
+  background: #ffab50;
+  color: #09314f;
+  font-size: 28rpx;
+  font-weight: 800;
+  line-height: 1.2;
+  box-shadow: 0 12rpx 26rpx rgba(255, 171, 80, 0.3);
+}
+
+.inline-search::after,
+.panel-empty-action::after {
+  border: 0;
+}
+
+.inline-search.inactive {
+  color: rgba(9, 49, 79, 0.56);
+  box-shadow: 0 10rpx 20rpx rgba(255, 171, 80, 0.22);
+}
+
+.search-panel {
+  position: absolute;
+  top: calc(100% + 18rpx);
+  left: 0;
+  right: 0;
+  overflow: hidden;
+  padding: 24rpx;
+  border: 2rpx solid rgba(255, 255, 255, 0.14);
+  border-radius: 30rpx;
+  background: rgba(9, 49, 79, 0.98);
+  box-shadow: 0 20rpx 48rpx rgba(3, 23, 45, 0.28);
+}
+
+.panel-head {
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.panel-title {
   color: #ffeba2;
+  font-size: 26rpx;
+  font-weight: 900;
+}
+
+.panel-hint {
+  flex-shrink: 0;
+  color: rgba(169, 226, 255, 0.82);
+  font-size: 22rpx;
+}
+
+.clear-recent {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  flex-shrink: 0;
+  color: #ffab50;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.trash-icon {
+  position: relative;
+  width: 24rpx;
+  height: 26rpx;
+}
+
+.trash-lid {
+  position: absolute;
+  left: 4rpx;
+  top: 0;
+  width: 16rpx;
+  height: 4rpx;
+  border-radius: 999rpx;
+  background: currentColor;
+}
+
+.trash-body {
+  position: absolute;
+  left: 5rpx;
+  top: 7rpx;
+  width: 14rpx;
+  height: 17rpx;
+  border: 3rpx solid currentColor;
+  border-top: 0;
+  border-radius: 0 0 5rpx 5rpx;
+}
+
+.trash-line {
+  position: absolute;
+  top: 10rpx;
+  width: 3rpx;
+  height: 11rpx;
+  border-radius: 999rpx;
+  background: currentColor;
+}
+
+.trash-line.left {
+  left: 10rpx;
+}
+
+.trash-line.right {
+  right: 10rpx;
+}
+
+.panel-list-scroll {
+  max-height: 520rpx;
+  margin-top: 16rpx;
+}
+
+.panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+}
+
+.panel-row {
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  min-height: 92rpx;
+  padding: 18rpx 22rpx;
+  border-radius: 20rpx;
+  background: #d9efff;
+}
+
+.panel-row-main {
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.panel-word {
+  color: #0e3a5c;
+  font-size: 28rpx;
+  font-weight: 800;
+}
+
+.panel-meaning {
+  margin-top: 4rpx;
+  color: #5d88aa;
+  font-size: 20rpx;
+  line-height: 1.45;
+}
+
+.panel-row-arrow {
+  flex-shrink: 0;
+  color: #fe8500;
+  font-size: 34rpx;
+  font-weight: 800;
+}
+
+.panel-empty {
+  margin-top: 16rpx;
+  padding: 20rpx;
+  border-radius: 20rpx;
+  background: #d9efff;
+  color: #5d88aa;
+  font-size: 22rpx;
+  line-height: 1.6;
+}
+
+.panel-empty-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 220rpx;
+  min-height: 68rpx;
+  margin: 18rpx 0 0;
+  padding: 0 26rpx;
+  border-radius: 999rpx;
+  background: #ffab50;
+  color: #09314f;
   font-size: 24rpx;
   font-weight: 800;
-  line-height: 1;
 }
 
 .stats-row {
   align-items: center;
   flex-wrap: wrap;
   gap: 24rpx;
-  margin-top: 28rpx;
+  margin-top: 32rpx;
 }
 
 .stat-item {
@@ -509,26 +790,19 @@ export default {
 }
 
 .body {
+  position: relative;
+  z-index: 1;
   padding: 30rpx 32rpx 32rpx;
 }
 
-.section-block,
-.search-results {
+.section-block {
   margin-top: 34rpx;
-}
-
-.search-results {
-  margin-top: 0;
 }
 
 .section-head {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 18rpx;
-}
-
-.compact {
-  margin-top: 0;
 }
 
 .head-left,
@@ -556,10 +830,9 @@ export default {
   font-size: 24rpx;
 }
 
-.chevron,
-.row-arrow {
+.chevron {
   color: #fe8500;
-  font-size: 40rpx;
+  font-size: 32rpx;
 }
 
 .today-card {
@@ -620,9 +893,7 @@ export default {
 .part-meaning,
 .tip,
 .level-badge,
-.tap-tip,
-.recent-word,
-.recent-meaning {
+.tap-tip {
   display: block;
 }
 
@@ -643,7 +914,6 @@ export default {
 }
 
 .tip {
-  position: relative;
   color: rgba(255, 255, 255, 0.76);
   font-size: 24rpx;
   line-height: 1.7;
@@ -670,69 +940,115 @@ export default {
   font-size: 22rpx;
 }
 
-.hot-list {
+.bottom-nav {
+  position: fixed;
+  left: 24rpx;
+  right: 24rpx;
+  bottom: 24rpx;
   display: flex;
-  flex-wrap: wrap;
-  gap: 14rpx;
-  margin-top: 18rpx;
-}
-
-.hot-chip {
-  padding: 12rpx 26rpx;
-  border: 2rpx solid #ececec;
-  border-radius: 999rpx;
-  background: #ffffff;
-  color: #0e3a5c;
-  font-size: 26rpx;
-  font-weight: 700;
-  box-shadow: 0 4rpx 10rpx rgba(14, 58, 92, 0.07);
-}
-
-.recent-list,
-.result-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16rpx;
-}
-
-.recent-row,
-.result-row {
   align-items: center;
-  justify-content: space-between;
-  min-height: 100rpx;
-  padding: 0 28rpx;
-  border: 2rpx solid #ececec;
-  border-radius: 24rpx;
-  background: #ffffff;
-  box-shadow: 0 4rpx 12rpx rgba(14, 58, 92, 0.05);
+  justify-content: space-around;
+  padding: 18rpx 16rpx calc(18rpx + env(safe-area-inset-bottom));
+  border-radius: 30rpx;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18rpx 48rpx rgba(14, 58, 92, 0.12);
+  backdrop-filter: blur(12rpx);
 }
 
-.recent-word {
+.nav-item {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8rpx;
+  min-height: 88rpx;
+}
+
+.nav-icon {
+  position: relative;
+  width: 42rpx;
+  height: 42rpx;
+  color: #8cbfe6;
+}
+
+.nav-item.active .nav-icon,
+.nav-item.active .nav-label {
   color: #0e3a5c;
-  font-size: 32rpx;
-  font-weight: 800;
 }
 
-.recent-meaning {
-  max-width: 560rpx;
-  margin-top: 6rpx;
-  color: #6baed6;
-  font-size: 22rpx;
-  line-height: 1.45;
+.nav-icon.search .i-a {
+  position: absolute;
+  left: 4rpx;
+  top: 4rpx;
+  width: 24rpx;
+  height: 24rpx;
+  border: 4rpx solid currentColor;
+  border-radius: 999rpx;
 }
 
-.result-count,
-.hint-text {
-  color: #6baed6;
+.nav-icon.search .i-b {
+  position: absolute;
+  right: 3rpx;
+  bottom: 5rpx;
+  width: 16rpx;
+  height: 4rpx;
+  border-radius: 999rpx;
+  background: currentColor;
+  transform: rotate(45deg);
+}
+
+.nav-icon.search .i-c {
+  display: none;
+}
+
+.nav-icon.mine .i-a {
+  position: absolute;
+  left: 11rpx;
+  top: 2rpx;
+  width: 18rpx;
+  height: 18rpx;
+  border: 4rpx solid currentColor;
+  border-radius: 999rpx;
+}
+
+.nav-icon.mine .i-b {
+  position: absolute;
+  left: 5rpx;
+  bottom: 4rpx;
+  width: 30rpx;
+  height: 18rpx;
+  border: 4rpx solid currentColor;
+  border-top-left-radius: 18rpx;
+  border-top-right-radius: 18rpx;
+  border-bottom: 0;
+}
+
+.nav-icon.mine .i-c {
+  display: none;
+}
+
+.nav-label {
+  color: #8cbfe6;
   font-size: 24rpx;
+  font-weight: 700;
+}
+
+.nav-dot {
+  width: 8rpx;
+  height: 8rpx;
+  border-radius: 999rpx;
+  background: #fe8500;
 }
 
 .pressed,
 .text-pressed,
-.chip-pressed,
 .card-pressed,
-.row-pressed {
-  opacity: 0.78;
+.row-pressed,
+.button-pressed,
+.nav-item-pressed,
+.empty-action-pressed {
+  opacity: 0.8;
   transform: scale(0.98);
 }
 </style>

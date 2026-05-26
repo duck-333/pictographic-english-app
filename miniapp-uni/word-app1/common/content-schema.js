@@ -46,9 +46,9 @@ export function normalizeWordPart(part) {
     text: source.text || source.label || '',
     meaning: source.meaning || source.title || '',
     targetId: source.targetId || '',
-    color: source.color || '#0e3a5c',
-    bgColor: source.bgColor || '#f5fbff',
-    borderColor: source.borderColor || '#dbeeff'
+    color: source.color || '',
+    bgColor: source.bgColor || '',
+    borderColor: source.borderColor || ''
   }
 }
 

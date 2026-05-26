@@ -1,5 +1,28 @@
 # Documentation
 
+### 2026-05-25: homepage search hero layout
+- Move the home search box lower inside the hero so the title area and search action have more breathing room.
+- Use a dark search base (`#09314F`) and a warm search button (`#FFAB50`) to make search feel like the primary action.
+- Show recent history as a semi-floating overlay attached to the search box instead of pushing the study card and other home content downward.
+- Use one shared search overlay with two states:
+  - no input -> recent history
+  - typed input -> suggested results
+- Do not render a separate search-results block in the page body anymore.
+
+### 2026-05-24：首页搜索作为第一主入口
+
+决策：
+- 首页首屏强化搜索框，把它设计成用户第一眼能理解的主操作区。
+- 热门搜索不再作为首页正文或搜索下拉内容展示，减少首屏干扰。
+- 最近查看不再作为正文常驻模块展示，改为用户点击搜索框后出现的搜索下拉内容。
+- 最近查看右侧提供“清除历史记录”入口，点击后直接清空最近查看，不弹二次确认，不删除收藏、昵称、反馈等其他本地数据。
+- 搜索下拉内容仍复用现有本地最近查看数据，不新增后台结构、不改 preview bridge。
+
+原因：
+- 首页默认状态更干净，用户更容易理解“先输入一个英语单词开始查词”。
+- 最近查看本质上是搜索辅助信息，放到搜索动作之后出现，比常驻在首页更符合查词路径。
+- 第一版 MVP 先稳定“搜索 -> 详情 -> 视频/拆解/我的”的主链路，避免首页堆太多未闭环入口。
+
 ### 2026-05-18：本地 mock 视频闭环方案
 
 决策：
