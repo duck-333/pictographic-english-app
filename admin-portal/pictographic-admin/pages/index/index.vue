@@ -41,7 +41,20 @@
 					</view>
 					<button class="small-button" @click="createWord">新增</button>
 				</view>
-				<input class="search-input" v-model="keyword" placeholder="搜索 study / tud / transport" />
+				<view class="list-search-row">
+					<input
+						class="search-input list-search-input"
+						v-model="keywordDraft"
+						placeholder="搜索 study / tud / transport"
+						confirm-type="search"
+						@confirm="applyKeywordSearch"
+					/>
+					<button class="search-button" @click="applyKeywordSearch">搜索</button>
+				</view>
+				<view v-if="keyword" class="search-active-row">
+					<text>正在搜索：{{ keyword }}</text>
+					<button class="clear-search-button" @click="clearKeywordSearch">清空</button>
+				</view>
 				<view class="bucket-tabs">
 					<button :class="['bucket-tab', activeBucket === 'uploaded' ? 'active' : '']" @click="switchBucket('uploaded')">
 						已上传 {{ stats.total }}
@@ -537,6 +550,7 @@ function clone(value) {
 export default {
 	data() {
 		return {
+			keywordDraft: '',
 			keyword: '',
 			expandedLetters: [],
 			importText: '',
@@ -746,8 +760,15 @@ export default {
 		},
 		switchBucket(bucket) {
 			if (this.activeBucket === bucket) return
-			if (!this.validateCurrent()) return
-			this.persistFormToList()
+			const applySwitch = () => this.applyBucketSwitch(bucket)
+			if (this.validateCurrent()) {
+				this.persistFormToList()
+				applySwitch()
+				return
+			}
+			this.confirmDiscardInvalidEdit(applySwitch)
+		},
+		applyBucketSwitch(bucket) {
 			this.activeBucket = bucket
 			const source = bucket === 'pending' ? 'pending' : 'uploaded'
 			const list = source === 'pending' ? this.pendingWords : this.words
@@ -776,17 +797,51 @@ export default {
 			this.selectFromList(id, 'uploaded')
 		},
 		selectFromList(id, source, skipPersist) {
-			if (!this.validateCurrent()) return
-			if (!skipPersist) this.persistFormToList()
 			const list = source === 'pending' ? this.pendingWords : this.words
 			const target = list.find((item) => item.id === id)
 			if (!target) return
+			if (source === this.selectedSource && id === this.selectedId) {
+				if (this.validateCurrent()) return
+				this.confirmDiscardInvalidEdit(() => this.applySelectedEntry(target, source))
+				return
+			}
+			const applySelection = () => this.applySelectedEntry(target, source)
+			if (skipPersist) {
+				applySelection()
+				return
+			}
+			if (this.validateCurrent()) {
+				this.persistFormToList()
+				applySelection()
+				return
+			}
+			this.confirmDiscardInvalidEdit(applySelection)
+		},
+		applySelectedEntry(target, source) {
+			if (!target) return
+			const id = target.id
+			this.editingClipIndex = -1
+			this.stopUserVideoPreview(false)
 			this.activeBucket = source === 'pending' ? 'pending' : 'uploaded'
 			this.selectedSource = source
 			this.selectedId = id
 			this.form = source === 'pending' ? this.normalizePendingWord(target) : this.normalizeWord(target)
 			this.syncVideoUploadStateFromForm()
 			this.saveState = (source === 'pending' ? '正在检查未上传 ' : '正在编辑 ') + target.word
+		},
+		confirmDiscardInvalidEdit(onConfirm) {
+			uni.showModal({
+				title: '当前编辑未保存',
+				content: '当前表单存在重复 ID 或未通过校验，无法自动保存。要放弃当前未保存修改并切换词条吗？',
+				confirmText: '放弃并切换',
+				cancelText: '继续编辑',
+				confirmColor: '#fe8500',
+				success: (result) => {
+					if (result.confirm && typeof onConfirm === 'function') {
+						onConfirm()
+					}
+				}
+			})
 		},
 		createWord() {
 			if (!this.validateCurrent()) return
@@ -1007,6 +1062,24 @@ export default {
 			const source = String(item.word || item.id || '').trim()
 			const first = source.charAt(0).toUpperCase()
 			return LETTERS.indexOf(first) > -1 ? first : ''
+		},
+		applyKeywordSearch() {
+			const normalizedKeyword = String(this.keywordDraft || '').trim()
+			this.keyword = normalizedKeyword
+			this.keywordDraft = normalizedKeyword
+			if (!normalizedKeyword) {
+				this.expandedLetters = this.defaultExpandedLetters(this.activeWords)
+				return
+			}
+			const firstMatch = this.filteredWords[0]
+			if (firstMatch) {
+				this.ensureLetterExpanded(this.getFirstLetter(firstMatch) || '#')
+			}
+		},
+		clearKeywordSearch() {
+			this.keywordDraft = ''
+			this.keyword = ''
+			this.expandedLetters = this.defaultExpandedLetters(this.activeWords)
 		},
 		matchesKeyword(item) {
 			const keyword = this.keyword.trim().toLowerCase()
@@ -3103,6 +3176,49 @@ button::after {
 
 .panel-note {
 	color: #7793a6;
+}
+
+.list-search-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 78px;
+	gap: 10px;
+	align-items: center;
+	margin-bottom: 10px;
+}
+
+.list-search-input {
+	min-width: 0;
+}
+
+.search-button {
+	height: 42px;
+	line-height: 42px;
+	border-radius: 14px;
+	background: #0e3a5c;
+	color: #fff;
+	font-size: 14px;
+	font-weight: 800;
+}
+
+.search-active-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin: -2px 0 12px;
+	color: #6c8799;
+	font-size: 12px;
+}
+
+.clear-search-button {
+	height: 28px;
+	line-height: 28px;
+	padding: 0 12px;
+	border-radius: 999px;
+	background: #edf7fc;
+	color: #0e3a5c;
+	font-size: 12px;
+	font-weight: 700;
 }
 
 .search-input,
