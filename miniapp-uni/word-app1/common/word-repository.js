@@ -36,6 +36,33 @@ export const TODAY_WORD_ID = LOCAL_TODAY_WORD_ID
 export const NAV_ITEMS = LOCAL_NAV_ITEMS
 
 const WORD_RECORDS = SOURCE_WORDS.map((item) => normalizeWordRecord(item))
+const PUBLISHED_WORD_RECORDS = WORD_RECORDS.filter((item) => item.status === 'published')
+
+function getLookupCandidates(value) {
+  const raw = (value || '').trim()
+  if (!raw) return []
+  return [
+    raw,
+    raw.indexOf('word-') === 0 || raw.indexOf('node-') === 0 ? raw : `word-${raw}`,
+    raw.indexOf('word-') === 0 || raw.indexOf('node-') === 0 ? raw : `node-${raw}`
+  ]
+}
+
+function findWordById(records, id) {
+  const targetId = (id || '').trim()
+  return records.find((item) => item.id === targetId)
+}
+
+function findAnyWordByValue(value) {
+  const raw = (value || '').trim()
+  const candidates = getLookupCandidates(raw)
+  for (let index = 0; index < candidates.length; index += 1) {
+    const byId = findWordById(WORD_RECORDS, candidates[index])
+    if (byId) return byId
+  }
+  const keyword = normalizeWordQuery(raw)
+  return WORD_RECORDS.find((item) => item.word.toLowerCase() === keyword)
+}
 
 function clonePart(part) {
   return { ...part }
@@ -80,7 +107,7 @@ export function getContentRepositoryInfo() {
 }
 
 export function listWords() {
-  return WORD_RECORDS.map((item) => cloneWord(item))
+  return PUBLISHED_WORD_RECORDS.map((item) => cloneWord(item))
 }
 
 export function searchWords(query) {
@@ -88,19 +115,29 @@ export function searchWords(query) {
   if (!keyword) {
     return []
   }
-  return WORD_RECORDS.filter((item) => item.word.toLowerCase().includes(keyword)).map((item) => cloneWord(item))
+  return PUBLISHED_WORD_RECORDS.filter((item) => item.word.toLowerCase().includes(keyword)).map((item) => cloneWord(item))
 }
 
 export function getWordById(id) {
-  const targetId = (id || '').trim()
-  const word = WORD_RECORDS.find((item) => item.id === targetId)
+  const word = findWordById(PUBLISHED_WORD_RECORDS, id)
   return cloneWord(word)
 }
 
 export function getWordByWord(word) {
   const keyword = normalizeWordQuery(word)
-  const record = WORD_RECORDS.find((item) => item.word.toLowerCase() === keyword)
+  const record = PUBLISHED_WORD_RECORDS.find((item) => item.word.toLowerCase() === keyword)
   return cloneWord(record)
+}
+
+export function getWordAccessInfo(value) {
+  const record = findAnyWordByValue(value)
+  return {
+    exists: Boolean(record),
+    published: Boolean(record && record.status === 'published'),
+    status: record ? record.status : '',
+    id: record ? record.id : '',
+    word: record ? record.word : ''
+  }
 }
 
 export function getRelatedWords(word) {

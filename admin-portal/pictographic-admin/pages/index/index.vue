@@ -57,10 +57,13 @@
 				</view>
 				<view class="bucket-tabs">
 					<button :class="['bucket-tab', activeBucket === 'uploaded' ? 'active' : '']" @click="switchBucket('uploaded')">
-						已上传 {{ stats.total }}
+						已上传 {{ stats.manageable }}
 					</button>
 					<button :class="['bucket-tab', activeBucket === 'pending' ? 'active' : '']" @click="switchBucket('pending')">
 						未上传 {{ pendingWords.length }}
+					</button>
+					<button :class="['bucket-tab', activeBucket === 'archived' ? 'active' : '']" @click="switchBucket('archived')">
+						已归档 {{ stats.archived }}
 					</button>
 				</view>
 				<view class="list-summary-card">
@@ -121,8 +124,10 @@
 					</view>
 					<view class="editor-actions">
 						<view class="save-state">{{ saveState }}</view>
-						<button class="secondary-button" @click="saveCurrentAsDraft">保存为草稿</button>
+						<button class="secondary-button" @click="saveCurrentAsDraft">{{ draftActionText }}</button>
 						<button class="publish-button" @click="publishCurrent">{{ primaryActionText }}</button>
+						<button v-if="canUnpublishCurrent" class="danger-button" @click="unpublishCurrent">撤下当前词条</button>
+						<button v-if="canArchiveCurrent" class="archive-button" @click="archiveCurrent">归档当前词条</button>
 					</view>
 				</view>
 
@@ -484,6 +489,12 @@ const AUDIO_MAX_SIZE_BYTES = AUDIO_MAX_SIZE_MB * 1024 * 1024
 const AUDIO_UPLOAD_PROVIDER = 'local-audio-upload-rehearsal'
 const BRIDGE_RUNTIME_ASSET_MAX_MB = 80
 const BRIDGE_RUNTIME_ASSET_MAX_BYTES = BRIDGE_RUNTIME_ASSET_MAX_MB * 1024 * 1024
+const ADMIN_STATUS_VALUES = ['draft', 'published', 'review', 'unpublished', 'archived']
+
+function normalizeAdminStatus(status, fallback = 'draft') {
+	const value = String(status || '').trim()
+	return ADMIN_STATUS_VALUES.indexOf(value) > -1 ? value : fallback
+}
 
 const seedWords = [{
 	id: 'study',
@@ -607,6 +618,8 @@ export default {
 			statusOptions: [
 				{ label: '草稿', value: 'draft' },
 				{ label: '已发布', value: 'published' },
+				{ label: '已撤下', value: 'unpublished' },
+				{ label: '已归档', value: 'archived' },
 				{ label: '待复核', value: 'review' },
 				{ label: '未上传', value: 'pending' }
 			],
@@ -619,16 +632,32 @@ export default {
 	},
 	computed: {
 		activeWords() {
-			return this.activeBucket === 'pending' ? this.pendingWords : this.words
+			if (this.activeBucket === 'pending') return this.pendingWords
+			if (this.activeBucket === 'archived') return this.words.filter((item) => item.status === 'archived')
+			return this.words.filter((item) => item.status !== 'archived')
 		},
 		activeBucketLabel() {
-			return this.activeBucket === 'pending' ? '未上传待检查' : '已上传草稿库'
+			if (this.activeBucket === 'pending') return '未上传待检查'
+			if (this.activeBucket === 'archived') return '已归档词条'
+			return '已上传草稿库'
 		},
 		activeListTotal() {
 			return this.activeWords.length
 		},
 		primaryActionText() {
-			return this.selectedSource === 'pending' ? '加入草稿列表' : '发布当前词条'
+			if (this.selectedSource === 'pending') return '加入草稿列表'
+			if (this.form.status === 'unpublished') return '重新发布'
+			if (this.form.status === 'archived') return '重新发布'
+			return '发布当前词条'
+		},
+		draftActionText() {
+			return this.form.status === 'archived' ? '恢复为草稿' : '保存为草稿'
+		},
+		canUnpublishCurrent() {
+			return this.selectedSource !== 'pending' && this.form.status === 'published'
+		},
+		canArchiveCurrent() {
+			return this.selectedSource !== 'pending' && this.form.status !== 'archived'
 		},
 		filteredWords() {
 			return this.activeWords.filter((item) => this.matchesKeyword(item))
@@ -636,8 +665,11 @@ export default {
 		stats() {
 			return {
 				total: this.words.length,
+				manageable: this.words.filter((item) => item.status !== 'archived').length,
 				published: this.words.filter((item) => item.status === 'published').length,
 				draft: this.words.filter((item) => item.status === 'draft').length,
+				unpublished: this.words.filter((item) => item.status === 'unpublished').length,
+				archived: this.words.filter((item) => item.status === 'archived').length,
 				nodes: this.words.reduce((sum, item) => sum + (Array.isArray(item.parts) ? item.parts.length : 0), 0)
 			}
 		},
@@ -750,12 +782,13 @@ export default {
 			const source = saved && saved.length ? saved : seedWords
 			this.words = clone(source).map((item) => this.normalizeWord(item))
 			this.pendingWords = savedPending && savedPending.length ? clone(savedPending).map((item) => this.normalizePendingWord(item)) : []
+			const initialWords = this.words.filter((item) => item.status !== 'archived')
 			this.activeBucket = 'uploaded'
 			this.selectedSource = 'uploaded'
-			this.selectedId = this.words[0] ? this.words[0].id : ''
-			this.form = this.words[0] ? clone(this.words[0]) : clone(seedWords[0])
+			this.selectedId = initialWords[0] ? initialWords[0].id : ''
+			this.form = initialWords[0] ? clone(initialWords[0]) : clone(seedWords[0])
 			this.saveState = saved ? '已读取本地草稿' : '使用示例数据'
-			this.expandedLetters = this.defaultExpandedLetters(this.words)
+			this.expandedLetters = this.defaultExpandedLetters(initialWords)
 			this.syncVideoUploadStateFromForm()
 		},
 		switchBucket(bucket) {
@@ -771,7 +804,7 @@ export default {
 		applyBucketSwitch(bucket) {
 			this.activeBucket = bucket
 			const source = bucket === 'pending' ? 'pending' : 'uploaded'
-			const list = source === 'pending' ? this.pendingWords : this.words
+			const list = this.activeWords
 			this.expandedLetters = this.defaultExpandedLetters(list)
 			if (list[0]) {
 				this.selectFromList(list[0].id, source, true)
@@ -787,7 +820,7 @@ export default {
 					this.form = clone(seedWords[0])
 					this.syncVideoUploadStateFromForm()
 				}
-				this.saveState = source === 'pending' ? '未上传列表为空，仍在编辑当前词条' : '已上传列表为空'
+				this.saveState = source === 'pending' ? '未上传列表为空，仍在编辑当前词条' : '当前列表为空'
 			}
 		},
 		selectEntry(id) {
@@ -822,7 +855,7 @@ export default {
 			const id = target.id
 			this.editingClipIndex = -1
 			this.stopUserVideoPreview(false)
-			this.activeBucket = source === 'pending' ? 'pending' : 'uploaded'
+			this.activeBucket = source === 'pending' ? 'pending' : (target.status === 'archived' ? 'archived' : 'uploaded')
 			this.selectedSource = source
 			this.selectedId = id
 			this.form = source === 'pending' ? this.normalizePendingWord(target) : this.normalizeWord(target)
@@ -911,6 +944,10 @@ export default {
 			this.persistFormToList()
 			if (!this.validateAllWords()) return
 			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
+			if (this.activeBucket === 'archived') {
+				this.activeBucket = 'uploaded'
+				this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
+			}
 			this.saveState = '当前词条已保存为草稿'
 			uni.showToast({ title: '已保存为草稿', icon: 'success' })
 		},
@@ -925,9 +962,47 @@ export default {
 				this.persistFormToList()
 				if (!this.validateAllWords()) return
 				uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
+				if (this.activeBucket === 'archived') {
+					this.activeBucket = 'uploaded'
+					this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
+				}
 				this.saveState = '当前词条已发布到本地列表'
 				uni.showToast({ title: '已发布当前词条', icon: 'success' })
 			})
+		},
+		unpublishCurrent() {
+			if (this.selectedSource === 'pending' || this.form.status !== 'published') return
+			if (!this.validateStatusActionTarget()) return
+			this.confirmStatusChange(
+				'撤下当前词条',
+				'撤下后，小程序用户端将看不到该词条，但后台仍会保留，可重新发布。',
+				'确认撤下',
+				() => {
+					this.form.status = 'unpublished'
+					this.persistFormToList()
+					uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
+					this.saveState = '当前词条已撤下，用户端将不再展示'
+					uni.showToast({ title: '已撤下当前词条', icon: 'success' })
+				}
+			)
+		},
+		archiveCurrent() {
+			if (this.selectedSource === 'pending' || this.form.status === 'archived') return
+			if (!this.validateStatusActionTarget()) return
+			this.confirmStatusChange(
+				'归档当前词条',
+				'归档后，该词条将从默认后台列表隐藏，但不会删除数据。',
+				'确认归档',
+				() => {
+					this.form.status = 'archived'
+					this.persistFormToList()
+					uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
+					this.activeBucket = 'archived'
+					this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
+					this.saveState = '当前词条已归档，默认列表将隐藏'
+					uni.showToast({ title: '已归档当前词条', icon: 'success' })
+				}
+			)
 		},
 		publishAllDrafts() {
 			if (!this.validateCurrent()) return
@@ -971,6 +1046,34 @@ export default {
 				}
 			})
 		},
+		confirmStatusChange(title, content, confirmText, onConfirm) {
+			uni.showModal({
+				title,
+				content,
+				confirmText,
+				cancelText: '取消',
+				confirmColor: '#fe8500',
+				success: (result) => {
+					if (result.confirm && typeof onConfirm === 'function') {
+						onConfirm()
+					}
+				}
+			})
+		},
+		isHiddenAdminStatus(status) {
+			return status === 'unpublished' || status === 'archived'
+		},
+		validateStatusActionTarget() {
+			if (!String(this.form.id || '').trim()) {
+				uni.showToast({ title: '请先填写单词 ID', icon: 'none' })
+				return false
+			}
+			if (!String(this.form.word || '').trim()) {
+				uni.showToast({ title: '请先填写单词', icon: 'none' })
+				return false
+			}
+			return true
+		},
 		validateCurrent(options = {}) {
 			if (!String(this.form.id || '').trim()) {
 				uni.showToast({ title: '请先填写单词 ID', icon: 'none' })
@@ -988,7 +1091,9 @@ export default {
 				return false
 			}
 			const targetList = this.selectedSource === 'pending' ? this.pendingWords : this.words
-			const duplicate = targetList.find((item) => item.id === id && item.id !== this.selectedId)
+			const duplicate = this.isHiddenAdminStatus(this.form.status)
+				? null
+				: targetList.find((item) => item.id === id && item.id !== this.selectedId && !this.isHiddenAdminStatus(item.status))
 			if (duplicate) {
 				uni.showToast({ title: '单词 ID 已存在', icon: 'none' })
 				return false
@@ -1003,6 +1108,7 @@ export default {
 		validateAllWords() {
 			const seen = {}
 			for (const item of this.words) {
+				if (this.isHiddenAdminStatus(item.status)) continue
 				const id = String(item.id || '').trim()
 				const word = String(item.word || '').trim()
 				if (!id || !word) {
@@ -2156,7 +2262,7 @@ export default {
 			next.phonetic = String(next.phonetic || '').trim()
 			next.meaning = String(next.meaning || '').trim()
 			next.explanation = String(next.explanation || '')
-			next.status = next.status === 'published' || next.status === 'review' ? next.status : 'draft'
+			next.status = normalizeAdminStatus(next.status)
 			next.parts = Array.isArray(next.parts) ? next.parts.map((part) => ({
 				label: String(part.label || '').trim(),
 				title: String(part.title || '').trim(),
@@ -2930,7 +3036,7 @@ export default {
 			this.persistFormToList()
 			if (!this.validateAllWords()) return
 
-			const sourceWords = this.words.filter((item) => item && item.id && item.word)
+			const sourceWords = this.words.filter((item) => item && item.id && item.word && item.status === 'published')
 			if (!sourceWords.length) {
 				uni.showToast({ title: '暂无可同步词条', icon: 'none' })
 				return
@@ -3097,7 +3203,9 @@ button::after {
 }
 
 .secondary-button,
-.publish-button {
+.publish-button,
+.danger-button,
+.archive-button {
 	padding: 0 18px;
 	line-height: 36px;
 	font-weight: 700;
@@ -3111,6 +3219,16 @@ button::after {
 .publish-button {
 	background: #fe8500;
 	color: #fff;
+}
+
+.danger-button {
+	background: #fff1ec;
+	color: #c64c24;
+}
+
+.archive-button {
+	background: #edf0f3;
+	color: #415565;
 }
 
 .status-grid {
@@ -3246,7 +3364,7 @@ button::after {
 
 .bucket-tabs {
 	display: grid;
-	grid-template-columns: 1fr 1fr;
+	grid-template-columns: repeat(3, 1fr);
 	gap: 10px;
 	margin-top: 14px;
 }
@@ -3530,6 +3648,16 @@ button::after {
 .status-pill.review {
 	background: #fff1d6;
 	color: #a06600;
+}
+
+.status-pill.unpublished {
+	background: #e9f3fb;
+	color: #2e6f96;
+}
+
+.status-pill.archived {
+	background: #edf0f3;
+	color: #64717d;
 }
 
 .status-pill.pending {
@@ -4037,6 +4165,18 @@ button::after {
 	background: #fff1d6;
 	border-color: #ffd894;
 	color: #a06600;
+}
+
+.readonly-status.unpublished {
+	background: #e9f3fb;
+	border-color: #c8dfef;
+	color: #2e6f96;
+}
+
+.readonly-status.archived {
+	background: #edf0f3;
+	border-color: #d4dbe1;
+	color: #64717d;
 }
 
 .readonly-status.pending {
