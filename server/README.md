@@ -16,10 +16,18 @@ npm.cmd install
 ## Run
 
 ```powershell
-npm.cmd start
+npm start
 ```
 
 The server reads `PORT` from the environment and defaults to `3001`.
+
+## PM2
+
+For server deployment, use a stable entry point that starts the API without relying on argument detection:
+
+```powershell
+pm2 start src/server.js --name pictographic-english-api
+```
 
 For development with automatic restart:
 
