@@ -250,7 +250,7 @@
 
     <view v-else class="empty-state">
       <view class="empty-mark">象</view>
-      <text class="empty-title">暂未收录这个单词</text>
+      <text class="empty-title">{{ notFoundTitle }}</text>
       <text class="empty-description">{{ notFoundDescription }}</text>
       <button class="empty-action" hover-class="empty-action-pressed" @tap="openFeedback">提交缺词反馈</button>
     </view>
@@ -278,7 +278,7 @@
 </template>
 
 <script>
-import { getRelatedWords, getWordById, getWordByWord } from '../../common/word-repository.js'
+import { getRelatedWords, getWordAccessInfo, getWordById, getWordByWord } from '../../common/word-repository.js'
 import { addRecentWord, getPendingWordId, isFavorite, savePendingWordId, toggleFavorite } from '../../common/user-store.js'
 
 export default {
@@ -303,6 +303,7 @@ export default {
       pronunciationAudioContext: null,
       pronunciationIsPlaying: false,
       notFoundQuery: '',
+      notFoundTitle: '暂未收录这个单词',
       notFoundDescription: '这个单词还没有讲解内容，可以提交缺词反馈。'
     }
   },
@@ -511,12 +512,21 @@ export default {
       const fallbackValue = optionValue || getPendingWordId() || 'word-study'
       const raw = decodeURIComponent(fallbackValue)
       const target = this.resolveLearningNode(raw)
+      const accessInfo = target ? null : getWordAccessInfo(raw)
+      const hiddenWord = Boolean(accessInfo && accessInfo.exists && !accessInfo.published)
 
       this.word = target
       this.notFoundQuery = target ? '' : raw
+      this.notFoundTitle = target
+        ? ''
+        : hiddenWord
+          ? '词条暂未发布'
+          : '暂未收录这个单词'
       this.notFoundDescription = target
         ? ''
-        : raw
+        : hiddenWord
+          ? '该词条暂未发布或已撤下。'
+          : raw
           ? `“${raw}” 还没有讲解内容，可以提交缺词反馈。`
           : '这个单词还没有讲解内容，可以提交缺词反馈。'
       this.relatedWords = target ? getRelatedWords(target) : []

@@ -9,6 +9,7 @@ export const CONTENT_COLLECTIONS = Object.freeze({
 export const CONTENT_STATUS = Object.freeze({
   draft: 'draft',
   published: 'published',
+  unpublished: 'unpublished',
   archived: 'archived'
 })
 
