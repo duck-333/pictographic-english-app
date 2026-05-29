@@ -6,13 +6,26 @@
 				<text class="title">象形英语内容工作台</text>
 				<text class="subtitle">本阶段先做本地后台原型，不绑定云空间，也不会影响用户端小程序。</text>
 			</view>
-			<view class="hero-actions">
+			<view v-if="activeAdminView === 'workbench'" class="hero-actions">
 				<button class="ghost-button" @click="resetDraft">恢复示例数据</button>
 				<button class="outline-button" @click="saveDraft">保存全部本地草稿</button>
 				<button class="publish-all-button" @click="publishAllDrafts">发布全部草稿</button>
 			</view>
 		</view>
 
+		<view class="admin-view-nav">
+			<button
+				v-for="item in adminViews"
+				:key="item.value"
+				:class="['admin-view-tab', activeAdminView === item.value ? 'active' : '']"
+				@click="switchAdminView(item.value)"
+			>
+				<text class="admin-view-title">{{ item.label }}</text>
+				<text class="admin-view-desc">{{ item.description }}</text>
+			</button>
+		</view>
+
+		<view v-if="activeAdminView === 'workbench'" class="admin-view workbench-view">
 		<view class="status-grid">
 			<view class="status-card">
 				<text class="status-value">{{ stats.total }}</text>
@@ -474,6 +487,118 @@
 			/>
 			<text class="import-help">{{ importResult }}</text>
 		</view>
+		</view>
+
+		<view v-else class="admin-view dashboard-view">
+			<view class="dashboard-hero panel">
+				<view>
+					<view class="eyebrow dashboard-kicker">Dashboard Preview</view>
+					<text class="dashboard-title">后台数据看板</text>
+					<text class="dashboard-subtitle">
+						当前为数据看板占位版，真实数据将在 openid 登录、用户行为事件和数据库接入后启用。
+					</text>
+				</view>
+				<view class="dashboard-status-pill">前端壳子 / Mock 数据</view>
+			</view>
+
+			<view class="dashboard-notice">
+				<text>
+					真实数据将在服务器 API、openid 登录、MySQL 数据表和 user_events 行为采集完成后接入。当前页面仅用于确认后台导航和看板布局。
+				</text>
+			</view>
+
+			<view class="dashboard-summary-grid">
+				<view class="dashboard-summary-card" v-for="item in dashboardSummaryCards" :key="item.label">
+					<text class="dashboard-summary-value">{{ item.value }}</text>
+					<text class="dashboard-summary-label">{{ item.label }}</text>
+					<text class="dashboard-summary-note">{{ item.note }}</text>
+				</view>
+			</view>
+
+			<view class="dashboard-grid">
+				<view class="dashboard-panel panel">
+					<view class="panel-head">
+						<view>
+							<text class="panel-title">高频搜索词</text>
+							<text class="panel-note">未来来自 /api/admin/dashboard/top-search-words</text>
+						</view>
+					</view>
+					<view class="dashboard-table">
+						<view class="dashboard-table-row head">
+							<text>排名</text>
+							<text>单词</text>
+							<text>搜索次数</text>
+							<text>最近搜索时间</text>
+						</view>
+						<view class="dashboard-table-row" v-for="item in topSearchWords" :key="item.rank">
+							<text>{{ item.rank }}</text>
+							<text class="table-word">{{ item.word }}</text>
+							<text>{{ item.count }}</text>
+							<text>{{ item.lastAt }}</text>
+						</view>
+						<view v-if="!topSearchWords.length" class="dashboard-empty">暂无搜索数据，等待 user_events 接入。</view>
+					</view>
+				</view>
+
+				<view class="dashboard-panel panel">
+					<view class="panel-head">
+						<view>
+							<text class="panel-title">高频收藏词</text>
+							<text class="panel-note">未来来自 /api/admin/dashboard/top-favorite-words</text>
+						</view>
+					</view>
+					<view class="dashboard-table">
+						<view class="dashboard-table-row head">
+							<text>排名</text>
+							<text>单词</text>
+							<text>收藏次数</text>
+							<text>最近收藏时间</text>
+						</view>
+						<view class="dashboard-table-row" v-for="item in topFavoriteWords" :key="item.rank">
+							<text>{{ item.rank }}</text>
+							<text class="table-word">{{ item.word }}</text>
+							<text>{{ item.count }}</text>
+							<text>{{ item.lastAt }}</text>
+						</view>
+						<view v-if="!topFavoriteWords.length" class="dashboard-empty">暂无收藏数据，等待 favorites 表接入。</view>
+					</view>
+				</view>
+			</view>
+
+			<view class="dashboard-panel panel">
+				<view class="panel-head">
+					<view>
+						<text class="panel-title">最近用户行为</text>
+						<text class="panel-note">未来来自 /api/admin/dashboard/recent-events</text>
+					</view>
+				</view>
+				<view class="dashboard-event-table">
+					<view class="dashboard-event-row head">
+						<text>时间</text>
+						<text>用户标识</text>
+						<text>行为类型</text>
+						<text>单词</text>
+						<text>备注</text>
+					</view>
+					<view class="dashboard-event-row" v-for="item in recentUserEvents" :key="item.id">
+						<text>{{ item.time }}</text>
+						<text>{{ item.user }}</text>
+						<text>{{ item.type }}</text>
+						<text class="table-word">{{ item.word }}</text>
+						<text>{{ item.note }}</text>
+					</view>
+					<view v-if="!recentUserEvents.length" class="dashboard-empty">暂无用户行为，等待 openid 和 user_events 采集完成。</view>
+				</view>
+			</view>
+
+			<view class="dashboard-api-card panel">
+				<text class="panel-title">后续接口预留</text>
+				<text class="panel-note">本次不调用真实接口，只预留后台看板的数据边界。</text>
+				<view class="api-list">
+					<text v-for="endpoint in dashboardApiPlaceholders" :key="endpoint">{{ endpoint }}</text>
+				</view>
+			</view>
+		</view>
 	</view>
 </template>
 
@@ -490,6 +615,14 @@ const AUDIO_UPLOAD_PROVIDER = 'local-audio-upload-rehearsal'
 const BRIDGE_RUNTIME_ASSET_MAX_MB = 80
 const BRIDGE_RUNTIME_ASSET_MAX_BYTES = BRIDGE_RUNTIME_ASSET_MAX_MB * 1024 * 1024
 const ADMIN_STATUS_VALUES = ['draft', 'published', 'review', 'unpublished', 'archived']
+// Dashboard shell only. Do not call these APIs until server API, openid,
+// MySQL, and user_events collection are ready.
+const DASHBOARD_API_PLACEHOLDERS = [
+	'GET /api/admin/dashboard/summary',
+	'GET /api/admin/dashboard/top-search-words',
+	'GET /api/admin/dashboard/top-favorite-words',
+	'GET /api/admin/dashboard/recent-events'
+]
 
 function normalizeAdminStatus(status, fallback = 'draft') {
 	const value = String(status || '').trim()
@@ -561,6 +694,33 @@ function clone(value) {
 export default {
 	data() {
 		return {
+			activeAdminView: 'workbench',
+			adminViews: [
+				{ label: '内容上传工作台', value: 'workbench', description: '词条、音频、视频和发布状态管理' },
+				{ label: '后台数据看板', value: 'dashboard', description: '用户、搜索、收藏和行为数据概览' }
+			],
+			dashboardSummaryCards: [
+				{ label: '今日新增用户', value: '待接入', note: '等待 openid 登录和用户表' },
+				{ label: '今日活跃用户', value: '待接入', note: '等待 user_events 行为采集' },
+				{ label: '今日搜索次数', value: '待接入', note: '等待搜索事件入库' },
+				{ label: '今日收藏次数', value: '待接入', note: '等待 favorites 表接入' }
+			],
+			topSearchWords: [
+				{ rank: 1, word: 'study', count: '待接入', lastAt: '接口接入后显示' },
+				{ rank: 2, word: 'transport', count: '待接入', lastAt: '接口接入后显示' },
+				{ rank: 3, word: 'structure', count: '待接入', lastAt: '接口接入后显示' }
+			],
+			topFavoriteWords: [
+				{ rank: 1, word: 'study', count: '待接入', lastAt: '接口接入后显示' },
+				{ rank: 2, word: 'tud', count: '待接入', lastAt: '接口接入后显示' },
+				{ rank: 3, word: 'support', count: '待接入', lastAt: '接口接入后显示' }
+			],
+			recentUserEvents: [
+				{ id: 'mock-1', time: '待接入', user: 'openid 待接入', type: '搜索', word: 'study', note: '未来由 user_events 提供' },
+				{ id: 'mock-2', time: '待接入', user: 'openid 待接入', type: '收藏', word: 'transport', note: '未来由 favorites/user_events 提供' },
+				{ id: 'mock-3', time: '待接入', user: 'openid 待接入', type: '查看详情', word: 'tud', note: '当前仅为布局占位' }
+			],
+			dashboardApiPlaceholders: DASHBOARD_API_PLACEHOLDERS,
 			keywordDraft: '',
 			keyword: '',
 			expandedLetters: [],
@@ -776,6 +936,9 @@ export default {
 		this.cancelAudioUploadTimer()
 	},
 	methods: {
+		switchAdminView(view) {
+			this.activeAdminView = view === 'dashboard' ? 'dashboard' : 'workbench'
+		},
 		loadDraft() {
 			const saved = uni.getStorageSync(STORAGE_KEY)
 			const savedPending = uni.getStorageSync(PENDING_STORAGE_KEY)
@@ -3153,6 +3316,61 @@ export default {
 	gap: 12px;
 }
 
+.admin-view-nav {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+	margin: 18px 0;
+}
+
+.admin-view-tab {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	justify-content: center;
+	min-height: 82px;
+	padding: 16px 20px;
+	border-radius: 22px;
+	background: rgba(255, 255, 255, 0.86);
+	box-shadow: 0 12px 30px rgba(14, 58, 92, 0.08);
+	color: #315269;
+	line-height: 1.4;
+	text-align: left;
+}
+
+.admin-view-tab.active {
+	background: #0e3a5c;
+	color: #fff;
+	box-shadow: 0 16px 38px rgba(14, 58, 92, 0.2);
+}
+
+.admin-view-title,
+.admin-view-desc {
+	display: block;
+	width: 100%;
+	text-align: left;
+}
+
+.admin-view-title {
+	font-size: 17px;
+	font-weight: 800;
+}
+
+.admin-view-desc {
+	margin-top: 6px;
+	color: #7793a6;
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+.admin-view-tab.active .admin-view-desc {
+	color: rgba(255, 255, 255, 0.72);
+}
+
+.admin-view {
+	display: block;
+}
+
 button {
 	margin: 0;
 	border: 0;
@@ -3258,6 +3476,203 @@ button::after {
 
 .status-label {
 	color: #6c8799;
+}
+
+.dashboard-view {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.dashboard-hero {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 18px;
+	border: 1px solid rgba(14, 58, 92, 0.08);
+}
+
+.dashboard-kicker {
+	color: #6a8ea4;
+}
+
+.dashboard-title {
+	display: block;
+	font-size: 28px;
+	font-weight: 900;
+	color: #0e3a5c;
+}
+
+.dashboard-subtitle {
+	display: block;
+	max-width: 820px;
+	margin-top: 8px;
+	color: #66869b;
+	font-size: 14px;
+	line-height: 1.8;
+}
+
+.dashboard-status-pill {
+	flex-shrink: 0;
+	padding: 8px 14px;
+	border-radius: 999px;
+	background: #fff6df;
+	color: #a65a00;
+	font-size: 13px;
+	font-weight: 800;
+}
+
+.dashboard-notice {
+	padding: 16px 20px;
+	border: 1px solid rgba(254, 133, 0, 0.22);
+	border-radius: 20px;
+	background: #fff8e8;
+	color: #8a5a11;
+	font-size: 14px;
+	line-height: 1.8;
+	box-shadow: 0 10px 26px rgba(254, 133, 0, 0.08);
+}
+
+.dashboard-summary-grid {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 16px;
+}
+
+.dashboard-summary-card {
+	padding: 20px;
+	border-radius: 22px;
+	background: #fff;
+	box-shadow: 0 12px 30px rgba(14, 58, 92, 0.08);
+}
+
+.dashboard-summary-value {
+	display: block;
+	font-size: 24px;
+	font-weight: 900;
+	color: #0e3a5c;
+}
+
+.dashboard-summary-label {
+	display: block;
+	margin-top: 8px;
+	color: #12344d;
+	font-weight: 800;
+}
+
+.dashboard-summary-note {
+	display: block;
+	margin-top: 6px;
+	color: #7793a6;
+	font-size: 12px;
+	line-height: 1.6;
+}
+
+.dashboard-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+}
+
+.dashboard-panel {
+	overflow: hidden;
+}
+
+.dashboard-table,
+.dashboard-event-table {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	height: 300px;
+	overflow-y: auto;
+	padding-right: 6px;
+	scrollbar-color: #8cc7e8 #eaf7ff;
+	scrollbar-width: thin;
+}
+
+.dashboard-table::-webkit-scrollbar,
+.dashboard-event-table::-webkit-scrollbar {
+	width: 8px;
+}
+
+.dashboard-table::-webkit-scrollbar-track,
+.dashboard-event-table::-webkit-scrollbar-track {
+	border-radius: 999px;
+	background: #eaf7ff;
+}
+
+.dashboard-table::-webkit-scrollbar-thumb,
+.dashboard-event-table::-webkit-scrollbar-thumb {
+	border-radius: 999px;
+	background: linear-gradient(180deg, #8cc7e8, #0e3a5c);
+}
+
+.dashboard-table-row,
+.dashboard-event-row {
+	display: grid;
+	align-items: center;
+	gap: 12px;
+	padding: 12px 14px;
+	border-radius: 14px;
+	background: #f5fbff;
+	color: #315269;
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+.dashboard-table-row {
+	grid-template-columns: 64px minmax(120px, 1fr) 96px 150px;
+}
+
+.dashboard-event-row {
+	grid-template-columns: 150px 150px 110px 120px minmax(0, 1fr);
+}
+
+.dashboard-table-row.head,
+.dashboard-event-row.head {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	background: #eaf7ff;
+	color: #0e3a5c;
+	font-weight: 800;
+}
+
+.table-word {
+	color: #0e3a5c;
+	font-family: Georgia, 'Times New Roman', serif;
+	font-size: 16px;
+	font-weight: 800;
+}
+
+.dashboard-empty {
+	padding: 22px;
+	border-radius: 16px;
+	background: #f5fbff;
+	color: #7793a6;
+	text-align: center;
+}
+
+.dashboard-api-card {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.api-list {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 10px;
+}
+
+.api-list text {
+	display: block;
+	padding: 12px 14px;
+	border-radius: 14px;
+	background: #f5fbff;
+	color: #0e3a5c;
+	font-family: Consolas, 'Courier New', monospace;
+	font-size: 13px;
 }
 
 .workbench {
@@ -4579,6 +4994,15 @@ button.file-button::after {
 	.status-grid {
 		grid-template-columns: repeat(2, 1fr);
 	}
+
+	.dashboard-grid,
+	.dashboard-summary-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.dashboard-event-row {
+		grid-template-columns: 140px 140px 100px 110px minmax(0, 1fr);
+	}
 }
 
 @media screen and (max-width: 720px) {
@@ -4591,7 +5015,8 @@ button.file-button::after {
 	.section-head,
 	.clip-draft-actions,
 	.clip-list-head,
-	.viewer-preview-head {
+	.viewer-preview-head,
+	.dashboard-hero {
 		flex-direction: column;
 		align-items: flex-start;
 	}
@@ -4600,9 +5025,18 @@ button.file-button::after {
 	.editor-actions,
 	.form-grid,
 	.part-row,
-	.status-grid {
+	.status-grid,
+	.admin-view-nav,
+	.dashboard-grid,
+	.dashboard-summary-grid,
+	.api-list {
 		grid-template-columns: 1fr;
 		width: 100%;
+	}
+
+	.dashboard-table-row,
+	.dashboard-event-row {
+		grid-template-columns: 1fr;
 	}
 
 	.clip-item {
