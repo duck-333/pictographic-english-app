@@ -28,9 +28,59 @@ function mergePreviewWords(localWords, previewWords) {
   return result
 }
 
-const SOURCE_WORDS = mergePreviewWords(LOCAL_WORDS, DEV_PREVIEW_WORDS)
+function getNodeEnv() {
+  if (typeof process === 'undefined' || !process || !process.env) return ''
+  return String(process.env.NODE_ENV || '').toLowerCase()
+}
 
-export const CONTENT_REPOSITORY_MODE = DEV_PREVIEW_WORDS.length ? 'local-preview-bridge' : 'local-mock'
+export function isProductionRuntime() {
+  return getNodeEnv() === 'production'
+}
+
+export function selectDevPreviewWordsForRuntime(previewWords = DEV_PREVIEW_WORDS, production = isProductionRuntime()) {
+  if (production) return []
+  return Array.isArray(previewWords) ? previewWords : []
+}
+
+function normalizeMediaUrl(url) {
+  return String(url || '').trim()
+}
+
+export function isLocalPreviewMediaUrl(url) {
+  return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?([/?#]|$)/i.test(normalizeMediaUrl(url))
+}
+
+export function hasBlockedProductionMediaSource(url) {
+  const value = normalizeMediaUrl(url)
+  return (
+    isLocalPreviewMediaUrl(value) ||
+    /^mock-cloud:\/\//i.test(value) ||
+    /example\.com/i.test(value)
+  )
+}
+
+function isCloudOrHttpsMediaUrl(url) {
+  const value = normalizeMediaUrl(url)
+  return /^https:\/\//i.test(value) || /^cloud:\/\//i.test(value)
+}
+
+export function isPlayableMediaUrl(url, options = {}) {
+  const value = normalizeMediaUrl(url)
+  const production = Object.prototype.hasOwnProperty.call(options, 'production')
+    ? Boolean(options.production)
+    : isProductionRuntime()
+
+  if (!value) return false
+  if (production) {
+    return isCloudOrHttpsMediaUrl(value) && !hasBlockedProductionMediaSource(value)
+  }
+  return isCloudOrHttpsMediaUrl(value) || isLocalPreviewMediaUrl(value)
+}
+
+const ACTIVE_DEV_PREVIEW_WORDS = selectDevPreviewWordsForRuntime(DEV_PREVIEW_WORDS)
+const SOURCE_WORDS = mergePreviewWords(LOCAL_WORDS, ACTIVE_DEV_PREVIEW_WORDS)
+
+export const CONTENT_REPOSITORY_MODE = ACTIVE_DEV_PREVIEW_WORDS.length ? 'local-preview-bridge' : 'local-mock'
 export const HOT_WORDS = LOCAL_HOT_WORDS
 export const TODAY_WORD_ID = LOCAL_TODAY_WORD_ID
 export const NAV_ITEMS = LOCAL_NAV_ITEMS
@@ -100,7 +150,9 @@ export function getContentRepositoryInfo() {
   return {
     mode: CONTENT_REPOSITORY_MODE,
     remoteEnabled: false,
-    note: DEV_PREVIEW_WORDS.length
+    note: isProductionRuntime()
+      ? 'Production runtime ignores local preview bridge records.'
+      : ACTIVE_DEV_PREVIEW_WORDS.length
       ? 'Current MVP reads admin-synced local preview records before mock records.'
       : 'Current MVP reads local mock records through this repository facade.'
   }

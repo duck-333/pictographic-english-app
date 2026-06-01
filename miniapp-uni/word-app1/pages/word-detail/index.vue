@@ -278,7 +278,14 @@
 </template>
 
 <script>
-import { getRelatedWords, getWordAccessInfo, getWordById, getWordByWord } from '../../common/word-repository.js'
+import {
+  getRelatedWords,
+  getWordAccessInfo,
+  getWordById,
+  getWordByWord,
+  hasBlockedProductionMediaSource,
+  isPlayableMediaUrl
+} from '../../common/word-repository.js'
 import { addRecentWord, getPendingWordId, isFavorite, savePendingWordId, toggleFavorite } from '../../common/user-store.js'
 
 export default {
@@ -401,6 +408,9 @@ export default {
     activeVideoIsMockCloud() {
       return String(this.activeVideoUrl || '').indexOf('mock-cloud://') === 0
     },
+    activeVideoHasBlockedProductionSource() {
+      return hasBlockedProductionMediaSource(this.activeVideoUrl)
+    },
     activeVideoTitle() {
       if (!this.hasVideoData) {
         return '暂无视频讲解'
@@ -466,11 +476,7 @@ export default {
       return `${range}${provider}`
     },
     hasPlayableVideo() {
-      const url = String(this.activeVideoUrl || '')
-      const isCloudVideo = /^https:\/\//.test(url)
-      // 本地 preview bridge 仅用于电脑端微信开发者工具调试，正式上线只应使用 HTTPS/云存储地址。
-      const isLocalBridgeVideo = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(url)
-      return (isCloudVideo || isLocalBridgeVideo) && this.activeClipHasValidRange
+      return isPlayableMediaUrl(this.activeVideoUrl) && this.activeClipHasValidRange
     },
     videoStatusText() {
       if (!this.hasVideoData) return '暂无视频'
@@ -488,6 +494,9 @@ export default {
       if (this.activeVideoUrl && !this.hasPlayableVideo) {
         if (this.activeVideoIsMockCloud) {
           return '当前是后台上传演练生成的 mock-cloud 占位地址。请在后台重新选择本地视频后同步到小程序预览；上线后会替换成云存储 HTTPS 地址。'
+        }
+        if (this.activeVideoHasBlockedProductionSource) {
+          return '当前视频地址仅适合开发预览；正式环境需要替换为 HTTPS 或云存储地址。'
         }
         return '后台已生成视频资产信息；正式云存储接入后会变成可播放地址。'
       }
@@ -861,8 +870,7 @@ export default {
       })
     },
     isPlayableAudioUrl(url) {
-      const value = String(url || '').trim()
-      return /^https:\/\//i.test(value) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(value)
+      return isPlayableMediaUrl(url)
     },
     getPronunciationAudioContext() {
       if (this.pronunciationAudioContext) return this.pronunciationAudioContext
