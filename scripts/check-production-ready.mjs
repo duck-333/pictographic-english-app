@@ -18,6 +18,7 @@ const BLOCKED_PRODUCTION_VALUES = [
   { label: 'mock-cloud://', pattern: /mock-cloud:\/\//i },
   { label: 'blob:', pattern: /blob:/i },
   { label: 'data:', pattern: /data:/i },
+  { label: '::1', pattern: /(\[::1\]|::1)/i },
   { label: 'localhost', pattern: /localhost/i },
   { label: '127.0.0.1', pattern: /127\.0\.0\.1/i },
   { label: 'example.com', pattern: /example\.com/i }
