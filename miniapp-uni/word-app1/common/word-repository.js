@@ -28,13 +28,16 @@ function mergePreviewWords(localWords, previewWords) {
   return result
 }
 
-function getNodeEnv() {
+function getNodeEnv(options = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, 'nodeEnv')) {
+    return String(options.nodeEnv || '').toLowerCase()
+  }
   if (typeof process === 'undefined' || !process || !process.env) return ''
   return String(process.env.NODE_ENV || '').toLowerCase()
 }
 
-export function isProductionRuntime() {
-  return getNodeEnv() === 'production'
+export function isProductionRuntime(options = {}) {
+  return getNodeEnv(options) !== 'development'
 }
 
 export function selectDevPreviewWordsForRuntime(previewWords = DEV_PREVIEW_WORDS, production = isProductionRuntime()) {
@@ -46,22 +49,56 @@ function normalizeMediaUrl(url) {
   return String(url || '').trim()
 }
 
+function parseMediaUrl(url) {
+  const value = normalizeMediaUrl(url)
+  if (!value || typeof URL === 'undefined') return null
+  try {
+    return new URL(value)
+  } catch (error) {
+    return null
+  }
+}
+
+function normalizeHostname(hostname) {
+  return String(hostname || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\[(.*)\]$/, '$1')
+    .replace(/\.$/, '')
+}
+
+function isLoopbackHostname(hostname) {
+  const host = normalizeHostname(hostname)
+  if (host === 'localhost' || host === '::1') return true
+
+  const octets = host.split('.')
+  if (octets.length !== 4) return false
+  if (!octets.every((item) => /^\d{1,3}$/.test(item) && Number(item) >= 0 && Number(item) <= 255)) return false
+  return Number(octets[0]) === 127
+}
+
 export function isLocalPreviewMediaUrl(url) {
-  return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?([/?#]|$)/i.test(normalizeMediaUrl(url))
+  const parsed = parseMediaUrl(url)
+  return Boolean(parsed && /^https?:$/i.test(parsed.protocol) && isLoopbackHostname(parsed.hostname))
 }
 
 export function hasBlockedProductionMediaSource(url) {
   const value = normalizeMediaUrl(url)
+  if (!value) return false
+  const parsed = parseMediaUrl(value)
   return (
-    isLocalPreviewMediaUrl(value) ||
+    !parsed ||
+    isLoopbackHostname(parsed.hostname) ||
     /^mock-cloud:\/\//i.test(value) ||
+    /^blob:/i.test(value) ||
+    /^data:/i.test(value) ||
     /example\.com/i.test(value)
   )
 }
 
 function isCloudOrHttpsMediaUrl(url) {
-  const value = normalizeMediaUrl(url)
-  return /^https:\/\//i.test(value) || /^cloud:\/\//i.test(value)
+  const parsed = parseMediaUrl(url)
+  return Boolean(parsed && (parsed.protocol === 'https:' || parsed.protocol === 'cloud:'))
 }
 
 export function isPlayableMediaUrl(url, options = {}) {
