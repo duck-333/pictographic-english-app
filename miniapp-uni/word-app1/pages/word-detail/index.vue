@@ -403,7 +403,8 @@ export default {
       return this.activeVideoUrl || 'no-video'
     },
     activeVideoUrl() {
-      return this.activeVideo.videoUrl || this.activeVideo.url || ''
+      const video = this.activeVideo || {}
+      return video.videoUrl || video.url || ''
     },
     activeVideoIsMockCloud() {
       return String(this.activeVideoUrl || '').indexOf('mock-cloud://') === 0
@@ -508,7 +509,8 @@ export default {
     },
     pronunciationAudioUrl() {
       const audio = this.pronunciationAudio || {}
-      return String(audio.url || audio.audioUrl || this.word.audioUrl || '').trim()
+      const word = this.word || {}
+      return String(audio.url || audio.audioUrl || word.audioUrl || '').trim()
     },
     hasPronunciationAudio() {
       return this.isPlayableAudioUrl(this.pronunciationAudioUrl)
