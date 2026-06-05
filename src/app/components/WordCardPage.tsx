@@ -90,7 +90,6 @@ function VideoModal({ onClose }: { onClose: () => void }) {
       关闭
     </button>
   </div>
-</div>
         </div>
       </div>
     </div>
