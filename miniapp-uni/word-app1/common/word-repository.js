@@ -28,9 +28,96 @@ function mergePreviewWords(localWords, previewWords) {
   return result
 }
 
-const SOURCE_WORDS = mergePreviewWords(LOCAL_WORDS, DEV_PREVIEW_WORDS)
+function getNodeEnv(options = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, 'nodeEnv')) {
+    return String(options.nodeEnv || '').toLowerCase()
+  }
+  if (typeof process === 'undefined' || !process || !process.env) return ''
+  return String(process.env.NODE_ENV || '').toLowerCase()
+}
 
-export const CONTENT_REPOSITORY_MODE = DEV_PREVIEW_WORDS.length ? 'local-preview-bridge' : 'local-mock'
+export function isProductionRuntime(options = {}) {
+  return getNodeEnv(options) !== 'development'
+}
+
+export function selectDevPreviewWordsForRuntime(previewWords = DEV_PREVIEW_WORDS, production = isProductionRuntime()) {
+  if (production) return []
+  return Array.isArray(previewWords) ? previewWords : []
+}
+
+function normalizeMediaUrl(url) {
+  return String(url || '').trim()
+}
+
+function parseMediaUrl(url) {
+  const value = normalizeMediaUrl(url)
+  if (!value || typeof URL === 'undefined') return null
+  try {
+    return new URL(value)
+  } catch (error) {
+    return null
+  }
+}
+
+function normalizeHostname(hostname) {
+  return String(hostname || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\[(.*)\]$/, '$1')
+    .replace(/\.$/, '')
+}
+
+function isLoopbackHostname(hostname) {
+  const host = normalizeHostname(hostname)
+  if (host === 'localhost' || host === '::1') return true
+
+  const octets = host.split('.')
+  if (octets.length !== 4) return false
+  if (!octets.every((item) => /^\d{1,3}$/.test(item) && Number(item) >= 0 && Number(item) <= 255)) return false
+  return Number(octets[0]) === 127
+}
+
+export function isLocalPreviewMediaUrl(url) {
+  const parsed = parseMediaUrl(url)
+  return Boolean(parsed && /^https?:$/i.test(parsed.protocol) && isLoopbackHostname(parsed.hostname))
+}
+
+export function hasBlockedProductionMediaSource(url) {
+  const value = normalizeMediaUrl(url)
+  if (!value) return false
+  const parsed = parseMediaUrl(value)
+  return (
+    !parsed ||
+    isLoopbackHostname(parsed.hostname) ||
+    /^mock-cloud:\/\//i.test(value) ||
+    /^blob:/i.test(value) ||
+    /^data:/i.test(value) ||
+    /example\.com/i.test(value)
+  )
+}
+
+function isCloudOrHttpsMediaUrl(url) {
+  const parsed = parseMediaUrl(url)
+  return Boolean(parsed && (parsed.protocol === 'https:' || parsed.protocol === 'cloud:'))
+}
+
+export function isPlayableMediaUrl(url, options = {}) {
+  const value = normalizeMediaUrl(url)
+  const production = Object.prototype.hasOwnProperty.call(options, 'production')
+    ? Boolean(options.production)
+    : isProductionRuntime()
+
+  if (!value) return false
+  if (production) {
+    return isCloudOrHttpsMediaUrl(value) && !hasBlockedProductionMediaSource(value)
+  }
+  return isCloudOrHttpsMediaUrl(value) || isLocalPreviewMediaUrl(value)
+}
+
+const ACTIVE_DEV_PREVIEW_WORDS = selectDevPreviewWordsForRuntime(DEV_PREVIEW_WORDS)
+const SOURCE_WORDS = mergePreviewWords(LOCAL_WORDS, ACTIVE_DEV_PREVIEW_WORDS)
+
+export const CONTENT_REPOSITORY_MODE = ACTIVE_DEV_PREVIEW_WORDS.length ? 'local-preview-bridge' : 'local-mock'
 export const HOT_WORDS = LOCAL_HOT_WORDS
 export const TODAY_WORD_ID = LOCAL_TODAY_WORD_ID
 export const NAV_ITEMS = LOCAL_NAV_ITEMS
@@ -100,7 +187,9 @@ export function getContentRepositoryInfo() {
   return {
     mode: CONTENT_REPOSITORY_MODE,
     remoteEnabled: false,
-    note: DEV_PREVIEW_WORDS.length
+    note: isProductionRuntime()
+      ? 'Production runtime ignores local preview bridge records.'
+      : ACTIVE_DEV_PREVIEW_WORDS.length
       ? 'Current MVP reads admin-synced local preview records before mock records.'
       : 'Current MVP reads local mock records through this repository facade.'
   }

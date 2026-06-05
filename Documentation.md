@@ -406,3 +406,23 @@
 - 后台 `admin-portal/pictographic-admin` 在音标字段后新增“发音音频”上传演练：支持选择 `mp3`、`wav`、`m4a`、`aac`、`ogg`、`webm` 等音频文件，限制 10MB，并写入 `pronunciationAudio` 字段。
 - 本地预览桥 `npm run dev:preview-bridge` 支持把后台当前会话的本地音频写入 `content-seed/dev-preview-audios`，并生成 `http://127.0.0.1:8787/audios/...` 供微信开发者工具模拟器调试。
 - 正式上线时不能依赖 `127.0.0.1` 或 `mock-cloud://`；发音音频需要上传到云存储/对象存储，并写入可播放 HTTPS 地址或由服务端换取的临时 URL。
+
+## 2026-05-29：生产环境保护与上线前检查
+
+决策：
+- `miniapp-uni/word-app1/common/dev-preview-data.js` 保留为空壳文件，Git 仓库中必须保持 `export const DEV_PREVIEW_WORDS = []`。
+- 开发环境继续允许后台本地 preview bridge 写入 `dev-preview-data.js`，用于 HBuilderX 和微信开发者工具预览。
+- 生产环境强制忽略 `dev-preview-data.js`，即使该文件被本地预览桥写入临时词条，正式包也不能读取这些预览词条。
+- 正式环境下音频和视频播放地址只允许 HTTPS 或后续云存储/对象存储合法地址；禁止 `127.0.0.1`、`localhost`、`mock-cloud://`、`example.com` 进入生产播放链路。
+- 开发预览能力继续保留：后台上传演练、`mock-cloud://` 占位、本地 preview bridge、`http://127.0.0.1:8787/...` 临时音视频地址都只限本机开发调试。
+- 新增上线前检查命令：`npm.cmd run check:production`。正式打包前必须运行，预期输出包含 `Production readiness check passed`；总检查 `npm.cmd run check` 也会自动串联这一步，降低漏跑风险。
+
+验证方法：
+- 运行 `npm.cmd run check:production`，确认 `dev-preview-data.js` 为空、生产环境会忽略预览数据、published 词条不含本地/mock/example 地址、生产媒体保护会阻断本地/mock/example 地址。
+- 运行 `npm.cmd run check`，确认原有内容校验、小程序静态检查和后台入口检查没有被破坏。
+- 在微信开发者工具里验证开发环境仍可通过本地 preview bridge 预览；正式验收时所有音视频请求必须是 HTTPS/云存储合法域名。
+
+原因：
+- `dev-preview-data.js` 是本地预览桥的临时中转数据，不是生产词库。删除它会导致小程序静态 import 失败，保留空壳更稳定。
+- 生产包必须和开发预览数据隔离，避免把未发布词条、本机视频地址或 mock 占位地址发给真实用户。
+- 视频和音频是上线成本与审核风险最高的部分，必须在打包前用命令自动拦截明显不合规的地址。
