@@ -8,11 +8,6 @@ function getNodeEnv(options = {}) {
   return String(process.env.NODE_ENV || '').toLowerCase()
 }
 
-function isMiniprogramRuntime() {
-  // 小程序环境有全局的 uni 对象
-  return typeof uni !== 'undefined' && uni && typeof uni.request === 'function'
-}
-
 function getEnvApiBaseUrl() {
   if (typeof process === 'undefined' || !process || !process.env) return ''
   return (
@@ -67,14 +62,13 @@ export function isDevelopmentApiBaseUrl(value) {
 
 export function getWordApiBaseUrl(options = {}) {
   const nodeEnv = getNodeEnv(options)
-  const isMiniprog = isMiniprogramRuntime()
-  const isProduction = nodeEnv === 'production' && !isMiniprog
+  const isProduction = nodeEnv === 'production'
   const configured = Object.prototype.hasOwnProperty.call(options, 'apiBaseUrl')
     ? options.apiBaseUrl
     : getEnvApiBaseUrl()
   
-  // 在小程序/HBuilderX 开发时或非生产环境时，允许使用本地 API
-  // 只有在明确为生产环境且不是小程序运行时，才需要 fail closed
+  // 非生产环境允许 HBuilderX / 微信开发者工具使用本地 API。
+  // 生产环境必须 fail closed；小程序 runtime 不能绕过生产规则。
   const candidate = normalizeApiBaseUrl(configured || (!isProduction ? DEFAULT_DEVELOPMENT_API_BASE_URL : ''))
 
   if (!candidate) return ''
