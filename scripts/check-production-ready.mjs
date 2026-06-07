@@ -149,12 +149,28 @@ function checkMediaGuards(errors) {
 
 function checkApiBaseGuards(errors) {
   const developmentLocalApi = getWordApiBaseUrl({ nodeEnv: 'development', apiBaseUrl: 'http://127.0.0.1:3001' })
+  const productionDefaultApi = getWordApiBaseUrl({ nodeEnv: 'production' })
   const productionLocalApi = getWordApiBaseUrl({ nodeEnv: 'production', apiBaseUrl: 'http://127.0.0.1:3001' })
   const missingEnvLocalApi = getWordApiBaseUrl({ nodeEnv: '', apiBaseUrl: 'http://127.0.0.1:3001' })
   const productionHttpsApi = getWordApiBaseUrl({ nodeEnv: 'production', apiBaseUrl: 'https://api.pictographic-english.test' })
+  const originalUni = globalThis.uni
+
+  globalThis.uni = { request() {} }
+  const productionMiniappDefaultApi = getWordApiBaseUrl({ nodeEnv: 'production' })
+  const productionMiniappLocalApi = getWordApiBaseUrl({ nodeEnv: 'production', apiBaseUrl: 'http://127.0.0.1:3001' })
+  const productionMiniappHttpsApi = getWordApiBaseUrl({ nodeEnv: 'production', apiBaseUrl: 'https://api.pictographic-english.test' })
+
+  if (originalUni === undefined) {
+    delete globalThis.uni
+  } else {
+    globalThis.uni = originalUni
+  }
 
   if (developmentLocalApi !== 'http://127.0.0.1:3001') {
     addError(errors, 'development API config must allow local/server HTTP API base URLs for testing.')
+  }
+  if (productionDefaultApi) {
+    addError(errors, 'production API config must not fall back to the local development API base URL.')
   }
   if (productionLocalApi) {
     addError(errors, 'production API config must block local HTTP API base URLs.')
@@ -164,6 +180,12 @@ function checkApiBaseGuards(errors) {
   }
   if (productionHttpsApi !== 'https://api.pictographic-english.test') {
     addError(errors, 'production API config must allow configured HTTPS API base URLs.')
+  }
+  if (productionMiniappDefaultApi || productionMiniappLocalApi) {
+    addError(errors, 'production mini program runtime must not enable local HTTP API base URLs.')
+  }
+  if (productionMiniappHttpsApi !== 'https://api.pictographic-english.test') {
+    addError(errors, 'production mini program runtime must allow configured HTTPS API base URLs.')
   }
 }
 

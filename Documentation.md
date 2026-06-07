@@ -1,5 +1,16 @@
 # Documentation
 
+### 2026-06-07: server API production guard follow-up
+
+Decision:
+- Production word API config now uses `NODE_ENV === 'production'` as the only production switch. The mini program runtime `uni.request` must not bypass production fail-closed behavior.
+- `check:production` covers production default API config, configured local HTTP API bases, and simulated mini program `uni.request` runtime.
+- PR #7 accidentally removed tracked legacy `dist/assets/index-CINJZRAz.css` and `dist/assets/index-DqCEp0Mw.js` while leaving `dist/index.html` pointing at ignored local build hashes. The fix restores the previously tracked `dist` files instead of committing new build hashes.
+
+Reason:
+- Development can still use `http://127.0.0.1:3001`, but production mini program builds must wait for a filed HTTPS domain and WeChat request-domain configuration.
+- `dist/` should be handled deliberately in a future cleanup; this fix only restores the repository's existing tracked-asset state and does not delete ignored local build outputs.
+
 ### 2026-06-07: minimum server API integration link
 
 Decision:
