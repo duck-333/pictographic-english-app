@@ -5,7 +5,9 @@ import {
   WORDS as LOCAL_WORDS
 } from './mock-data.js'
 import { DEV_PREVIEW_WORDS } from './dev-preview-data.js'
+import { getWordApiBaseUrl } from './api-config.js'
 import { createWordDraft, normalizeWordQuery, normalizeWordRecord, validateWordRecord } from './content-schema.js'
+import { fetchServerWordById, fetchServerWords } from './word-api-client.js'
 
 function mergePreviewWords(localWords, previewWords) {
   const result = []
@@ -116,14 +118,37 @@ export function isPlayableMediaUrl(url, options = {}) {
 
 const ACTIVE_DEV_PREVIEW_WORDS = selectDevPreviewWordsForRuntime(DEV_PREVIEW_WORDS)
 const SOURCE_WORDS = mergePreviewWords(LOCAL_WORDS, ACTIVE_DEV_PREVIEW_WORDS)
+let REMOTE_WORD_RECORDS = []
 
-export const CONTENT_REPOSITORY_MODE = ACTIVE_DEV_PREVIEW_WORDS.length ? 'local-preview-bridge' : 'local-mock'
+export const CONTENT_REPOSITORY_MODE = ACTIVE_DEV_PREVIEW_WORDS.length
+  ? 'local-preview-bridge'
+  : getWordApiBaseUrl()
+    ? 'server-api-local-fallback'
+    : 'local-mock'
 export const HOT_WORDS = LOCAL_HOT_WORDS
 export const TODAY_WORD_ID = LOCAL_TODAY_WORD_ID
 export const NAV_ITEMS = LOCAL_NAV_ITEMS
 
 const WORD_RECORDS = SOURCE_WORDS.map((item) => normalizeWordRecord(item))
 const PUBLISHED_WORD_RECORDS = WORD_RECORDS.filter((item) => item.status === 'published')
+
+function getPublishedWordRecords() {
+  return mergePreviewWords(PUBLISHED_WORD_RECORDS, REMOTE_WORD_RECORDS)
+    .map((item) => normalizeWordRecord(item))
+    .filter((item) => item.status === 'published')
+}
+
+function getAllWordRecords() {
+  return mergePreviewWords(WORD_RECORDS, REMOTE_WORD_RECORDS).map((item) => normalizeWordRecord(item))
+}
+
+function cacheRemoteWords(words) {
+  if (!Array.isArray(words) || !words.length) return []
+  REMOTE_WORD_RECORDS = mergePreviewWords(REMOTE_WORD_RECORDS, words)
+    .map((item) => normalizeWordRecord(item))
+    .filter((item) => item.status === 'published')
+  return REMOTE_WORD_RECORDS.map((item) => cloneWord(item))
+}
 
 function getLookupCandidates(value) {
   const raw = (value || '').trim()
@@ -143,12 +168,13 @@ function findWordById(records, id) {
 function findAnyWordByValue(value) {
   const raw = (value || '').trim()
   const candidates = getLookupCandidates(raw)
+  const records = getAllWordRecords()
   for (let index = 0; index < candidates.length; index += 1) {
-    const byId = findWordById(WORD_RECORDS, candidates[index])
+    const byId = findWordById(records, candidates[index])
     if (byId) return byId
   }
   const keyword = normalizeWordQuery(raw)
-  return WORD_RECORDS.find((item) => item.word.toLowerCase() === keyword)
+  return records.find((item) => item.word.toLowerCase() === keyword)
 }
 
 function clonePart(part) {
@@ -184,19 +210,23 @@ function cloneWord(word) {
 export { createWordDraft, normalizeWordQuery, validateWordRecord }
 
 export function getContentRepositoryInfo() {
+  const apiBaseUrl = getWordApiBaseUrl()
   return {
     mode: CONTENT_REPOSITORY_MODE,
-    remoteEnabled: false,
+    remoteEnabled: Boolean(apiBaseUrl),
+    apiBaseUrl,
     note: isProductionRuntime()
       ? 'Production runtime ignores local preview bridge records.'
       : ACTIVE_DEV_PREVIEW_WORDS.length
       ? 'Current MVP reads admin-synced local preview records before mock records.'
+      : apiBaseUrl
+      ? 'Development runtime can read words from the local/server API before falling back to local mock records.'
       : 'Current MVP reads local mock records through this repository facade.'
   }
 }
 
 export function listWords() {
-  return PUBLISHED_WORD_RECORDS.map((item) => cloneWord(item))
+  return getPublishedWordRecords().map((item) => cloneWord(item))
 }
 
 export function searchWords(query) {
@@ -204,17 +234,17 @@ export function searchWords(query) {
   if (!keyword) {
     return []
   }
-  return PUBLISHED_WORD_RECORDS.filter((item) => item.word.toLowerCase().includes(keyword)).map((item) => cloneWord(item))
+  return getPublishedWordRecords().filter((item) => item.word.toLowerCase().includes(keyword)).map((item) => cloneWord(item))
 }
 
 export function getWordById(id) {
-  const word = findWordById(PUBLISHED_WORD_RECORDS, id)
+  const word = findWordById(getPublishedWordRecords(), id)
   return cloneWord(word)
 }
 
 export function getWordByWord(word) {
   const keyword = normalizeWordQuery(word)
-  const record = PUBLISHED_WORD_RECORDS.find((item) => item.word.toLowerCase() === keyword)
+  const record = getPublishedWordRecords().find((item) => item.word.toLowerCase() === keyword)
   return cloneWord(record)
 }
 
@@ -239,13 +269,30 @@ export function getRelatedWords(word) {
 }
 
 export function fetchWords(query) {
-  return Promise.resolve(searchWords(query))
+  return fetchServerWords(query)
+    .then((words) => {
+      const remoteWords = cacheRemoteWords(words)
+      return remoteWords.length ? remoteWords : searchWords(query)
+    })
+    .catch(() => searchWords(query))
 }
 
 export function fetchWordById(id) {
-  return Promise.resolve(getWordById(id))
+  return fetchServerWordById(id)
+    .then((word) => {
+      if (!word) return getWordById(id)
+      cacheRemoteWords([word])
+      return cloneWord(word)
+    })
+    .catch(() => getWordById(id))
 }
 
 export function fetchWordByWord(word) {
-  return Promise.resolve(getWordByWord(word))
+  return fetchServerWords(word)
+    .then((words) => {
+      const remoteWords = cacheRemoteWords(words)
+      const keyword = normalizeWordQuery(word)
+      return remoteWords.find((item) => item.word.toLowerCase() === keyword) || getWordByWord(word)
+    })
+    .catch(() => getWordByWord(word))
 }

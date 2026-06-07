@@ -226,7 +226,7 @@
 </template>
 
 <script>
-import { TODAY_WORD_ID, getWordById, getWordByWord, searchWords, normalizeWordQuery } from '../../common/word-repository.js'
+import { TODAY_WORD_ID, fetchWordByWord, fetchWords, getWordById, getWordByWord, searchWords, normalizeWordQuery } from '../../common/word-repository.js'
 import { addRecentWord, clearRecentWords, getRecentWords, getUserState, savePendingWordId } from '../../common/user-store.js'
 
 const initialTodayWord = getWordById(TODAY_WORD_ID)
@@ -284,10 +284,14 @@ export default {
       if (!word) return ''
       return `可以先提交“${word}”，后续优先补充讲解。`
     },
-    updateSuggestionState(word) {
+    async updateSuggestionState(word) {
       this.results = searchWords(word)
       this.missingWord = word
       this.missingDescription = this.buildMissingDescription(word)
+      const requestWord = word
+      const remoteResults = await fetchWords(word)
+      if (this.normalizedQuery !== requestWord) return
+      this.results = remoteResults
     },
     handleQueryInput(event) {
       this.query = event && event.detail ? event.detail.value : ''
@@ -328,7 +332,7 @@ export default {
       clearTimeout(this.searchBlurTimer)
       this.searchBlurTimer = null
     },
-    submitSearch() {
+    async submitSearch() {
       if (this.searching) return
 
       this.clearSearchBlurTimer()
@@ -347,7 +351,14 @@ export default {
         return
       }
 
-      this.updateSuggestionState(word)
+      const remoteExact = await fetchWordByWord(word)
+      if (remoteExact) {
+        this.searching = false
+        this.openDetail(remoteExact.id, true)
+        return
+      }
+
+      await this.updateSuggestionState(word)
       this.searching = false
       this.searchPanelOpen = true
     },

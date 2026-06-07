@@ -138,6 +138,9 @@
 					<view class="editor-actions">
 						<view class="save-state">{{ saveState }}</view>
 						<button class="secondary-button" @click="saveCurrentAsDraft">{{ draftActionText }}</button>
+						<button class="secondary-button" :disabled="serverSync.busy" @click="saveCurrentToServerApi">
+							{{ serverSync.busy ? '保存中...' : '保存到服务器测试 API' }}
+						</button>
 						<button class="publish-button" @click="publishCurrent">{{ primaryActionText }}</button>
 						<button v-if="canUnpublishCurrent" class="danger-button" @click="unpublishCurrent">撤下当前词条</button>
 						<button v-if="canArchiveCurrent" class="archive-button" @click="archiveCurrent">归档当前词条</button>
@@ -603,6 +606,8 @@
 </template>
 
 <script>
+import { saveAdminWordToServer } from '../../common/api-client.js'
+
 const STORAGE_KEY = 'pictographic-admin:words-draft'
 const PENDING_STORAGE_KEY = 'pictographic-admin:pending-imports'
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -774,6 +779,10 @@ export default {
 				busy: false,
 				port: 8787,
 				message: '本地预览桥未同步'
+			},
+			serverSync: {
+				busy: false,
+				message: 'Server API not synced'
 			},
 			statusOptions: [
 				{ label: '草稿', value: 'draft' },
@@ -1113,6 +1122,37 @@ export default {
 			}
 			this.saveState = '当前词条已保存为草稿'
 			uni.showToast({ title: '已保存为草稿', icon: 'success' })
+		},
+		async saveCurrentToServerApi() {
+			if (this.serverSync.busy) return
+			if (!this.validateCurrent()) return
+			this.persistFormToList()
+			const word = this.stripRuntimeVideoFields(this.normalizeWord(this.form))
+
+			this.serverSync.busy = true
+			this.serverSync.message = 'Saving current word to server API...'
+			this.saveState = 'Saving current word to server API...'
+			try {
+				const result = await saveAdminWordToServer(word)
+				this.serverSync.message = `Saved ${result.word.word || result.word.id} to server API`
+				this.saveState = 'Saved current word to server API'
+				uni.showToast({ title: 'Saved to server API', icon: 'success' })
+			} catch (error) {
+				const message = error && error.message ? error.message : 'Server API save failed'
+				this.serverSync.message = message
+				this.saveState = 'Server API save failed'
+				let content = message
+				if (message.includes('not available')) {
+					content = 'Please run npm.cmd run dev:api from the project root, then try saving again.'
+				}
+				uni.showModal({
+					title: 'Save Failed',
+					content,
+					showCancel: false
+				})
+			} finally {
+				this.serverSync.busy = false
+			}
 		},
 		publishCurrent() {
 			if (!this.validateCurrent()) return

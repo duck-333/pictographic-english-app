@@ -1,5 +1,32 @@
 # Documentation
 
+### 2026-06-07: minimum server API integration link
+
+Decision:
+- Add a minimal Node HTTP API under `server/` for development and server testing before the WeChat mini program has a filed HTTPS domain.
+- Keep the existing local preview bridge. It remains the fastest way to sync local video/audio preview data into WeChat Developer Tools.
+- Let the admin page save the current word to `POST /api/admin/words` for test publishing into the server-side local store.
+- Let the mini program development runtime try the server API for words, then fall back to existing local preview/mock data when the API is unavailable.
+- Do not store admin tokens or secrets in frontend code. This is not a production admin auth system.
+
+Minimum API:
+- `GET /api/health`: service status and local word count.
+- `GET /api/words`: published word list, with optional `?q=keyword` filtering.
+- `GET /api/words/:id`: one published word by stable id.
+- `POST /api/admin/words`: development-only admin upsert for one word record.
+
+Development flow:
+- Start API from the repository root with `npm.cmd run dev:api`.
+- Admin HBuilderX project: open `admin-portal/pictographic-admin`, edit a word, then click `保存到服务器测试 API`.
+- Mini program HBuilderX project: open `miniapp-uni/word-app1`, run to WeChat Developer Tools, then search a word saved by the admin page.
+- API test data is written to `server/local-data/words.json`, which is ignored by Git.
+
+Production boundary:
+- Local HTTP API bases such as `http://127.0.0.1:3001`, `http://localhost:3001`, and `http://SERVER_IP:3001` are development-only.
+- Production must wait for a filed HTTPS domain and WeChat allowed request domain configuration.
+- `npm.cmd run check:production` now also verifies that production or unknown runtime does not enable local HTTP API bases.
+- Existing media guards still block `127.0.0.1`, `localhost`, `mock-cloud://`, `blob:`, `data:`, and example URLs in production content paths.
+
 ### 2026-05-25: homepage search hero layout
 - Move the home search box lower inside the hero so the title area and search action have more breathing room.
 - Use a dark search base (`#09314F`) and a warm search button (`#FFAB50`) to make search feel like the primary action.

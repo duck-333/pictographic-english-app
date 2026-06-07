@@ -6,6 +6,7 @@ miniapp-uni/node_modules
 miniapp-uni/word-app1/unpackage
 content-seed/dev-preview-words.json
 content-seed/dev-preview-videos
+server/local-data/*.json
 admin-portal/pictographic-admin/unpackage
 admin-portal/pictographic-admin/.hbuilderx
 admin-portal/pictographic-admin/node_modules

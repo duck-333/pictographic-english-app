@@ -279,6 +279,8 @@
 
 <script>
 import {
+  fetchWordById,
+  fetchWordByWord,
   getRelatedWords,
   getWordAccessInfo,
   getWordById,
@@ -559,6 +561,32 @@ export default {
       if (target) {
         addRecentWord(target.id, { countSearch: false })
       }
+      this.loadRemoteWord(raw)
+    },
+    async loadRemoteWord(raw) {
+      const remote = (await fetchWordById(raw)) || (await fetchWordByWord(raw))
+      if (!remote) return
+
+      this.word = remote
+      this.notFoundQuery = ''
+      this.notFoundTitle = ''
+      this.notFoundDescription = ''
+      this.relatedWords = getRelatedWords(remote)
+      this.bookmarked = isFavorite(remote.id)
+      this.expandedPart = ''
+      this.activePartMeaning = ''
+      this.showFullDesc = true
+      this.activeClipIndex = 0
+      this.clipCurrentTime = 0
+      this.clipIsPlaying = false
+      this.enforcingClipBoundary = false
+      this.pausedAtClipEnd = false
+      this.pendingClipAutoplay = false
+      this.clipIsSeeking = false
+      this.resumeAfterSeeking = false
+      this.pronunciationIsPlaying = false
+      this.clearClipPlaybackTimer()
+      addRecentWord(remote.id, { countSearch: false })
     },
     resolveLearningNode(rawValue) {
       const raw = (rawValue || '').trim()
