@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 
+import { getWordApiBaseUrl } from '../miniapp-uni/word-app1/common/api-config.js'
 import { DEV_PREVIEW_WORDS } from '../miniapp-uni/word-app1/common/dev-preview-data.js'
 import { WORDS } from '../miniapp-uni/word-app1/common/mock-data.js'
 import { normalizeWordRecord } from '../miniapp-uni/word-app1/common/content-schema.js'
@@ -146,6 +147,26 @@ function checkMediaGuards(errors) {
   }
 }
 
+function checkApiBaseGuards(errors) {
+  const developmentLocalApi = getWordApiBaseUrl({ nodeEnv: 'development', apiBaseUrl: 'http://127.0.0.1:3001' })
+  const productionLocalApi = getWordApiBaseUrl({ nodeEnv: 'production', apiBaseUrl: 'http://127.0.0.1:3001' })
+  const missingEnvLocalApi = getWordApiBaseUrl({ nodeEnv: '', apiBaseUrl: 'http://127.0.0.1:3001' })
+  const productionHttpsApi = getWordApiBaseUrl({ nodeEnv: 'production', apiBaseUrl: 'https://api.pictographic-english.test' })
+
+  if (developmentLocalApi !== 'http://127.0.0.1:3001') {
+    addError(errors, 'development API config must allow local/server HTTP API base URLs for testing.')
+  }
+  if (productionLocalApi) {
+    addError(errors, 'production API config must block local HTTP API base URLs.')
+  }
+  if (!missingEnvLocalApi) {
+    addError(errors, 'missing NODE_ENV should default to development-like mode and allow local API base URLs for development testing.')
+  }
+  if (productionHttpsApi !== 'https://api.pictographic-english.test') {
+    addError(errors, 'production API config must allow configured HTTPS API base URLs.')
+  }
+}
+
 function checkWordDetailUsesMediaGuard(errors) {
   const sourceText = fs.readFileSync(new URL(`../${WORD_DETAIL_PATH}`, import.meta.url), 'utf8')
   if (!/hasPlayableVideo\(\)\s*\{[\s\S]*?return\s+isPlayableMediaUrl\(this\.activeVideoUrl\)\s*&&\s*this\.activeClipHasValidRange[\s\S]*?\}/.test(sourceText)) {
@@ -165,6 +186,7 @@ function main() {
   checkDevPreviewData(errors)
   checkPublishedWords(errors)
   checkMediaGuards(errors)
+  checkApiBaseGuards(errors)
   checkWordDetailUsesMediaGuard(errors)
 
   if (errors.length > 0) {
@@ -179,6 +201,7 @@ function main() {
   console.log('- production runtime ignores local preview words')
   console.log('- published words do not contain blocked preview URLs')
   console.log('- production media guard blocks local/mock/blob/data/example URLs')
+  console.log('- production API config blocks local HTTP API base URLs')
 }
 
 main()
