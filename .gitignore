@@ -1,5 +1,9 @@
 node_modules
 dist
+.env
+.env.local
+.env.development
+.env.production
 miniapp-uni/unpackage
 miniapp-uni/.hbuilderx
 miniapp-uni/node_modules

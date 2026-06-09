@@ -1,15 +1,46 @@
 <template>
 	<view class="admin-page">
+		<view v-if="!adminUnlocked" class="admin-login-shell">
+			<view class="admin-login-card">
+				<view class="admin-login-badge">Pictographic English Admin</view>
+				<text class="admin-login-title">管理员登录</text>
+				<text class="admin-login-desc">请输入 Admin API Token 以进入内容工作台</text>
+				<label class="admin-login-field">
+					<text>Admin API Token</text>
+					<input
+						v-model="adminApiTokenDraft"
+						class="admin-login-input"
+						password
+						placeholder="本地开发可输入 dev-admin-token"
+						confirm-type="done"
+						@confirm="unlockAdmin"
+					/>
+				</label>
+				<button class="admin-login-button" :disabled="adminAuthChecking" @click="unlockAdmin">
+					{{ adminAuthChecking ? '校验中...' : '进入后台' }}
+				</button>
+				<text class="admin-login-error" v-if="adminTokenStatus">{{ adminTokenStatus }}</text>
+				<text class="admin-login-tip">本地开发默认可用 dev-admin-token，生产环境必须使用服务器配置的 ADMIN_API_TOKEN。</text>
+			</view>
+		</view>
+
+		<template v-else>
 		<view class="hero">
 			<view>
 				<view class="eyebrow">Pictographic English Admin</view>
 				<text class="title">象形英语内容工作台</text>
 				<text class="subtitle">本阶段先做本地后台原型，不绑定云空间，也不会影响用户端小程序。</text>
 			</view>
-			<view v-if="activeAdminView === 'workbench'" class="hero-actions">
-				<button class="ghost-button" @click="resetDraft">恢复示例数据</button>
-				<button class="outline-button" @click="saveDraft">保存全部本地草稿</button>
-				<button class="publish-all-button" @click="publishAllDrafts">发布全部草稿</button>
+			<view class="hero-actions">
+				<view class="admin-session-pill">
+					<text>管理员状态：已解锁</text>
+					<button class="lock-button" @click="lockAdmin">锁定/退出</button>
+				</view>
+				<button v-if="activeAdminView === 'workbench'" class="ghost-button" @click="resetDraft">恢复示例数据</button>
+				<button v-if="activeAdminView === 'workbench'" class="outline-button" @click="saveDraft">保存全部本地草稿</button>
+				<button v-if="activeAdminView === 'workbench'" class="publish-all-button" :disabled="serverSync.busy" @click="publishAllDrafts">
+					{{ serverSync.busy ? '发布中...' : '发布全部本地草稿到服务器' }}
+				</button>
 			</view>
 		</view>
 
@@ -138,11 +169,10 @@
 					<view class="editor-actions">
 						<view class="save-state">{{ saveState }}</view>
 						<button class="secondary-button" @click="saveCurrentAsDraft">{{ draftActionText }}</button>
-						<button class="secondary-button" :disabled="serverSync.busy" @click="saveCurrentToServerApi">
-							{{ serverSync.busy ? '保存中...' : '保存到服务器测试 API' }}
+						<button class="publish-button" :disabled="serverSync.busy" @click="publishCurrent">
+							{{ serverSync.busy ? '同步中...' : primaryActionText }}
 						</button>
-						<button class="publish-button" @click="publishCurrent">{{ primaryActionText }}</button>
-						<button v-if="canUnpublishCurrent" class="danger-button" @click="unpublishCurrent">撤下当前词条</button>
+						<button v-if="canUnpublishCurrent" class="danger-button" :disabled="serverSync.busy" @click="unpublishCurrent">撤下当前词条</button>
 						<button v-if="canArchiveCurrent" class="archive-button" @click="archiveCurrent">归档当前词条</button>
 					</view>
 				</view>
@@ -602,11 +632,12 @@
 				</view>
 			</view>
 		</view>
+		</template>
 	</view>
 </template>
 
 <script>
-import { saveAdminWordToServer } from '../../common/api-client.js'
+import { checkAdminAuth, getAdminApiToken, saveAdminApiToken, saveAdminWordToServer } from '../../common/api-client.js'
 
 const STORAGE_KEY = 'pictographic-admin:words-draft'
 const PENDING_STORAGE_KEY = 'pictographic-admin:pending-imports'
@@ -784,6 +815,10 @@ export default {
 				busy: false,
 				message: 'Server API not synced'
 			},
+			adminUnlocked: false,
+			adminAuthChecking: false,
+			adminApiTokenDraft: '',
+			adminTokenStatus: '未保存 Admin API Token，本地开发可填写 dev-admin-token。',
 			statusOptions: [
 				{ label: '草稿', value: 'draft' },
 				{ label: '已发布', value: 'published' },
@@ -931,6 +966,7 @@ export default {
 	},
 	onLoad() {
 		this.loadDraft()
+		this.loadAdminApiToken()
 	},
 	mounted() {
 		this.installNativeVideoButtonHandler()
@@ -1123,6 +1159,24 @@ export default {
 			this.saveState = '当前词条已保存为草稿'
 			uni.showToast({ title: '已保存为草稿', icon: 'success' })
 		},
+		loadAdminApiToken() {
+			const token = getAdminApiToken()
+			this.adminApiTokenDraft = token
+			this.adminTokenStatus = token
+				? '已加载本地保存的 Admin API Token。'
+				: '未保存 Admin API Token，本地开发可填写 dev-admin-token。'
+		},
+		saveAdminApiTokenDraft() {
+			const token = saveAdminApiToken(this.adminApiTokenDraft)
+			this.adminApiTokenDraft = token
+			this.adminTokenStatus = token
+				? 'Admin API Token 已保存到本机 localStorage。'
+				: 'Admin API Token 已清除；服务器同步会鉴权失败。'
+			uni.showToast({
+				title: token ? 'Token 已保存' : 'Token 已清除',
+				icon: 'none'
+			})
+		},
 		async saveCurrentToServerApi() {
 			if (this.serverSync.busy) return
 			if (!this.validateCurrent()) return
@@ -1133,15 +1187,21 @@ export default {
 			this.serverSync.message = 'Saving current word to server API...'
 			this.saveState = 'Saving current word to server API...'
 			try {
-				const result = await saveAdminWordToServer(word)
+				const result = await saveAdminWordToServer(word, {
+					adminApiToken: this.adminApiTokenDraft
+				})
 				this.serverSync.message = `Saved ${result.word.word || result.word.id} to server API`
 				this.saveState = 'Saved current word to server API'
 				uni.showToast({ title: 'Saved to server API', icon: 'success' })
 			} catch (error) {
 				const message = error && error.message ? error.message : 'Server API save failed'
-				this.serverSync.message = message
-				this.saveState = 'Server API save failed'
+				const isAuthError = !!(error && error.isAuthError)
+				this.serverSync.message = isAuthError ? '管理员鉴权失败，请检查 Admin API Token' : message
+				this.saveState = isAuthError ? 'Admin API token check failed' : 'Server API save failed'
 				let content = message
+				if (isAuthError) {
+					content = '管理员鉴权失败，请检查 Admin API Token。'
+				}
 				if (message.includes('not available')) {
 					content = 'Please run npm.cmd run dev:api from the project root, then try saving again.'
 				}
@@ -1150,6 +1210,126 @@ export default {
 					content,
 					showCancel: false
 				})
+			} finally {
+				this.serverSync.busy = false
+			}
+		},
+		async loadAdminApiToken() {
+			const token = getAdminApiToken()
+			this.adminApiTokenDraft = token
+			this.adminUnlocked = false
+			this.adminTokenStatus = token ? '正在校验已保存的 Admin API Token...' : ''
+			if (!token) return
+
+			try {
+				await checkAdminAuth(token)
+				this.adminUnlocked = true
+				this.adminTokenStatus = ''
+				this.serverSync.message = '管理员已解锁'
+			} catch (error) {
+				saveAdminApiToken('')
+				this.adminApiTokenDraft = ''
+				this.adminUnlocked = false
+				this.adminTokenStatus = '管理员鉴权失败，请检查 Admin API Token。'
+			}
+		},
+		async unlockAdmin() {
+			if (this.adminAuthChecking) return
+			const token = String(this.adminApiTokenDraft || '').trim()
+			if (!token) {
+				this.adminTokenStatus = '请输入 Admin API Token。'
+				return
+			}
+
+			this.adminAuthChecking = true
+			this.adminTokenStatus = '正在校验 Admin API Token...'
+			try {
+				await checkAdminAuth(token)
+				this.adminApiTokenDraft = saveAdminApiToken(token)
+				this.adminUnlocked = true
+				this.adminTokenStatus = ''
+				this.serverSync.message = '管理员已解锁'
+				uni.showToast({ title: '已进入后台', icon: 'success' })
+			} catch (error) {
+				saveAdminApiToken('')
+				this.adminUnlocked = false
+				this.adminTokenStatus = '管理员鉴权失败，请检查 Admin API Token。'
+				uni.showModal({
+					title: '管理员鉴权失败',
+					content: '管理员鉴权失败，请检查 Admin API Token。',
+					showCancel: false
+				})
+			} finally {
+				this.adminAuthChecking = false
+			}
+		},
+		lockAdmin() {
+			saveAdminApiToken('')
+			this.adminApiTokenDraft = ''
+			this.adminUnlocked = false
+			this.adminTokenStatus = ''
+			this.serverSync.message = '管理员已锁定'
+			uni.showToast({ title: '已锁定后台', icon: 'none' })
+		},
+		handleAdminUnauthorized() {
+			saveAdminApiToken('')
+			this.adminApiTokenDraft = ''
+			this.adminUnlocked = false
+			this.adminTokenStatus = '管理员鉴权失败，请重新登录。'
+			this.serverSync.message = '管理员鉴权失败，请重新登录'
+			this.saveState = '管理员鉴权失败，请重新登录'
+			uni.showModal({
+				title: '管理员鉴权失败',
+				content: '管理员鉴权失败，请重新登录。',
+				showCancel: false
+			})
+		},
+		async confirmServerAction(title, content, confirmText = '确认') {
+			return new Promise((resolve) => {
+				uni.showModal({
+					title,
+					content,
+					confirmText,
+					cancelText: '再检查',
+					confirmColor: '#fe8500',
+					success: (result) => resolve(!!result.confirm)
+				})
+			})
+		},
+		async syncWordToServer(word, successMessage) {
+			if (!this.adminUnlocked) {
+				this.handleAdminUnauthorized()
+				return null
+			}
+
+			this.serverSync.busy = true
+			this.serverSync.message = '正在同步到服务器...'
+			this.saveState = '正在同步到服务器...'
+			try {
+				const result = await saveAdminWordToServer(word, {
+					adminApiToken: this.adminApiTokenDraft
+				})
+				this.serverSync.message = successMessage
+				this.saveState = successMessage
+				uni.showToast({ title: successMessage, icon: 'success' })
+				return result
+			} catch (error) {
+				if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+					this.handleAdminUnauthorized()
+					return null
+				}
+
+				const message = error && error.message ? error.message : 'Server API save failed'
+				this.serverSync.message = message
+				this.saveState = '服务器同步失败'
+				uni.showModal({
+					title: '服务器同步失败',
+					content: message.includes('not available')
+						? '请先在项目根目录运行 npm.cmd run dev:api，然后再重试。'
+						: message,
+					showCancel: false
+				})
+				return null
 			} finally {
 				this.serverSync.busy = false
 			}
@@ -1236,6 +1416,144 @@ export default {
 				this.saveState = '全部草稿已发布到本地列表'
 				uni.showToast({ title: '已发布全部草稿', icon: 'success' })
 			})
+		},
+		async publishCurrent() {
+			if (this.serverSync.busy) return
+			if (!this.validateCurrent()) return
+			if (this.selectedSource === 'pending') {
+				this.commitCurrentPendingToDraft()
+			}
+
+			const confirmed = await this.confirmServerAction(
+				'发布当前词条',
+				`确认发布「${this.form.word}」并同步到服务器吗？发布后小程序公开接口会读取这个词条。`,
+				'确认发布'
+			)
+			if (!confirmed) return
+
+			const previousForm = clone(this.form)
+			const previousWords = clone(this.words)
+			this.form.status = 'published'
+			this.persistFormToList()
+			if (!this.validateAllWords()) {
+				this.form = previousForm
+				this.words = previousWords
+				return
+			}
+
+			const word = this.stripRuntimeVideoFields(this.normalizeWord(this.form))
+			const result = await this.syncWordToServer(word, '当前词条已发布到服务器')
+			if (!result) {
+				this.form = previousForm
+				this.words = previousWords
+				return
+			}
+
+			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
+			if (this.activeBucket === 'archived') {
+				this.activeBucket = 'uploaded'
+				this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
+			}
+		},
+		async unpublishCurrent() {
+			if (this.serverSync.busy) return
+			if (this.selectedSource === 'pending' || this.form.status !== 'published') return
+			if (!this.validateStatusActionTarget()) return
+
+			const confirmed = await this.confirmServerAction(
+				'撤下当前词条',
+				'撤下后，小程序用户端将看不到该词条，但后台仍会保留，可重新发布。',
+				'确认撤下'
+			)
+			if (!confirmed) return
+
+			const previousForm = clone(this.form)
+			const previousWords = clone(this.words)
+			this.form.status = 'unpublished'
+			this.persistFormToList()
+			const word = this.stripRuntimeVideoFields(this.normalizeWord(this.form))
+			const result = await this.syncWordToServer(word, '当前词条已撤下并同步到服务器')
+			if (!result) {
+				this.form = previousForm
+				this.words = previousWords
+				return
+			}
+
+			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
+		},
+		async publishAllDrafts() {
+			if (this.serverSync.busy) return
+			if (!this.validateCurrent()) return
+			this.persistFormToList()
+			if (this.selectedSource === 'pending') {
+				this.persistPendingWords()
+			}
+			if (!this.validateAllWords()) return
+
+			const draftWords = this.words.filter((item) => item.status === 'draft')
+			if (!draftWords.length) {
+				uni.showToast({ title: '当前没有本地草稿', icon: 'none' })
+				return
+			}
+
+			const confirmed = await this.confirmServerAction(
+				'发布全部本地草稿到服务器',
+				`确认把 ${draftWords.length} 个本地草稿发布并逐条同步到服务器吗？`,
+				'确认发布'
+			)
+			if (!confirmed) return
+
+			const previousForm = clone(this.form)
+			const previousWords = clone(this.words)
+			const publishedPayloads = draftWords.map((item) => this.stripRuntimeVideoFields(this.normalizeWord({
+				...clone(item),
+				status: 'published'
+			})))
+
+			this.serverSync.busy = true
+			this.serverSync.message = `正在发布 ${publishedPayloads.length} 个本地草稿到服务器...`
+			this.saveState = this.serverSync.message
+			try {
+				for (const word of publishedPayloads) {
+					await saveAdminWordToServer(word, {
+						adminApiToken: this.adminApiTokenDraft
+					})
+				}
+
+				this.words = this.words.map((item) => {
+					const next = clone(item)
+					if (next.status === 'draft') {
+						next.status = 'published'
+					}
+					return next
+				})
+				const current = this.words.find((item) => item.id === this.selectedId)
+				if (current) {
+					this.form = clone(current)
+					this.syncVideoUploadStateFromForm()
+				}
+				uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
+				this.serverSync.message = '全部草稿已发布到服务器'
+				this.saveState = '全部草稿已发布到服务器'
+				uni.showToast({ title: '全部草稿已发布到服务器', icon: 'success' })
+			} catch (error) {
+				this.form = previousForm
+				this.words = previousWords
+				if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+					this.handleAdminUnauthorized()
+				} else {
+					const message = error && error.message ? error.message : 'Server API save failed'
+					this.serverSync.message = message
+					this.saveState = '发布全部草稿失败'
+					uni.showModal({
+						title: '发布失败',
+						content: message,
+						showCancel: false
+					})
+				}
+			} finally {
+				this.serverSync.busy = false
+			}
 		},
 		confirmPublish(title, content, onConfirm) {
 			uni.showModal({
@@ -3317,6 +3635,111 @@ export default {
 	box-sizing: border-box;
 }
 
+.admin-login-shell {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: calc(100vh - 56px);
+}
+
+.admin-login-card {
+	width: min(520px, 100%);
+	padding: 34px;
+	border: 1px solid rgba(14, 58, 92, 0.12);
+	border-radius: 30px;
+	background: #ffffff;
+	box-shadow: 0 24px 70px rgba(14, 58, 92, 0.16);
+	box-sizing: border-box;
+}
+
+.admin-login-badge,
+.admin-login-title,
+.admin-login-desc,
+.admin-login-tip,
+.admin-login-error {
+	display: block;
+}
+
+.admin-login-badge {
+	display: inline-flex;
+	padding: 6px 12px;
+	border-radius: 999px;
+	background: #eaf7ff;
+	color: #0e3a5c;
+	font-size: 12px;
+	font-weight: 900;
+}
+
+.admin-login-title {
+	margin-top: 18px;
+	color: #0e3a5c;
+	font-size: 30px;
+	font-weight: 900;
+}
+
+.admin-login-desc {
+	margin-top: 8px;
+	color: #66869b;
+	font-size: 15px;
+	line-height: 1.7;
+}
+
+.admin-login-field {
+	display: block;
+	margin-top: 24px;
+}
+
+.admin-login-field text {
+	display: block;
+	margin-bottom: 8px;
+	color: #466578;
+	font-size: 13px;
+	font-weight: 800;
+}
+
+.admin-login-input {
+	height: 48px;
+	padding: 0 16px;
+	border: 1px solid #cfe4f0;
+	border-radius: 16px;
+	background: #f8fcff;
+	color: #0e3a5c;
+	box-sizing: border-box;
+}
+
+.admin-login-button {
+	width: 100%;
+	margin-top: 18px;
+	border-radius: 999px;
+	background: #0e3a5c;
+	color: #fff;
+	font-size: 16px;
+	font-weight: 900;
+	line-height: 48px;
+}
+
+.admin-login-button::after {
+	border: 0;
+}
+
+.admin-login-button[disabled] {
+	opacity: 0.64;
+}
+
+.admin-login-error {
+	margin-top: 12px;
+	color: #c74a36;
+	font-size: 13px;
+	font-weight: 800;
+}
+
+.admin-login-tip {
+	margin-top: 14px;
+	color: #66869b;
+	font-size: 12px;
+	line-height: 1.7;
+}
+
 .hero {
 	display: flex;
 	justify-content: space-between;
@@ -3354,6 +3777,33 @@ export default {
 	justify-content: flex-end;
 	flex-wrap: wrap;
 	gap: 12px;
+}
+
+.admin-session-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 10px 8px 14px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.16);
+	color: #ffeba2;
+	font-size: 13px;
+	font-weight: 900;
+}
+
+.lock-button {
+	margin: 0;
+	padding: 0 14px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.92);
+	color: #0e3a5c;
+	font-size: 12px;
+	font-weight: 900;
+	line-height: 30px;
+}
+
+.lock-button::after {
+	border: 0;
 }
 
 .admin-view-nav {
@@ -4577,6 +5027,61 @@ button::after {
 	color: #66869b;
 	font-size: 13px;
 	line-height: 1.6;
+}
+
+.admin-token-card {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
+	gap: 14px;
+	align-items: center;
+	margin-bottom: 18px;
+	padding: 16px;
+	border: 1px solid #d8e9f2;
+	border-radius: 20px;
+	background: #f8fcff;
+}
+
+.admin-token-title,
+.admin-token-note,
+.admin-token-status {
+	display: block;
+}
+
+.admin-token-title {
+	color: #0e3a5c;
+	font-size: 15px;
+	font-weight: 900;
+}
+
+.admin-token-note,
+.admin-token-status {
+	margin-top: 4px;
+	color: #66869b;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.admin-token-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	align-items: center;
+	justify-content: flex-end;
+}
+
+.admin-token-input {
+	flex: 1 1 180px;
+	min-width: 0;
+	height: 42px;
+	padding: 0 14px;
+	border: 1px solid #d8e9f2;
+	border-radius: 14px;
+	background: #ffffff;
+	color: #0e3a5c;
+}
+
+.admin-token-status {
+	grid-column: 1 / -1;
 }
 
 .save-state {
