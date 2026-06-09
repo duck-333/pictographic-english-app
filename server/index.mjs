@@ -1,6 +1,7 @@
 import http from 'node:http'
 import { pathToFileURL } from 'node:url'
 
+import { requireAdminAuth } from './auth.mjs'
 import { createWordStore } from './word-store.mjs'
 
 const DEFAULT_PORT = 3001
@@ -11,7 +12,7 @@ function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Content-Type': 'application/json; charset=utf-8'
   })
   res.end(JSON.stringify(payload))
@@ -21,7 +22,7 @@ function sendOptions(res) {
   res.writeHead(204, {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
   })
   res.end()
 }
@@ -67,6 +68,10 @@ function normalizePathname(pathname) {
 export function createApiHandler(options = {}) {
   const store = options.store || createWordStore()
   const now = options.now || (() => new Date())
+  const adminAuthOptions = {
+    nodeEnv: options.nodeEnv,
+    adminApiToken: options.adminApiToken
+  }
 
   return async function handleApiRequest(req, res) {
     if (req.method === 'OPTIONS') {
@@ -116,7 +121,32 @@ export function createApiHandler(options = {}) {
         return
       }
 
+      if (req.method === 'GET' && pathname === '/api/admin/auth/check') {
+        const authResult = requireAdminAuth(req, adminAuthOptions)
+        if (!authResult.ok) {
+          sendJson(res, authResult.statusCode, {
+            ok: false,
+            message: 'Unauthorized'
+          })
+          return
+        }
+
+        sendJson(res, 200, {
+          ok: true
+        })
+        return
+      }
+
       if (req.method === 'POST' && pathname === '/api/admin/words') {
+        const authResult = requireAdminAuth(req, adminAuthOptions)
+        if (!authResult.ok) {
+          sendJson(res, authResult.statusCode, {
+            ok: false,
+            message: 'Unauthorized'
+          })
+          return
+        }
+
         const body = await readJsonBody(req)
         const extracted = extractWordPayload(body)
         const result = await store.saveWord(extracted)

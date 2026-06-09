@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 
+import { DEFAULT_DEV_ADMIN_API_TOKEN, getAdminApiToken } from '../server/auth.mjs'
 import { getWordApiBaseUrl } from '../miniapp-uni/word-app1/common/api-config.js'
 import { DEV_PREVIEW_WORDS } from '../miniapp-uni/word-app1/common/dev-preview-data.js'
 import { WORDS } from '../miniapp-uni/word-app1/common/mock-data.js'
@@ -189,6 +190,32 @@ function checkApiBaseGuards(errors) {
   }
 }
 
+function checkAdminAuthGuards(errors) {
+  const productionMissingToken = getAdminApiToken({ nodeEnv: 'production', adminApiToken: '' })
+  const productionDefaultToken = getAdminApiToken({
+    nodeEnv: 'production',
+    adminApiToken: DEFAULT_DEV_ADMIN_API_TOKEN
+  })
+  const productionConfiguredToken = getAdminApiToken({
+    nodeEnv: 'production',
+    adminApiToken: 'real-production-admin-token'
+  })
+  const developmentDefaultToken = getAdminApiToken({ nodeEnv: 'development', adminApiToken: '' })
+
+  if (productionMissingToken) {
+    addError(errors, 'production admin API auth must fail closed when ADMIN_API_TOKEN is missing.')
+  }
+  if (productionDefaultToken) {
+    addError(errors, 'production admin API auth must not allow the default dev-admin-token.')
+  }
+  if (productionConfiguredToken !== 'real-production-admin-token') {
+    addError(errors, 'production admin API auth must use a configured non-default ADMIN_API_TOKEN.')
+  }
+  if (developmentDefaultToken !== DEFAULT_DEV_ADMIN_API_TOKEN) {
+    addError(errors, 'development admin API auth should allow the explicit dev-admin-token fallback.')
+  }
+}
+
 function checkWordDetailUsesMediaGuard(errors) {
   const sourceText = fs.readFileSync(new URL(`../${WORD_DETAIL_PATH}`, import.meta.url), 'utf8')
   if (!/hasPlayableVideo\(\)\s*\{[\s\S]*?return\s+isPlayableMediaUrl\(this\.activeVideoUrl\)\s*&&\s*this\.activeClipHasValidRange[\s\S]*?\}/.test(sourceText)) {
@@ -209,6 +236,7 @@ function main() {
   checkPublishedWords(errors)
   checkMediaGuards(errors)
   checkApiBaseGuards(errors)
+  checkAdminAuthGuards(errors)
   checkWordDetailUsesMediaGuard(errors)
 
   if (errors.length > 0) {
@@ -224,6 +252,7 @@ function main() {
   console.log('- published words do not contain blocked preview URLs')
   console.log('- production media guard blocks local/mock/blob/data/example URLs')
   console.log('- production API config blocks local HTTP API base URLs')
+  console.log('- production admin API auth rejects empty/default tokens')
 }
 
 main()

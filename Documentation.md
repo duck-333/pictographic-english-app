@@ -1,5 +1,39 @@
 # Documentation
 
+### 2026-06-08: admin unlock page and publish action hierarchy
+
+Decision:
+- Split the admin portal into an admin unlock card and the content workbench.
+- The workbench is hidden until `GET /api/admin/auth/check` verifies the saved or entered Admin API Token.
+- The admin portal stores the development token in `localStorage` as `pictographic:adminApiToken`; clicking `锁定/退出` clears it and returns to the unlock card.
+- Remove the main `保存到服务器测试 API` button wording from the workbench. Server writes now happen through publishing actions.
+- `发布当前词条` sets the current word to `published` and writes it to `POST /api/admin/words`.
+- `撤下当前词条` sets the current word to `unpublished` and writes it to `POST /api/admin/words`.
+- `发布全部本地草稿到服务器` writes each local draft as `published` to `POST /api/admin/words`, then marks local drafts as published after the server writes succeed.
+- `保存全部本地草稿` and `保存为草稿` remain local-only actions.
+- `归档当前词条` remains a local/admin list action for now; server archive semantics are not expanded in this round.
+- This is still not a complete account system, not WeChat login, not role-based access control, and not an audit/session system. It is the minimum management password layer for the current admin API.
+
+Reason:
+- The previous token input lived inside the editing form, which made the admin token feel like a content field instead of a gate to management tools.
+- The previous `保存到服务器测试 API` button made the flow look like "test first, publish second", which was confusing for production-like use.
+- Publishing should be the user-facing server write action. Testing details belong in development docs, not the main admin workflow.
+
+### 2026-06-08: minimum admin API auth guard
+
+Decision:
+- Add a minimal Bearer-token guard for `POST /api/admin/words`.
+- The server reads `ADMIN_API_TOKEN`; local development can use the explicit fallback token `dev-admin-token`.
+- Production fails closed: when `NODE_ENV=production`, missing/empty `ADMIN_API_TOKEN` and the default `dev-admin-token` are rejected.
+- `GET /api/health`, `GET /api/words`, and `GET /api/words/:id` remain public read APIs for development mini program lookup.
+- The admin frontend can save a local development token in `localStorage` as `pictographic:adminApiToken` and sends it as `Authorization: Bearer <token>` when saving to the server test API.
+- This is not a complete admin login system, not WeChat login, and not role-based access control. It is only the smallest safety layer for the current admin write API.
+
+Reason:
+- The admin save API writes to `server/local-data/words.json`, so it should not stay as an unauthenticated write endpoint.
+- A simple environment-configured token lets development continue without introducing a user table, sessions, OAuth, or cloud identity before the backend shape is stable.
+- Production should never depend on a hardcoded default token or an empty token.
+
 ### 2026-06-07: server API production guard follow-up
 
 Decision:
