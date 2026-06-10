@@ -633,11 +633,22 @@
 			</view>
 		</view>
 		</template>
+		<view class="icp-footer">
+			<a
+				class="icp-link"
+				:href="icpFooter.recordLink"
+				target="_blank"
+				rel="noopener noreferrer"
+			>
+				{{ icpFooter.recordNumber }}
+			</a>
+		</view>
 	</view>
 </template>
 
 <script>
 import { checkAdminAuth, getAdminApiToken, saveAdminApiToken, saveAdminWordToServer } from '../../common/api-client.js'
+import { ICP_RECORD_NUMBER, ICP_RECORD_LINK } from '../../common/site-config.js'
 
 const STORAGE_KEY = 'pictographic-admin:words-draft'
 const PENDING_STORAGE_KEY = 'pictographic-admin:pending-imports'
@@ -730,6 +741,10 @@ function clone(value) {
 export default {
 	data() {
 		return {
+			icpFooter: {
+				recordNumber: ICP_RECORD_NUMBER,
+				recordLink: ICP_RECORD_LINK
+			},
 			activeAdminView: 'workbench',
 			adminViews: [
 				{ label: '内容上传工作台', value: 'workbench', description: '词条、音频、视频和发布状态管理' },
@@ -3639,7 +3654,28 @@ export default {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	min-height: calc(100vh - 56px);
+	min-height: calc(100vh - 140px);
+}
+
+.icp-footer {
+	margin-top: 24px;
+	padding: 16px 12px 24px;
+	text-align: center;
+	font-size: 12px;
+	line-height: 1.6;
+	color: #6b7c8f;
+	background: transparent;
+}
+
+.icp-link {
+	color: #6b7c8f;
+	text-decoration: none;
+	transition: color 0.16s ease;
+}
+
+.icp-link:hover {
+	color: #40566d;
+	text-decoration: underline;
 }
 
 .admin-login-card {

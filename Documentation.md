@@ -1,5 +1,19 @@
 # Documentation
 
+### 2026-06-10: admin portal ICP footer configuration
+
+Decision:
+- Add a lightweight ICP record footer to the HBuilderX admin portal page under `admin-portal/pictographic-admin`.
+- Store the displayed record number and MIIT link in `admin-portal/pictographic-admin/common/site-config.js`.
+- The current filing number is `浙ICP备2026040189号`.
+- The ICP link opens the MIIT site in a new tab with `rel="noopener noreferrer"`.
+- Do not add this website ICP footer to the root React/Vite demo under `src/`.
+- Do not add this website ICP footer to the WeChat mini program pages. Mini program filing and website ICP display are separate release checks.
+
+Production note:
+- Before deploying the admin portal, confirm the ICP filing number is still the production filing number and replace it if it changes.
+- Keep `ICP_RECORD_LINK=https://beian.miit.gov.cn/` unless the regulator requires a different official target.
+
 ### 2026-06-08: admin unlock page and publish action hierarchy
 
 Decision:

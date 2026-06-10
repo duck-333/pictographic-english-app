@@ -7,7 +7,7 @@
     "audit": "node scripts/audit-project.mjs",
     "build": "vite build",
     "build:legacy-demo": "vite build",
-    "check": "npm run audit && npm run validate:content && npm run check:miniapp && npm run check:admin && npm run check:server && npm run check:production",
+    "check": "npm run audit && npm run validate:content && npm run test:admin-icp-footer && npm run check:miniapp && npm run check:admin && npm run check:server && npm run check:production",
     "check:admin": "node --check admin-portal/pictographic-admin/main.js && node --check admin-portal/pictographic-admin/common/api-client.js",
     "check:miniapp": "node --check miniapp-uni/word-app1/common/mock-data.js && node --check miniapp-uni/word-app1/common/user-store.js && node --check miniapp-uni/word-app1/common/content-schema.js && node --check miniapp-uni/word-app1/common/api-config.js && node --check miniapp-uni/word-app1/common/word-api-client.js && node --check miniapp-uni/word-app1/common/word-repository.js && npm run test:audio-schema",
     "check:production": "node scripts/check-production-ready.mjs",
@@ -17,7 +17,8 @@
     "dev:preview-bridge": "node scripts/dev-preview-bridge.mjs",
     "dev:legacy-demo": "vite",
     "validate:content": "node scripts/validate-content.mjs content-seed/words.example.json content-seed/letter-c-import.json content-seed/letter-c-import-paste-ready.json",
-    "test:audio-schema": "node scripts/test-audio-schema.mjs"
+    "test:audio-schema": "node scripts/test-audio-schema.mjs",
+    "test:admin-icp-footer": "node scripts/test-admin-icp-footer.mjs"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
