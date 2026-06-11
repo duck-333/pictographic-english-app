@@ -1,6 +1,16 @@
 <template>
 	<view class="admin-page">
 		<view v-if="!adminUnlocked" class="admin-login-shell">
+			<view class="admin-public-review">
+				<view class="admin-public-badge">公开审核说明</view>
+				<text class="admin-public-title">象形英语内容工作台</text>
+				<text class="admin-public-desc">本网站用于维护“象形英语”英语单词查询、词义讲解、视频讲解等学习内容。</text>
+				<view class="admin-public-list">
+					<text>后台管理功能仅限管理员使用，需通过 Admin API Token 登录。</text>
+					<text>普通用户使用的小程序前台用于英语单词查询和学习内容浏览。</text>
+					<text>ICP备案号：{{ icpFooter.recordNumber }}</text>
+				</view>
+			</view>
 			<view class="admin-login-card">
 				<view class="admin-login-badge">Pictographic English Admin</view>
 				<text class="admin-login-title">管理员登录</text>
@@ -11,7 +21,7 @@
 						v-model="adminApiTokenDraft"
 						class="admin-login-input"
 						password
-						placeholder="本地开发可输入 dev-admin-token"
+						placeholder="请输入管理员私有 Token"
 						confirm-type="done"
 						@confirm="unlockAdmin"
 					/>
@@ -20,7 +30,7 @@
 					{{ adminAuthChecking ? '校验中...' : '进入后台' }}
 				</button>
 				<text class="admin-login-error" v-if="adminTokenStatus">{{ adminTokenStatus }}</text>
-				<text class="admin-login-tip">本地开发默认可用 dev-admin-token，生产环境必须使用服务器配置的 ADMIN_API_TOKEN。</text>
+				<text class="admin-login-tip">Admin API Token 仅用于管理员身份校验，请勿在公开页面或文档中展示。</text>
 			</view>
 		</view>
 
@@ -833,7 +843,7 @@ export default {
 			adminUnlocked: false,
 			adminAuthChecking: false,
 			adminApiTokenDraft: '',
-			adminTokenStatus: '未保存 Admin API Token，本地开发可填写 dev-admin-token。',
+			adminTokenStatus: '',
 			statusOptions: [
 				{ label: '草稿', value: 'draft' },
 				{ label: '已发布', value: 'published' },
@@ -1179,7 +1189,7 @@ export default {
 			this.adminApiTokenDraft = token
 			this.adminTokenStatus = token
 				? '已加载本地保存的 Admin API Token。'
-				: '未保存 Admin API Token，本地开发可填写 dev-admin-token。'
+				: '未保存 Admin API Token。'
 		},
 		saveAdminApiTokenDraft() {
 			const token = saveAdminApiToken(this.adminApiTokenDraft)
@@ -3651,10 +3661,89 @@ export default {
 }
 
 .admin-login-shell {
-	display: flex;
+	display: grid;
+	grid-template-columns: minmax(0, 1.15fr) minmax(340px, 0.85fr);
 	align-items: center;
-	justify-content: center;
+	gap: 28px;
+	width: min(1120px, 100%);
 	min-height: calc(100vh - 140px);
+	margin: 0 auto;
+}
+
+.admin-public-review {
+	position: relative;
+	overflow: hidden;
+	padding: 40px;
+	border: 1px solid rgba(14, 58, 92, 0.12);
+	border-radius: 30px;
+	background: linear-gradient(135deg, #0e3a5c 0%, #195b83 58%, #2784a9 100%);
+	color: #ffffff;
+	box-shadow: 0 24px 70px rgba(14, 58, 92, 0.18);
+	box-sizing: border-box;
+}
+
+.admin-public-review::after {
+	content: '';
+	position: absolute;
+	right: -84px;
+	bottom: -96px;
+	width: 240px;
+	height: 240px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.12);
+}
+
+.admin-public-badge,
+.admin-public-title,
+.admin-public-desc,
+.admin-public-list text {
+	position: relative;
+	z-index: 1;
+	display: block;
+}
+
+.admin-public-badge {
+	display: inline-flex;
+	padding: 6px 12px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.14);
+	color: rgba(255, 255, 255, 0.9);
+	font-size: 12px;
+	font-weight: 900;
+}
+
+.admin-public-title {
+	margin-top: 22px;
+	max-width: 520px;
+	font-size: 36px;
+	font-weight: 900;
+	line-height: 1.18;
+}
+
+.admin-public-desc {
+	margin-top: 16px;
+	max-width: 620px;
+	color: rgba(255, 255, 255, 0.82);
+	font-size: 16px;
+	line-height: 1.8;
+}
+
+.admin-public-list {
+	position: relative;
+	z-index: 1;
+	display: grid;
+	gap: 12px;
+	margin-top: 28px;
+}
+
+.admin-public-list text {
+	padding: 14px 16px;
+	border: 1px solid rgba(255, 255, 255, 0.16);
+	border-radius: 18px;
+	background: rgba(255, 255, 255, 0.1);
+	color: rgba(255, 255, 255, 0.88);
+	font-size: 14px;
+	line-height: 1.7;
 }
 
 .icp-footer {
@@ -3679,7 +3768,7 @@ export default {
 }
 
 .admin-login-card {
-	width: min(520px, 100%);
+	width: 100%;
 	padding: 34px;
 	border: 1px solid rgba(14, 58, 92, 0.12);
 	border-radius: 30px;
@@ -5586,9 +5675,31 @@ button.file-button::after {
 	}
 }
 
+@media screen and (max-width: 960px) {
+	.admin-login-shell {
+		grid-template-columns: 1fr;
+		align-items: stretch;
+	}
+}
+
 @media screen and (max-width: 720px) {
 	.admin-page {
 		padding: 16px;
+	}
+
+	.admin-login-shell {
+		min-height: auto;
+		gap: 16px;
+	}
+
+	.admin-public-review,
+	.admin-login-card {
+		padding: 24px;
+		border-radius: 24px;
+	}
+
+	.admin-public-title {
+		font-size: 28px;
 	}
 
 	.hero,

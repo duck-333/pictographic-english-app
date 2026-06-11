@@ -1,5 +1,20 @@
 # Documentation
 
+### 2026-06-11: admin public review landing content
+
+Decision:
+- `admin.baxiaota.com` shows a public review explanation area and the ICP record number when the admin portal is not unlocked.
+- The public area explains that the site maintains Pictographic English word lookup, meaning explanations, and video explanation learning content.
+- The admin editing workbench remains hidden until `GET /api/admin/auth/check` verifies an Admin API Token.
+- Admin write/edit functions still require the Admin API Token; do not weaken `POST /api/admin/words` server-side authentication.
+- Do not write real tokens, test tokens, or the development fallback token into public page copy.
+- Keep the ICP record footer linking to `https://beian.miit.gov.cn/`.
+
+Reason:
+- Filing and review visitors need to see what the admin domain is for even before administrator login.
+- The public review content must not expose editing tools, token examples, or operational secrets.
+- The admin portal is still a protected management surface, not a public entry into the content workbench.
+
 ### 2026-06-10: admin portal ICP footer configuration
 
 Decision:
