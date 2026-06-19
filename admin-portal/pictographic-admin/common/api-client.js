@@ -1,4 +1,4 @@
-const DEFAULT_ADMIN_API_BASE_URL = 'http://127.0.0.1:3001'
+const DEFAULT_DEVELOPMENT_ADMIN_API_BASE_URL = 'http://127.0.0.1:3001'
 const ADMIN_API_BASE_STORAGE_KEY = 'pictographic:adminApiBaseUrl'
 export const ADMIN_API_TOKEN_STORAGE_KEY = 'pictographic:adminApiToken'
 
@@ -8,6 +8,15 @@ function normalizeApiBaseUrl(value) {
 
 function normalizeAdminApiToken(value) {
   return String(value || '').trim()
+}
+
+function getNodeEnv() {
+  if (typeof process === 'undefined' || !process || !process.env) return ''
+  return String(process.env.NODE_ENV || '').trim().toLowerCase()
+}
+
+function isProductionRuntime() {
+  return getNodeEnv() === 'production'
 }
 
 function getEnvApiBaseUrl() {
@@ -39,7 +48,20 @@ function getStoredAdminApiToken() {
 }
 
 export function getAdminApiBaseUrl(options = {}) {
-  return normalizeApiBaseUrl(options.apiBaseUrl || getEnvApiBaseUrl() || getStoredApiBaseUrl() || DEFAULT_ADMIN_API_BASE_URL)
+  if (isProductionRuntime()) return ''
+
+  return normalizeApiBaseUrl(
+    options.apiBaseUrl ||
+    getEnvApiBaseUrl() ||
+    getStoredApiBaseUrl() ||
+    DEFAULT_DEVELOPMENT_ADMIN_API_BASE_URL
+  )
+}
+
+function buildAdminApiUrl(path, options = {}) {
+  const baseUrl = getAdminApiBaseUrl(options)
+  const normalizedPath = `/${String(path || '').trim().replace(/^\/+/, '')}`
+  return baseUrl ? `${baseUrl}${normalizedPath}` : normalizedPath
 }
 
 export function getAdminApiToken(options = {}) {
@@ -88,12 +110,11 @@ function createAdminApiError(response, data) {
 }
 
 export function checkAdminAuth(token, options = {}) {
-  const baseUrl = getAdminApiBaseUrl(options)
-  if (!baseUrl || typeof fetch !== 'function') {
+  if (typeof fetch !== 'function') {
     return Promise.reject(new Error('Admin API is not available in this runtime.'))
   }
 
-  return fetch(`${baseUrl}/api/admin/auth/check`, {
+  return fetch(buildAdminApiUrl('/api/admin/auth/check', options), {
     method: 'GET',
     headers: buildAdminHeaders({
       ...options,
@@ -110,13 +131,12 @@ export function checkAdminAuth(token, options = {}) {
 }
 
 export function saveAdminWordToServer(word, options = {}) {
-  const baseUrl = getAdminApiBaseUrl(options)
-  if (!baseUrl || typeof fetch !== 'function') {
+  if (typeof fetch !== 'function') {
     return Promise.reject(new Error('Admin API is not available in this runtime.'))
   }
 
   const payload = { word }
-  const url = `${baseUrl}/api/admin/words`
+  const url = buildAdminApiUrl('/api/admin/words', options)
 
   return fetch(url, {
     method: 'POST',
