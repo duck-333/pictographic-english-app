@@ -1,10 +1,17 @@
 <template>
 	<view class="admin-page">
 		<view v-if="!adminUnlocked" class="admin-login-shell">
+			<view class="admin-review-card">
+				<view class="admin-review-kicker">公开审核说明</view>
+				<text class="admin-review-title">巴小塔（杭州巴别塔文化有限责任公司）——象形英语内容工作台</text>
+				<text class="admin-review-copy">本网站用于维护“象形英语”英语单词查询、词义讲解、视频讲解等学习内容。</text>
+				<text class="admin-review-copy">后台管理功能仅限管理员使用，需通过 Admin API Token 登录。</text>
+				<text class="admin-review-copy">普通用户使用的小程序前台用于英语单词查询和学习内容浏览。</text>
+			</view>
 			<view class="admin-login-card">
-				<view class="admin-login-badge">Pictographic English Admin</view>
+				<view class="admin-login-badge">管理员入口</view>
 				<text class="admin-login-title">管理员登录</text>
-				<text class="admin-login-desc">请输入 Admin API Token 以进入内容工作台</text>
+				<text class="admin-login-desc">请输入 Admin API Token 以进入巴小塔象形英语内容工作台</text>
 				<label class="admin-login-field">
 					<text>Admin API Token</text>
 					<input
@@ -633,6 +640,7 @@
 			</view>
 		</view>
 		</template>
+		<view class="site-record">浙ICP备2026040189号-1</view>
 	</view>
 </template>
 
@@ -3633,17 +3641,65 @@ export default {
 	background: #eef7fb;
 	color: #12344d;
 	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
 }
 
 .admin-login-shell {
-	display: flex;
+	display: grid;
+	grid-template-columns: minmax(0, 1.12fr) minmax(380px, 0.88fr);
 	align-items: center;
 	justify-content: center;
-	min-height: calc(100vh - 56px);
+	gap: 28px;
+	width: min(1120px, 100%);
+	flex: 1;
+	margin: 0 auto;
+	padding: 44px 0;
+	box-sizing: border-box;
+}
+
+.admin-review-card {
+	padding: 42px;
+	border: 1px solid rgba(14, 58, 92, 0.12);
+	border-radius: 30px;
+	background: linear-gradient(145deg, #0e3a5c, #1d6799);
+	color: #ffffff;
+	box-shadow: 0 24px 70px rgba(14, 58, 92, 0.2);
+	box-sizing: border-box;
+}
+
+.admin-review-kicker,
+.admin-review-title,
+.admin-review-copy {
+	display: block;
+}
+
+.admin-review-kicker {
+	display: inline-flex;
+	padding: 7px 13px;
+	border: 1px solid rgba(255, 255, 255, 0.3);
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.12);
+	font-size: 13px;
+	font-weight: 800;
+}
+
+.admin-review-title {
+	margin-top: 22px;
+	font-size: 30px;
+	font-weight: 900;
+	line-height: 1.4;
+}
+
+.admin-review-copy {
+	margin-top: 18px;
+	color: rgba(255, 255, 255, 0.88);
+	font-size: 15px;
+	line-height: 1.8;
 }
 
 .admin-login-card {
-	width: min(520px, 100%);
+	width: 100%;
 	padding: 34px;
 	border: 1px solid rgba(14, 58, 92, 0.12);
 	border-radius: 30px;
@@ -3738,6 +3794,15 @@ export default {
 	color: #66869b;
 	font-size: 12px;
 	line-height: 1.7;
+}
+
+.site-record {
+	flex: none;
+	padding: 18px 12px 4px;
+	color: #6f8797;
+	font-size: 12px;
+	line-height: 1.6;
+	text-align: center;
 }
 
 .hero {
@@ -5553,6 +5618,26 @@ button.file-button::after {
 @media screen and (max-width: 720px) {
 	.admin-page {
 		padding: 16px;
+	}
+
+	.admin-login-shell {
+		grid-template-columns: 1fr;
+		gap: 18px;
+		padding: 20px 0;
+	}
+
+	.admin-review-card,
+	.admin-login-card {
+		padding: 26px 22px;
+		border-radius: 24px;
+	}
+
+	.admin-review-title {
+		font-size: 24px;
+	}
+
+	.site-record {
+		padding-top: 14px;
 	}
 
 	.hero,

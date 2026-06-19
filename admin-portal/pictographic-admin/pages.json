@@ -3,14 +3,14 @@
 		{
 			"path": "pages/index/index",
 			"style": {
-				"navigationBarTitleText": "象形英语内容工作台",
+				"navigationBarTitleText": "巴小塔（杭州巴别塔文化有限责任公司）——象形英语内容工作台",
 				"navigationStyle": "custom"
 			}
 		}
 	],
 	"globalStyle": {
 		"navigationBarTextStyle": "black",
-		"navigationBarTitleText": "象形英语后台",
+		"navigationBarTitleText": "巴小塔（杭州巴别塔文化有限责任公司）——象形英语内容工作台",
 		"navigationBarBackgroundColor": "#eef7fb",
 		"backgroundColor": "#eef7fb",
 		"h5": {
