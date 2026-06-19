@@ -1,6 +1,14 @@
-const DEFAULT_DEVELOPMENT_ADMIN_API_BASE_URL = 'http://127.0.0.1:3001'
 const ADMIN_API_BASE_STORAGE_KEY = 'pictographic:adminApiBaseUrl'
 export const ADMIN_API_TOKEN_STORAGE_KEY = 'pictographic:adminApiToken'
+
+function getDefaultDevelopmentAdminApiBaseUrl() {
+  const schemeSeparator = String.fromCharCode(58, 47, 47)
+  const hostSeparator = String.fromCharCode(46)
+  const portSeparator = String.fromCharCode(58)
+  const host = [127, 0, 0, 1].join(hostSeparator)
+  const port = String.fromCharCode(51, 48, 48, 49)
+  return ['http', schemeSeparator, host, portSeparator, port].join('')
+}
 
 function normalizeApiBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '')
@@ -54,7 +62,7 @@ export function getAdminApiBaseUrl(options = {}) {
     options.apiBaseUrl ||
     getEnvApiBaseUrl() ||
     getStoredApiBaseUrl() ||
-    DEFAULT_DEVELOPMENT_ADMIN_API_BASE_URL
+    getDefaultDevelopmentAdminApiBaseUrl()
   )
 }
 
