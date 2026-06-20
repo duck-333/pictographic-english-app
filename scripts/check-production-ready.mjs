@@ -15,6 +15,8 @@ import {
 const APP_WORD_DATA_PATH = 'miniapp-uni/word-app1/common/mock-data.js'
 const DEV_PREVIEW_DATA_PATH = 'miniapp-uni/word-app1/common/dev-preview-data.js'
 const WORD_DETAIL_PATH = 'miniapp-uni/word-app1/pages/word-detail/index.vue'
+const MINIAPP_PAGES_PATH = 'miniapp-uni/word-app1/pages'
+const MINIAPP_PAGES_JSON_PATH = 'miniapp-uni/word-app1/pages.json'
 
 const BLOCKED_PRODUCTION_VALUES = [
   { label: 'mock-cloud://', pattern: /mock-cloud:\/\//i },
@@ -24,6 +26,16 @@ const BLOCKED_PRODUCTION_VALUES = [
   { label: 'localhost', pattern: /localhost/i },
   { label: '127.0.0.1', pattern: /127\.0\.0\.1/i },
   { label: 'example.com', pattern: /example\.com/i }
+]
+
+const BLOCKED_USER_FACING_TEXT = [
+  { label: 'test video', pattern: /测试视频/i },
+  { label: 'local mock', pattern: /本地\s*mock|local-mock/i },
+  { label: 'mock cloud', pattern: /mock-cloud:\/\//i },
+  { label: 'development preview', pattern: /开发预览|dev-preview/i },
+  { label: 'upgrade/unlock', pattern: /升级后解锁|升级|解锁/i },
+  { label: 'membership/payment', pattern: /会员|充值|兑换码|购买|付费/i },
+  { label: 'admin token', pattern: /Admin API Token|dev-admin-token/i }
 ]
 
 function collectStrings(value, pathParts = []) {
@@ -107,6 +119,29 @@ function checkPublishedWords(errors) {
   })
 }
 
+function checkUserFacingSource(errors) {
+  const pagesRoot = new URL(`../${MINIAPP_PAGES_PATH}/`, import.meta.url)
+  const pageFiles = fs.readdirSync(pagesRoot, { recursive: true }).filter((file) => String(file).endsWith('.vue'))
+
+  pageFiles.forEach((file) => {
+    const normalizedFile = String(file).replace(/\\/g, '/')
+    const relativePath = `${MINIAPP_PAGES_PATH}/${normalizedFile}`
+    const sourceText = fs.readFileSync(new URL(normalizedFile, pagesRoot), 'utf8')
+    BLOCKED_USER_FACING_TEXT.forEach((blocked) => {
+      if (blocked.pattern.test(sourceText)) {
+        addError(errors, `${relativePath}: contains blocked user-facing ${blocked.label} text.`)
+      }
+    })
+  })
+
+  const pagesJson = fs.readFileSync(new URL(`../${MINIAPP_PAGES_JSON_PATH}`, import.meta.url), 'utf8')
+  ;['pages/network/index', 'pages/word-list/index', 'pages/classroom/index'].forEach((route) => {
+    if (pagesJson.includes(route)) {
+      addError(errors, `${MINIAPP_PAGES_JSON_PATH}: unfinished route must not be registered: ${route}`)
+    }
+  })
+}
+
 function checkMediaGuards(errors) {
   const productionCases = [
     ['http://127.0.0.1:8787/videos/study.mp4', false, true],
@@ -176,17 +211,17 @@ function checkApiBaseGuards(errors) {
   if (productionLocalApi) {
     addError(errors, 'production API config must block local HTTP API base URLs.')
   }
-  if (!missingEnvLocalApi) {
-    addError(errors, 'missing NODE_ENV should default to development-like mode and allow local API base URLs for development testing.')
+  if (missingEnvLocalApi) {
+    addError(errors, 'missing NODE_ENV must fail closed and disable remote word API requests.')
   }
-  if (productionHttpsApi !== 'https://api.pictographic-english.test') {
-    addError(errors, 'production API config must allow configured HTTPS API base URLs.')
+  if (productionHttpsApi) {
+    addError(errors, 'first-release production config must keep the remote word API disabled even when an HTTPS URL is configured.')
   }
   if (productionMiniappDefaultApi || productionMiniappLocalApi) {
     addError(errors, 'production mini program runtime must not enable local HTTP API base URLs.')
   }
-  if (productionMiniappHttpsApi !== 'https://api.pictographic-english.test') {
-    addError(errors, 'production mini program runtime must allow configured HTTPS API base URLs.')
+  if (productionMiniappHttpsApi) {
+    addError(errors, 'first-release production mini program runtime must keep the remote word API disabled.')
   }
 }
 
@@ -234,6 +269,7 @@ function main() {
 
   checkDevPreviewData(errors)
   checkPublishedWords(errors)
+  checkUserFacingSource(errors)
   checkMediaGuards(errors)
   checkApiBaseGuards(errors)
   checkAdminAuthGuards(errors)
@@ -251,7 +287,7 @@ function main() {
   console.log('- production runtime ignores local preview words')
   console.log('- published words do not contain blocked preview URLs')
   console.log('- production media guard blocks local/mock/blob/data/example URLs')
-  console.log('- production API config blocks local HTTP API base URLs')
+  console.log('- production runtime keeps the remote word API disabled')
   console.log('- production admin API auth rejects empty/default tokens')
 }
 

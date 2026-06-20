@@ -8,14 +8,8 @@
           <view>
             <view class="brand-row">
               <text class="brand">象形英语</text>
-              <text class="beta">BETA</text>
             </view>
             <text class="tagline">用象形逻辑，读懂每个英语单词</text>
-          </view>
-
-          <view class="bell" hover-class="pressed">
-            <view class="bell-body"></view>
-            <view class="bell-dot"></view>
           </view>
         </view>
 
@@ -139,9 +133,6 @@
 
               <view v-else class="panel-empty">
                 <text>{{ missingDescription }}</text>
-                <button class="panel-empty-action" hover-class="empty-action-pressed" @tap="openFeedback">
-                  提交缺词反馈
-                </button>
               </view>
             </view>
           </view>
@@ -282,7 +273,7 @@ export default {
     },
     buildMissingDescription(word) {
       if (!word) return ''
-      return `可以先提交“${word}”，后续优先补充讲解。`
+      return `暂未收录“${word}”。`
     },
     async updateSuggestionState(word) {
       this.results = searchWords(word)
@@ -344,23 +335,24 @@ export default {
       }
 
       this.searching = true
-      const exact = getWordByWord(word)
-      if (exact) {
-        this.searching = false
-        this.openDetail(exact.id, true)
-        return
-      }
+      try {
+        const exact = getWordByWord(word)
+        if (exact) {
+          this.openDetail(exact.id, true)
+          return
+        }
 
-      const remoteExact = await fetchWordByWord(word)
-      if (remoteExact) {
-        this.searching = false
-        this.openDetail(remoteExact.id, true)
-        return
-      }
+        const remoteExact = await fetchWordByWord(word)
+        if (remoteExact) {
+          this.openDetail(remoteExact.id, true)
+          return
+        }
 
-      await this.updateSuggestionState(word)
-      this.searching = false
-      this.searchPanelOpen = true
+        await this.updateSuggestionState(word)
+        this.searchPanelOpen = true
+      } finally {
+        this.searching = false
+      }
     },
     clearRecentHistory() {
       clearRecentWords()
@@ -385,12 +377,6 @@ export default {
       this.refreshUserData()
       uni.navigateTo({
         url: `/pages/word-detail/index?id=${id}`
-      })
-    },
-    openFeedback() {
-      const word = encodeURIComponent(this.missingWord || this.normalizedQuery || '')
-      uni.navigateTo({
-        url: `/pages/mine/index?feedbackWord=${word}`
       })
     },
     goMine() {
@@ -462,50 +448,11 @@ export default {
   font-weight: 800;
 }
 
-.beta {
-  padding: 2rpx 12rpx;
-  border-radius: 16rpx;
-  background: rgba(255, 235, 162, 0.15);
-  color: rgba(255, 235, 162, 0.88);
-  font-size: 20rpx;
-  font-weight: 700;
-}
-
 .tagline {
   display: block;
   margin-top: 6rpx;
   color: rgba(255, 255, 255, 0.64);
   font-size: 24rpx;
-}
-
-.bell {
-  position: relative;
-  width: 76rpx;
-  height: 76rpx;
-  border-radius: 999rpx;
-  background: rgba(169, 226, 255, 0.12);
-}
-
-.bell-body {
-  position: absolute;
-  left: 25rpx;
-  top: 20rpx;
-  width: 26rpx;
-  height: 32rpx;
-  border: 4rpx solid #ffffff;
-  border-bottom: 0;
-  border-top-left-radius: 18rpx;
-  border-top-right-radius: 18rpx;
-}
-
-.bell-dot {
-  position: absolute;
-  top: 12rpx;
-  right: 14rpx;
-  width: 12rpx;
-  height: 12rpx;
-  border-radius: 999rpx;
-  background: #fe8500;
 }
 
 .search-stack {
@@ -591,8 +538,7 @@ export default {
   box-shadow: 0 12rpx 26rpx rgba(255, 171, 80, 0.3);
 }
 
-.inline-search::after,
-.panel-empty-action::after {
+.inline-search::after {
   border: 0;
 }
 
@@ -741,21 +687,6 @@ export default {
   color: #5d88aa;
   font-size: 22rpx;
   line-height: 1.6;
-}
-
-.panel-empty-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 220rpx;
-  min-height: 68rpx;
-  margin: 18rpx 0 0;
-  padding: 0 26rpx;
-  border-radius: 999rpx;
-  background: #ffab50;
-  color: #09314f;
-  font-size: 24rpx;
-  font-weight: 800;
 }
 
 .stats-row {
@@ -1057,8 +988,7 @@ export default {
 .card-pressed,
 .row-pressed,
 .button-pressed,
-.nav-item-pressed,
-.empty-action-pressed {
+.nav-item-pressed {
   opacity: 0.8;
   transform: scale(0.98);
 }

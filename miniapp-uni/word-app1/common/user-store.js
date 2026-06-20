@@ -1,15 +1,7 @@
 import { getWordById } from './word-repository.js'
 
-export const USER_PROFILE_KEY = 'pictographic:userProfile'
 export const USER_STATE_KEY = 'pictographic:userState'
-export const FEEDBACKS_KEY = 'pictographic:feedbacks'
 export const PENDING_WORD_ID_KEY = 'pictographic:pendingWordId'
-
-const DEFAULT_PROFILE = {
-  nickname: '象形英语学习者',
-  avatarUrl: '',
-  syncStatus: '本机保存'
-}
 
 const DEFAULT_STATE = {
   recentWordIds: [],
@@ -62,17 +54,6 @@ function touchActiveDay(state) {
     lastActiveDate: today,
     streakDays: nextStreak
   }
-}
-
-export function getUserProfile() {
-  return readStorage(USER_PROFILE_KEY, DEFAULT_PROFILE)
-}
-
-export function saveUserProfile(profile) {
-  return writeStorage(USER_PROFILE_KEY, {
-    ...getUserProfile(),
-    ...profile
-  })
 }
 
 export function getUserState() {
@@ -145,34 +126,8 @@ export function getFavoriteWords() {
     .filter((item) => item)
 }
 
-export function getFeedbacks() {
-  try {
-    const feedbacks = uni.getStorageSync(FEEDBACKS_KEY)
-    return Array.isArray(feedbacks) ? feedbacks : []
-  } catch (error) {
-    return []
-  }
-}
-
-export function submitMissingWordFeedback(payload) {
-  const word = (payload.missingWord || '').trim().toLowerCase()
-  const feedback = {
-    id: `feedback-${Date.now()}`,
-    missingWord: word,
-    bookPageHint: (payload.bookPageHint || '').trim(),
-    note: (payload.note || '').trim(),
-    status: 'pending',
-    createdAt: new Date().toISOString()
-  }
-  const feedbacks = [feedback, ...getFeedbacks()].slice(0, 50)
-  uni.setStorageSync(FEEDBACKS_KEY, feedbacks)
-  return feedback
-}
-
 export function clearUserData() {
-  uni.removeStorageSync(USER_PROFILE_KEY)
   uni.removeStorageSync(USER_STATE_KEY)
-  uni.removeStorageSync(FEEDBACKS_KEY)
   uni.removeStorageSync(PENDING_WORD_ID_KEY)
 }
 

@@ -6,9 +6,6 @@
         <view class="tool-button" hover-class="button-pressed" @tap="toggleBookmark">
           <view class="bookmark" :class="{ active: bookmarked }"></view>
         </view>
-        <view class="tool-button" hover-class="button-pressed" @tap="openFeedback">
-          <text class="tool-text">反馈</text>
-        </view>
       </view>
     </view>
 
@@ -99,7 +96,7 @@
         <view v-if="expandedPart" class="part-detail">
           <text class="part-detail-title">{{ expandedPart }}</text>
           <text class="part-detail-text">{{ activePartMeaning }}</text>
-          <text class="part-detail-link">这个节点暂未配置下一级卡片。</text>
+          <text class="part-detail-link">该部分暂无关联词条。</text>
         </view>
       </view>
 
@@ -124,7 +121,7 @@
             <text class="example-cn">{{ item.chinese }}</text>
           </view>
         </view>
-        <text v-else class="desc">例句稍后补充。</text>
+        <text v-else class="desc">暂无例句。</text>
       </view>
 
       <view v-if="relatedWords.length" id="section-related" class="section card">
@@ -144,7 +141,7 @@
         </view>
       </view>
 
-      <view id="section-video" class="section video-card">
+      <view v-if="hasVideoData" id="section-video" class="section video-card">
         <view class="video-head">
           <view>
             <text class="video-title">{{ activeVideoTitle }}</text>
@@ -188,7 +185,7 @@
             </button>
             <view class="segment-progress-wrap">
               <view class="segment-progress-head">
-                <text class="segment-progress-title">{{ clipIsPlaying ? '正在播放当前片段' : '只试看当前片段' }}</text>
+                <text class="segment-progress-title">{{ clipIsPlaying ? '正在播放当前片段' : '当前讲解片段' }}</text>
                 <text class="segment-progress-time">{{ clipProgressText }}</text>
               </view>
               <slider
@@ -210,8 +207,8 @@
             </view>
           </view>
           <view class="full-video-lock">
-            <text class="lock-title">完整视频需升级后解锁</text>
-            <text class="lock-text">当前仅播放后台配置的 {{ clipDurationText }} 讲解片段。</text>
+            <text class="lock-title">暂无更多讲解内容</text>
+            <text class="lock-text">当前讲解片段时长 {{ clipDurationText }}。</text>
           </view>
         </view>
         <view v-else class="video-placeholder" @tap="showVideoTip">
@@ -243,7 +240,7 @@
         </view>
         <view v-else class="clip-empty">
           <text class="clip-empty-title">暂无视频讲解</text>
-          <text class="clip-empty-text">后台配置 videoClips 后，这里会显示讲解片段列表。</text>
+          <text class="clip-empty-text">暂无更多讲解内容。</text>
         </view>
       </view>
     </view>
@@ -252,7 +249,6 @@
       <view class="empty-mark">象</view>
       <text class="empty-title">{{ notFoundTitle }}</text>
       <text class="empty-description">{{ notFoundDescription }}</text>
-      <button class="empty-action" hover-class="empty-action-pressed" @tap="openFeedback">提交缺词反馈</button>
     </view>
 
     <view class="bottom-nav">
@@ -285,7 +281,6 @@ import {
   getWordAccessInfo,
   getWordById,
   getWordByWord,
-  hasBlockedProductionMediaSource,
   isPlayableMediaUrl
 } from '../../common/word-repository.js'
 import { addRecentWord, getPendingWordId, isFavorite, savePendingWordId, toggleFavorite } from '../../common/user-store.js'
@@ -313,7 +308,7 @@ export default {
       pronunciationIsPlaying: false,
       notFoundQuery: '',
       notFoundTitle: '暂未收录这个单词',
-      notFoundDescription: '这个单词还没有讲解内容，可以提交缺词反馈。'
+      notFoundDescription: '这个单词还没有讲解内容。'
     }
   },
   onLoad(options) {
@@ -389,12 +384,14 @@ export default {
       if (this.relatedWords.length) {
         tabs.push({ label: '同族词', targetId: 'section-related', hint: `${this.relatedWords.length}个` })
       }
-      tabs.push({
-        label: '视频',
-        targetId: 'section-video',
-        hint: this.hasVideoData ? `${this.videoClips.length}段` : '待补充',
-        highlight: this.hasVideoData
-      })
+      if (this.hasVideoData) {
+        tabs.push({
+          label: '视频',
+          targetId: 'section-video',
+          hint: `${this.videoClips.length}段`,
+          highlight: true
+        })
+      }
       return tabs
     },
     activeVideo() {
@@ -407,12 +404,6 @@ export default {
     activeVideoUrl() {
       const video = this.activeVideo || {}
       return video.videoUrl || video.url || ''
-    },
-    activeVideoIsMockCloud() {
-      return String(this.activeVideoUrl || '').indexOf('mock-cloud://') === 0
-    },
-    activeVideoHasBlockedProductionSource() {
-      return hasBlockedProductionMediaSource(this.activeVideoUrl)
     },
     activeVideoTitle() {
       if (!this.hasVideoData) {
@@ -469,14 +460,13 @@ export default {
       if (!this.hasVideoData) {
         return '暂无片段'
       }
-      const provider = this.activeVideo.provider ? ` · ${this.activeVideo.provider}` : ''
       if (!this.activeClipHasValidRange) {
-        return `片段时间待配置${provider}`
+        return '讲解片段'
       }
       const range = this.effectiveVideoEnd > this.activeVideoStart
         ? `${this.activeVideoStart}s - ${this.effectiveVideoEnd}s`
         : `从 ${this.activeVideoStart}s 开始`
-      return `${range}${provider}`
+      return range
     },
     hasPlayableVideo() {
       return isPlayableMediaUrl(this.activeVideoUrl) && this.activeClipHasValidRange
@@ -484,24 +474,17 @@ export default {
     videoStatusText() {
       if (!this.hasVideoData) return '暂无视频'
       if (!this.activeClipHasValidRange) return '片段待配置'
-      if (this.activeVideoIsMockCloud) return '待同步源'
-      return this.hasPlayableVideo ? '片段试看' : '待接入'
+      return this.hasPlayableVideo ? '讲解片段' : '暂不可播放'
     },
     videoPlaceholderText() {
       if (!this.hasVideoData) {
-        return '这个词条暂无视频讲解；后台配置 videoClips 后会显示在这里。'
+        return '暂无视频讲解。'
       }
       if (!this.activeClipHasValidRange) {
         return '当前片段缺少有效结束秒，暂不播放，避免误放完整视频。'
       }
       if (this.activeVideoUrl && !this.hasPlayableVideo) {
-        if (this.activeVideoIsMockCloud) {
-          return '当前是后台上传演练生成的 mock-cloud 占位地址。请在后台重新选择本地视频后同步到小程序预览；上线后会替换成云存储 HTTPS 地址。'
-        }
-        if (this.activeVideoHasBlockedProductionSource) {
-          return '当前视频地址仅适合开发预览；正式环境需要替换为 HTTPS 或云存储地址。'
-        }
-        return '后台已生成视频资产信息；正式云存储接入后会变成可播放地址。'
+        return '当前讲解暂不可播放。'
       }
       return '这个片段暂时没有可播放视频地址。'
     },
@@ -540,8 +523,8 @@ export default {
         : hiddenWord
           ? '该词条暂未发布或已撤下。'
           : raw
-          ? `“${raw}” 还没有讲解内容，可以提交缺词反馈。`
-          : '这个单词还没有讲解内容，可以提交缺词反馈。'
+          ? `“${raw}” 还没有讲解内容。`
+          : '这个单词还没有讲解内容。'
       this.relatedWords = target ? getRelatedWords(target) : []
       this.bookmarked = target ? isFavorite(target.id) : false
       this.expandedPart = ''
@@ -564,8 +547,13 @@ export default {
       this.loadRemoteWord(raw)
     },
     async loadRemoteWord(raw) {
-      const remote = (await fetchWordById(raw)) || (await fetchWordByWord(raw))
-      if (!remote) return
+      let remote = null
+      try {
+        remote = (await fetchWordById(raw)) || (await fetchWordByWord(raw))
+      } catch (error) {
+        return
+      }
+      if (!remote || remote.status !== 'published') return
 
       this.word = remote
       this.notFoundQuery = ''
@@ -1039,12 +1027,6 @@ export default {
         icon: 'none'
       })
     },
-    openFeedback() {
-      const word = encodeURIComponent(this.word ? this.word.word : this.notFoundQuery)
-      uni.navigateTo({
-        url: `/pages/mine/index?feedbackWord=${word}`
-      })
-    },
     openDetailFromEvent(event) {
       const dataset = event && event.currentTarget ? event.currentTarget.dataset : {}
       this.openDetail(dataset.id)
@@ -1125,13 +1107,6 @@ export default {
   position: relative;
   width: 72rpx;
   height: 72rpx;
-}
-
-.tool-text {
-  color: #0e3a5c;
-  font-size: 22rpx;
-  font-weight: 700;
-  line-height: 72rpx;
 }
 
 .bookmark {

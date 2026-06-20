@@ -134,6 +134,24 @@
 状态：
 - 待开始。
 
+## 2026-06-20：第一版体验版 P0 收口
+
+目标：
+- 第一版仅保留查词、已发布词条详情、本机收藏、最近查看和基础学习记录。
+- 正式包使用内置已发布词库，不请求远程词条 API。
+- 隐藏视频、登录、头像昵称、收费权益、缺词反馈和未完成页面。
+
+验收：
+- `npm.cmd run audit`
+- `npm.cmd run validate:content`
+- `npm.cmd run check:miniapp`
+- `npm.cmd run check:production`
+- `npm.cmd run check`
+- HBuilderX 编译后在微信开发者工具和真机体验版完成手动验收。
+
+状态：
+- 代码和自动检查已完成，等待 HBuilderX/微信开发者工具真机验收。
+
 ## 每次长任务的标准流程
 
 1. 主代理读取 `AGENTS.md`、`Prompt.md`、`Plan.md`、`Documentation.md`。
