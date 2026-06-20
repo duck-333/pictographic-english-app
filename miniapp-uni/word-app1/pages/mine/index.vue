@@ -100,29 +100,12 @@
       <button class="clear-button" hover-class="danger-pressed" @tap="confirmClear">清除本机记录</button>
     </view>
 
-    <view class="bottom-nav">
-      <view class="nav-item" hover-class="nav-item-pressed" @tap="goHome">
-        <view class="nav-icon search">
-          <view class="i-a"></view>
-          <view class="i-b"></view>
-          <view class="i-c"></view>
-        </view>
-        <text class="nav-label">查词</text>
-      </view>
-      <view class="nav-item active" hover-class="nav-item-pressed">
-        <view class="nav-icon mine">
-          <view class="i-a"></view>
-          <view class="i-b"></view>
-          <view class="i-c"></view>
-        </view>
-        <text class="nav-label">我的</text>
-        <view class="nav-dot"></view>
-      </view>
-    </view>
+    <bottom-nav current="/pages/mine/index" />
   </view>
 </template>
 
 <script>
+import BottomNav from '../../components/BottomNav.vue'
 import {
   clearUserData,
   getFavoriteWords,
@@ -132,6 +115,9 @@ import {
 } from '../../common/user-store.js'
 
 export default {
+  components: {
+    BottomNav
+  },
   data() {
     return {
       state: getUserState(),
@@ -188,7 +174,7 @@ export default {
 <style>
 .page {
   min-height: 100vh;
-  padding: 32rpx 32rpx 172rpx;
+  padding: 32rpx 32rpx calc(188rpx + env(safe-area-inset-bottom));
   background: #f0f9ff;
 }
 

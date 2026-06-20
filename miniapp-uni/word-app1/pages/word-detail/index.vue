@@ -3,15 +3,19 @@
     <view class="topbar">
       <button class="back-button" hover-class="button-pressed" @tap="goBack">返回</button>
       <view class="tools" v-if="word">
-        <view class="tool-button" hover-class="button-pressed" @tap="toggleBookmark">
-          <view class="bookmark" :class="{ active: bookmarked }"></view>
+        <view
+          class="tool-button"
+          :class="{ active: bookmarked }"
+          hover-class="button-pressed"
+          @tap="toggleBookmark"
+        >
+          <text class="favorite-star">{{ bookmarked ? '★' : '☆' }}</text>
         </view>
       </view>
     </view>
 
     <view v-if="word">
       <view class="hero">
-        <view class="hero-ghost">{{ word.parts && word.parts.length ? word.parts[0].text : word.word }}</view>
         <view class="type-badge">{{ word.cardType || '单词' }} · {{ word.level }}</view>
         <view class="word-line">
           <text class="word">{{ word.word }}</text>
@@ -251,29 +255,12 @@
       <text class="empty-description">{{ notFoundDescription }}</text>
     </view>
 
-    <view class="bottom-nav">
-      <view class="nav-item active" hover-class="nav-item-pressed" @tap="goHome">
-        <view class="nav-icon search">
-          <view class="i-a"></view>
-          <view class="i-b"></view>
-          <view class="i-c"></view>
-        </view>
-        <text class="nav-label">查词</text>
-        <view class="nav-dot"></view>
-      </view>
-      <view class="nav-item" hover-class="nav-item-pressed" @tap="goMine">
-        <view class="nav-icon mine">
-          <view class="i-a"></view>
-          <view class="i-b"></view>
-          <view class="i-c"></view>
-        </view>
-        <text class="nav-label">我的</text>
-      </view>
-    </view>
+    <bottom-nav current="/pages/index/index" />
   </view>
 </template>
 
 <script>
+import BottomNav from '../../components/BottomNav.vue'
 import {
   fetchWordById,
   fetchWordByWord,
@@ -286,6 +273,9 @@ import {
 import { addRecentWord, getPendingWordId, isFavorite, savePendingWordId, toggleFavorite } from '../../common/user-store.js'
 
 export default {
+  components: {
+    BottomNav
+  },
   data() {
     return {
       word: null,
@@ -1062,7 +1052,7 @@ export default {
 <style>
 .page {
   min-height: 100vh;
-  padding: 88rpx 32rpx 168rpx;
+  padding: 88rpx 32rpx calc(188rpx + env(safe-area-inset-bottom));
   background: #f0f9ff;
 }
 
@@ -1104,24 +1094,27 @@ export default {
 }
 
 .tool-button {
-  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 72rpx;
   height: 72rpx;
+  transition: background-color 0.16s ease, box-shadow 0.16s ease;
 }
 
-.bookmark {
-  position: absolute;
-  left: 23rpx;
-  top: 18rpx;
-  width: 26rpx;
-  height: 34rpx;
-  border: 4rpx solid #6baed6;
-  border-bottom: 0;
+.tool-button.active {
+  background: #fff7df;
+  box-shadow: 0 6rpx 18rpx rgba(254, 133, 0, 0.14);
 }
 
-.bookmark.active {
-  background: #fe8500;
-  border-color: #fe8500;
+.favorite-star {
+  color: #6baed6;
+  font-size: 44rpx;
+  line-height: 1;
+}
+
+.tool-button.active .favorite-star {
+  color: #fe8500;
 }
 
 .hero {
@@ -1131,15 +1124,6 @@ export default {
   border-radius: 32rpx;
   background: linear-gradient(140deg, #0e3a5c 0%, #1a5a8a 100%);
   box-shadow: 0 24rpx 64rpx rgba(14, 58, 92, 0.22);
-}
-
-.hero-ghost {
-  position: absolute;
-  top: -24rpx;
-  right: 18rpx;
-  color: rgba(169, 226, 255, 0.08);
-  font-size: 132rpx;
-  font-weight: 800;
 }
 
 .type-badge {

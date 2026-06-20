@@ -11,12 +11,11 @@
       @tap="openNavFromEvent"
     >
       <view class="nav-icon" :class="item.icon">
-        <view class="i-a"></view>
-        <view class="i-b"></view>
-        <view class="i-c"></view>
+        <view v-if="item.icon === 'mine'" class="i-a"></view>
+        <view v-if="item.icon === 'mine'" class="i-b"></view>
       </view>
       <text class="nav-label">{{ item.label }}</text>
-      <view v-if="item.path === current" class="nav-dot"></view>
+      <view class="nav-dot" :class="{ visible: item.path === current }"></view>
     </view>
   </view>
 </template>
@@ -51,7 +50,7 @@ export default {
 }
 </script>
 
-<style>
+<style scoped>
 .bottom-nav {
   position: fixed;
   left: 0;
@@ -59,21 +58,26 @@ export default {
   bottom: 0;
   z-index: 40;
   display: flex;
-  justify-content: space-around;
-  padding: 14rpx 80rpx calc(14rpx + env(safe-area-inset-bottom));
+  align-items: center;
+  justify-content: space-between;
+  padding: 12rpx 72rpx calc(10rpx + constant(safe-area-inset-bottom));
+  padding-bottom: calc(10rpx + env(safe-area-inset-bottom));
   border-top: 2rpx solid rgba(169, 226, 255, 0.25);
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: 0 -8rpx 40rpx rgba(14, 58, 92, 0.07);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 -10rpx 36rpx rgba(14, 58, 92, 0.09);
 }
 
 .nav-item {
   position: relative;
   display: flex;
+  flex: 1;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-width: 128rpx;
-  padding: 8rpx 0 4rpx;
+  gap: 6rpx;
+  min-width: 0;
+  min-height: 98rpx;
+  padding: 4rpx 0 2rpx;
   color: #6baed6;
   transition: transform 0.16s ease, opacity 0.16s ease;
 }
@@ -89,66 +93,79 @@ export default {
 
 .nav-label {
   display: block;
-  margin-top: 8rpx;
-  font-size: 22rpx;
-  font-weight: 600;
+  min-height: 30rpx;
+  font-size: 23rpx;
+  font-weight: 700;
+  line-height: 30rpx;
 }
 
 .nav-dot {
-  width: 8rpx;
-  height: 8rpx;
-  margin-top: 8rpx;
+  width: 7rpx;
+  height: 7rpx;
   border-radius: 999rpx;
   background: #fe8500;
+  opacity: 0;
+}
+
+.nav-dot.visible {
+  opacity: 1;
 }
 
 .nav-icon {
   position: relative;
-  width: 44rpx;
-  height: 44rpx;
+  width: 42rpx;
+  height: 42rpx;
 }
 
-.nav-icon.search .i-a {
-  width: 25rpx;
-  height: 25rpx;
+.nav-icon.search {
+  overflow: visible;
+  transform: rotate(-45deg);
+  transform-origin: 50% 50%;
+}
+
+.nav-icon.search::before {
+  content: "";
+  position: absolute;
+  left: 6rpx;
+  top: 1rpx;
+  width: 30rpx;
+  height: 30rpx;
+  box-sizing: border-box;
   border: 4rpx solid currentColor;
   border-radius: 999rpx;
 }
 
-.nav-icon.search .i-b {
+.nav-icon.search::after {
+  content: "";
   position: absolute;
-  right: 4rpx;
-  bottom: 5rpx;
-  width: 18rpx;
-  height: 4rpx;
+  left: 19rpx;
+  top: 27rpx;
+  width: 4rpx;
+  height: 15rpx;
   border-radius: 999rpx;
   background: currentColor;
-  transform: rotate(45deg);
 }
 
 .nav-icon.mine .i-a {
   position: absolute;
   left: 11rpx;
-  top: 4rpx;
-  width: 22rpx;
-  height: 22rpx;
+  top: 1rpx;
+  width: 20rpx;
+  height: 20rpx;
   border: 4rpx solid currentColor;
   border-radius: 999rpx;
 }
 
 .nav-icon.mine .i-b {
   position: absolute;
-  left: 5rpx;
-  bottom: 3rpx;
+  left: 4rpx;
+  bottom: 1rpx;
   width: 34rpx;
-  height: 18rpx;
+  height: 17rpx;
   border: 4rpx solid currentColor;
-  border-top-left-radius: 22rpx;
-  border-top-right-radius: 22rpx;
+  border-top-left-radius: 24rpx;
+  border-top-right-radius: 24rpx;
   border-bottom: 0;
 }
 
-.nav-icon .i-c {
-  display: none;
-}
 </style>
