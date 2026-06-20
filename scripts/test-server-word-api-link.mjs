@@ -145,8 +145,8 @@ async function main() {
       'production config should block local HTTP API base URL'
     )
     assert(
-      getWordApiBaseUrl({ nodeEnv: '', apiBaseUrl: 'http://127.0.0.1:3001' }) === 'http://127.0.0.1:3001',
-      'missing NODE_ENV should default to development-like mode and allow local API base URL'
+      getWordApiBaseUrl({ nodeEnv: '', apiBaseUrl: 'http://127.0.0.1:3001' }) === '',
+      'missing NODE_ENV should fail closed and disable the remote word API'
     )
 
   } finally {

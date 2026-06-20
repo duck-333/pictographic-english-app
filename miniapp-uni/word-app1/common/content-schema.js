@@ -229,7 +229,7 @@ export function normalizeWordRecord(record) {
     ...source,
     id: source.id || (word ? `word-${word}` : ''),
     kind: source.kind || inferCardKind(source),
-    status: source.status || CONTENT_STATUS.published,
+    status: source.status || CONTENT_STATUS.draft,
     word,
     cardType: source.cardType || '',
     phonetic: source.phonetic || '',

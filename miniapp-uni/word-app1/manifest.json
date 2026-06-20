@@ -1,19 +1,19 @@
 {
-  "name": "象形英语小程序",
-  "appid": "__HBUILDERX_GENERATES_THIS__",
-  "description": "象形英语 MVP 小程序，先跑通查词、详情和我的页闭环。",
-  "versionName": "1.0.0",
-  "versionCode": "100",
-  "transformPx": false,
-  "mp-weixin": {
-    "appid": "wxf9a29e671fac34d2",
-    "setting": {
-      "urlCheck": false,
-      "es6": true,
-      "postcss": true,
-      "minified": false
-    },
-    "usingComponents": true,
-    "lazyCodeLoading": "requiredComponents"
-  }
+    "name" : "象形英语小程序",
+    "appid" : "__HBUILDERX_GENERATES_THIS__",
+    "description" : "象形英语 MVP 小程序，先跑通查词、详情和我的页闭环。",
+    "versionName" : "1.0.0",
+    "versionCode" : "100",
+    "transformPx" : false,
+    "mp-weixin" : {
+        "appid" : "wxf9a29e671fac34d2",
+        "setting" : {
+            "urlCheck" : false,
+            "es6" : true,
+            "postcss" : true,
+            "minified" : false
+        },
+        "usingComponents" : true,
+        "lazyCodeLoading" : "requiredComponents"
+    }
 }

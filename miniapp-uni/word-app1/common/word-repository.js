@@ -123,14 +123,16 @@ let REMOTE_WORD_RECORDS = []
 export const CONTENT_REPOSITORY_MODE = ACTIVE_DEV_PREVIEW_WORDS.length
   ? 'local-preview-bridge'
   : getWordApiBaseUrl()
-    ? 'server-api-local-fallback'
-    : 'local-mock'
+    ? 'development-api-with-local-fallback'
+    : 'offline-published-content'
 export const HOT_WORDS = LOCAL_HOT_WORDS
 export const TODAY_WORD_ID = LOCAL_TODAY_WORD_ID
 export const NAV_ITEMS = LOCAL_NAV_ITEMS
 
 const WORD_RECORDS = SOURCE_WORDS.map((item) => normalizeWordRecord(item))
-const PUBLISHED_WORD_RECORDS = WORD_RECORDS.filter((item) => item.status === 'published')
+const PUBLISHED_WORD_RECORDS = SOURCE_WORDS
+  .filter((item) => item && item.status === 'published')
+  .map((item) => normalizeWordRecord(item))
 
 function getPublishedWordRecords() {
   return mergePreviewWords(PUBLISHED_WORD_RECORDS, REMOTE_WORD_RECORDS)
@@ -144,7 +146,8 @@ function getAllWordRecords() {
 
 function cacheRemoteWords(words) {
   if (!Array.isArray(words) || !words.length) return []
-  REMOTE_WORD_RECORDS = mergePreviewWords(REMOTE_WORD_RECORDS, words)
+  const publishedWords = words.filter((item) => item && item.status === 'published')
+  REMOTE_WORD_RECORDS = mergePreviewWords(REMOTE_WORD_RECORDS, publishedWords)
     .map((item) => normalizeWordRecord(item))
     .filter((item) => item.status === 'published')
   return REMOTE_WORD_RECORDS.map((item) => cloneWord(item))
@@ -216,12 +219,12 @@ export function getContentRepositoryInfo() {
     remoteEnabled: Boolean(apiBaseUrl),
     apiBaseUrl,
     note: isProductionRuntime()
-      ? 'Production runtime ignores local preview bridge records.'
+      ? 'Production runtime uses the bundled published word collection without remote requests.'
       : ACTIVE_DEV_PREVIEW_WORDS.length
-      ? 'Current MVP reads admin-synced local preview records before mock records.'
+      ? 'Development runtime reads locally synchronized preview records before bundled content.'
       : apiBaseUrl
-      ? 'Development runtime can read words from the local/server API before falling back to local mock records.'
-      : 'Current MVP reads local mock records through this repository facade.'
+      ? 'Development runtime can read words from the configured API before falling back to bundled content.'
+      : 'Runtime reads the bundled published word collection.'
   }
 }
 
@@ -269,6 +272,9 @@ export function getRelatedWords(word) {
 }
 
 export function fetchWords(query) {
+  if (!getWordApiBaseUrl()) {
+    return Promise.resolve(searchWords(query))
+  }
   return fetchServerWords(query)
     .then((words) => {
       const remoteWords = cacheRemoteWords(words)
@@ -278,16 +284,22 @@ export function fetchWords(query) {
 }
 
 export function fetchWordById(id) {
+  if (!getWordApiBaseUrl()) {
+    return Promise.resolve(getWordById(id))
+  }
   return fetchServerWordById(id)
     .then((word) => {
-      if (!word) return getWordById(id)
+      if (!word || word.status !== 'published') return getWordById(id)
       cacheRemoteWords([word])
-      return cloneWord(word)
+      return getWordById(word.id) || getWordById(id)
     })
     .catch(() => getWordById(id))
 }
 
 export function fetchWordByWord(word) {
+  if (!getWordApiBaseUrl()) {
+    return Promise.resolve(getWordByWord(word))
+  }
   return fetchServerWords(word)
     .then((words) => {
       const remoteWords = cacheRemoteWords(words)

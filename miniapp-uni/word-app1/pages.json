@@ -23,30 +23,6 @@
         "navigationBarBackgroundColor": "#f0f9ff",
         "navigationBarTextStyle": "black"
       }
-    },
-    {
-      "path": "pages/network/index",
-      "style": {
-        "navigationBarTitleText": "关系网",
-        "navigationBarBackgroundColor": "#f0f9ff",
-        "navigationBarTextStyle": "black"
-      }
-    },
-    {
-      "path": "pages/word-list/index",
-      "style": {
-        "navigationBarTitleText": "单词库",
-        "navigationBarBackgroundColor": "#f0f9ff",
-        "navigationBarTextStyle": "black"
-      }
-    },
-    {
-      "path": "pages/classroom/index",
-      "style": {
-        "navigationBarTitleText": "课堂",
-        "navigationBarBackgroundColor": "#f0f9ff",
-        "navigationBarTextStyle": "black"
-      }
     }
   ],
   "globalStyle": {

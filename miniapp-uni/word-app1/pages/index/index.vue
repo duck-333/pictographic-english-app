@@ -2,29 +2,18 @@
   <view class="page">
     <view class="content">
       <view class="hero">
-        <view class="hero-ghost">tud port struct</view>
-
         <view class="top-row">
           <view>
             <view class="brand-row">
               <text class="brand">象形英语</text>
-              <text class="beta">BETA</text>
             </view>
             <text class="tagline">用象形逻辑，读懂每个英语单词</text>
-          </view>
-
-          <view class="bell" hover-class="pressed">
-            <view class="bell-body"></view>
-            <view class="bell-dot"></view>
           </view>
         </view>
 
         <view class="search-stack">
-          <view class="search-shell" :class="{ focused }">
-            <view class="search-icon">
-              <view class="search-circle"></view>
-              <view class="search-handle"></view>
-            </view>
+          <view class="search-shell" :class="{ focused }" @tap="openSearchPanel">
+            <view class="search-icon"></view>
 
             <input
               :value="query"
@@ -38,11 +27,20 @@
               @blur="handleSearchBlur"
             />
 
+            <view
+              class="search-toggle"
+              :class="{ expanded: searchPanelOpen }"
+              hover-class="search-toggle-pressed"
+              @tap.stop="toggleSearchPanel"
+            >
+              <view class="search-toggle-chevron"></view>
+            </view>
+
             <button
               class="inline-search"
               :class="{ inactive: !canSubmitSearch || searching }"
               :hover-class="searchButtonHoverClass"
-              @tap="submitSearch"
+              @tap.stop="submitSearch"
             >
               {{ searching ? '查找中' : '搜索' }}
             </button>
@@ -139,9 +137,6 @@
 
               <view v-else class="panel-empty">
                 <text>{{ missingDescription }}</text>
-                <button class="panel-empty-action" hover-class="empty-action-pressed" @tap="openFeedback">
-                  提交缺词反馈
-                </button>
               </view>
             </view>
           </view>
@@ -174,8 +169,6 @@
           </view>
 
           <view class="today-card" hover-class="card-pressed" @tap="openTodayWord">
-            <view class="card-ghost">t</view>
-
             <view class="word-row">
               <text class="today-word">{{ todayWord.word }}</text>
               <text class="today-phonetic">{{ todayWord.phonetic }}</text>
@@ -202,36 +195,21 @@
       </view>
     </view>
 
-    <view class="bottom-nav">
-      <view class="nav-item active" hover-class="nav-item-pressed">
-        <view class="nav-icon search">
-          <view class="i-a"></view>
-          <view class="i-b"></view>
-          <view class="i-c"></view>
-        </view>
-        <text class="nav-label">查词</text>
-        <view class="nav-dot"></view>
-      </view>
-
-      <view class="nav-item" hover-class="nav-item-pressed" @tap="goMine">
-        <view class="nav-icon mine">
-          <view class="i-a"></view>
-          <view class="i-b"></view>
-          <view class="i-c"></view>
-        </view>
-        <text class="nav-label">我的</text>
-      </view>
-    </view>
+    <bottom-nav current="/pages/index/index" />
   </view>
 </template>
 
 <script>
+import BottomNav from '../../components/BottomNav.vue'
 import { TODAY_WORD_ID, fetchWordByWord, fetchWords, getWordById, getWordByWord, searchWords, normalizeWordQuery } from '../../common/word-repository.js'
 import { addRecentWord, clearRecentWords, getRecentWords, getUserState, savePendingWordId } from '../../common/user-store.js'
 
 const initialTodayWord = getWordById(TODAY_WORD_ID)
 
 export default {
+  components: {
+    BottomNav
+  },
   data() {
     return {
       query: '',
@@ -282,7 +260,7 @@ export default {
     },
     buildMissingDescription(word) {
       if (!word) return ''
-      return `可以先提交“${word}”，后续优先补充讲解。`
+      return `暂未收录“${word}”。`
     },
     async updateSuggestionState(word) {
       this.results = searchWords(word)
@@ -295,7 +273,6 @@ export default {
     },
     handleQueryInput(event) {
       this.query = event && event.detail ? event.detail.value : ''
-      this.searchPanelOpen = true
 
       if (!this.normalizedQuery) {
         this.resetSuggestionState()
@@ -308,6 +285,14 @@ export default {
       this.clearSearchBlurTimer()
       this.focused = true
       this.searchPanelOpen = true
+    },
+    openSearchPanel() {
+      this.clearSearchBlurTimer()
+      this.searchPanelOpen = true
+    },
+    toggleSearchPanel() {
+      this.clearSearchBlurTimer()
+      this.searchPanelOpen = !this.searchPanelOpen
     },
     handleSearchBlur() {
       this.focused = false
@@ -344,23 +329,24 @@ export default {
       }
 
       this.searching = true
-      const exact = getWordByWord(word)
-      if (exact) {
-        this.searching = false
-        this.openDetail(exact.id, true)
-        return
-      }
+      try {
+        const exact = getWordByWord(word)
+        if (exact) {
+          this.openDetail(exact.id, true)
+          return
+        }
 
-      const remoteExact = await fetchWordByWord(word)
-      if (remoteExact) {
-        this.searching = false
-        this.openDetail(remoteExact.id, true)
-        return
-      }
+        const remoteExact = await fetchWordByWord(word)
+        if (remoteExact) {
+          this.openDetail(remoteExact.id, true)
+          return
+        }
 
-      await this.updateSuggestionState(word)
-      this.searching = false
-      this.searchPanelOpen = true
+        await this.updateSuggestionState(word)
+        this.searchPanelOpen = true
+      } finally {
+        this.searching = false
+      }
     },
     clearRecentHistory() {
       clearRecentWords()
@@ -387,12 +373,6 @@ export default {
         url: `/pages/word-detail/index?id=${id}`
       })
     },
-    openFeedback() {
-      const word = encodeURIComponent(this.missingWord || this.normalizedQuery || '')
-      uni.navigateTo({
-        url: `/pages/mine/index?feedbackWord=${word}`
-      })
-    },
     goMine() {
       uni.reLaunch({
         url: '/pages/mine/index'
@@ -410,7 +390,7 @@ export default {
 
 .content {
   min-height: 100vh;
-  padding-bottom: 176rpx;
+  padding-bottom: calc(188rpx + env(safe-area-inset-bottom));
 }
 
 .hero {
@@ -419,15 +399,6 @@ export default {
   overflow: visible;
   padding: 92rpx 40rpx 48rpx;
   background: linear-gradient(160deg, #0e3a5c 0%, #1a5a8a 100%);
-}
-
-.hero-ghost {
-  position: absolute;
-  top: -28rpx;
-  right: -18rpx;
-  color: rgba(255, 255, 255, 0.06);
-  font-size: 72rpx;
-  letter-spacing: 8rpx;
 }
 
 .top-row,
@@ -462,50 +433,11 @@ export default {
   font-weight: 800;
 }
 
-.beta {
-  padding: 2rpx 12rpx;
-  border-radius: 16rpx;
-  background: rgba(255, 235, 162, 0.15);
-  color: rgba(255, 235, 162, 0.88);
-  font-size: 20rpx;
-  font-weight: 700;
-}
-
 .tagline {
   display: block;
   margin-top: 6rpx;
   color: rgba(255, 255, 255, 0.64);
   font-size: 24rpx;
-}
-
-.bell {
-  position: relative;
-  width: 76rpx;
-  height: 76rpx;
-  border-radius: 999rpx;
-  background: rgba(169, 226, 255, 0.12);
-}
-
-.bell-body {
-  position: absolute;
-  left: 25rpx;
-  top: 20rpx;
-  width: 26rpx;
-  height: 32rpx;
-  border: 4rpx solid #ffffff;
-  border-bottom: 0;
-  border-top-left-radius: 18rpx;
-  border-top-right-radius: 18rpx;
-}
-
-.bell-dot {
-  position: absolute;
-  top: 12rpx;
-  right: 14rpx;
-  width: 12rpx;
-  height: 12rpx;
-  border-radius: 999rpx;
-  background: #fe8500;
 }
 
 .search-stack {
@@ -518,9 +450,9 @@ export default {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 22rpx;
-  min-height: 136rpx;
-  padding: 0 18rpx 0 30rpx;
+  gap: 16rpx;
+  height: 136rpx;
+  padding: 0 18rpx 0 28rpx;
   border: 2rpx solid rgba(255, 255, 255, 0.1);
   border-radius: 34rpx;
   background: #09314f;
@@ -535,35 +467,43 @@ export default {
 .search-icon {
   position: relative;
   flex-shrink: 0;
-  width: 44rpx;
-  height: 44rpx;
+  width: 46rpx;
+  height: 46rpx;
+  overflow: visible;
   color: #ffffff;
+  transform: rotate(-45deg);
+  transform-origin: 50% 50%;
 }
 
-.search-circle {
-  width: 30rpx;
-  height: 30rpx;
-  border: 5rpx solid currentColor;
+.search-icon::before {
+  content: "";
+  position: absolute;
+  left: 6rpx;
+  top: 1rpx;
+  width: 34rpx;
+  height: 34rpx;
+  box-sizing: border-box;
+  border: 4rpx solid currentColor;
   border-radius: 999rpx;
 }
 
-.search-handle {
+.search-icon::after {
+  content: "";
   position: absolute;
-  right: 0;
-  bottom: 2rpx;
-  width: 18rpx;
-  height: 5rpx;
+  left: 21rpx;
+  top: 31rpx;
+  width: 4rpx;
+  height: 15rpx;
   border-radius: 999rpx;
   background: currentColor;
-  transform: rotate(45deg);
 }
 
 .search-input {
   flex: 1;
   min-width: 0;
-  height: 100%;
+  height: 88rpx;
   color: #ffffff;
-  font-size: 36rpx;
+  font-size: 34rpx;
   font-weight: 800;
 }
 
@@ -571,6 +511,35 @@ export default {
   color: rgba(255, 255, 255, 0.56);
   font-size: 32rpx;
   font-weight: 600;
+}
+
+.search-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 42rpx;
+  height: 52rpx;
+  border-radius: 16rpx;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.search-toggle-chevron {
+  width: 14rpx;
+  height: 14rpx;
+  border-right: 4rpx solid currentColor;
+  border-bottom: 4rpx solid currentColor;
+  transform: translateY(-4rpx) rotate(45deg);
+  transition: transform 0.16s ease;
+}
+
+.search-toggle.expanded .search-toggle-chevron {
+  transform: translateY(4rpx) rotate(225deg);
+}
+
+.search-toggle-pressed {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .inline-search {
@@ -591,8 +560,7 @@ export default {
   box-shadow: 0 12rpx 26rpx rgba(255, 171, 80, 0.3);
 }
 
-.inline-search::after,
-.panel-empty-action::after {
+.inline-search::after {
   border: 0;
 }
 
@@ -743,21 +711,6 @@ export default {
   line-height: 1.6;
 }
 
-.panel-empty-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 220rpx;
-  min-height: 68rpx;
-  margin: 18rpx 0 0;
-  padding: 0 26rpx;
-  border-radius: 999rpx;
-  background: #ffab50;
-  color: #09314f;
-  font-size: 24rpx;
-  font-weight: 800;
-}
-
 .stats-row {
   align-items: center;
   flex-wrap: wrap;
@@ -855,15 +808,6 @@ export default {
   box-shadow: 0 16rpx 56rpx rgba(14, 58, 92, 0.28);
 }
 
-.card-ghost {
-  position: absolute;
-  top: -12rpx;
-  right: 22rpx;
-  color: rgba(169, 226, 255, 0.08);
-  font-size: 120rpx;
-  font-weight: 800;
-}
-
 .word-row {
   position: relative;
   align-items: flex-end;
@@ -915,7 +859,7 @@ export default {
 
 .part-meaning {
   margin-top: 2rpx;
-  color: rgba(255, 255, 255, 0.62);
+  color: #315c82;
   font-size: 18rpx;
 }
 
@@ -951,114 +895,11 @@ export default {
   font-size: 22rpx;
 }
 
-.bottom-nav {
-  position: fixed;
-  left: 24rpx;
-  right: 24rpx;
-  bottom: 24rpx;
-  display: flex;
-  align-items: center;
-  justify-content: space-around;
-  padding: 18rpx 16rpx calc(18rpx + env(safe-area-inset-bottom));
-  border-radius: 30rpx;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 18rpx 48rpx rgba(14, 58, 92, 0.12);
-  backdrop-filter: blur(12rpx);
-}
-
-.nav-item {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8rpx;
-  min-height: 88rpx;
-}
-
-.nav-icon {
-  position: relative;
-  width: 42rpx;
-  height: 42rpx;
-  color: #8cbfe6;
-}
-
-.nav-item.active .nav-icon,
-.nav-item.active .nav-label {
-  color: #0e3a5c;
-}
-
-.nav-icon.search .i-a {
-  position: absolute;
-  left: 4rpx;
-  top: 4rpx;
-  width: 24rpx;
-  height: 24rpx;
-  border: 4rpx solid currentColor;
-  border-radius: 999rpx;
-}
-
-.nav-icon.search .i-b {
-  position: absolute;
-  right: 3rpx;
-  bottom: 5rpx;
-  width: 16rpx;
-  height: 4rpx;
-  border-radius: 999rpx;
-  background: currentColor;
-  transform: rotate(45deg);
-}
-
-.nav-icon.search .i-c {
-  display: none;
-}
-
-.nav-icon.mine .i-a {
-  position: absolute;
-  left: 11rpx;
-  top: 2rpx;
-  width: 18rpx;
-  height: 18rpx;
-  border: 4rpx solid currentColor;
-  border-radius: 999rpx;
-}
-
-.nav-icon.mine .i-b {
-  position: absolute;
-  left: 5rpx;
-  bottom: 4rpx;
-  width: 30rpx;
-  height: 18rpx;
-  border: 4rpx solid currentColor;
-  border-top-left-radius: 18rpx;
-  border-top-right-radius: 18rpx;
-  border-bottom: 0;
-}
-
-.nav-icon.mine .i-c {
-  display: none;
-}
-
-.nav-label {
-  color: #8cbfe6;
-  font-size: 24rpx;
-  font-weight: 700;
-}
-
-.nav-dot {
-  width: 8rpx;
-  height: 8rpx;
-  border-radius: 999rpx;
-  background: #fe8500;
-}
-
 .pressed,
 .text-pressed,
 .card-pressed,
 .row-pressed,
-.button-pressed,
-.nav-item-pressed,
-.empty-action-pressed {
+.button-pressed {
   opacity: 0.8;
   transform: scale(0.98);
 }
