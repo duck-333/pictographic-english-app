@@ -65,6 +65,15 @@ function normalizePathname(pathname) {
   return pathname.replace(/\/+$/, '') || '/'
 }
 
+function summarizePublishedWords(words) {
+  return (Array.isArray(words) ? words : []).map((word) => ({
+    id: word.id,
+    word: word.word,
+    meaning: word.meaning,
+    status: word.status
+  }))
+}
+
 export function createApiHandler(options = {}) {
   const store = options.store || createWordStore()
   const now = options.now || (() => new Date())
@@ -93,9 +102,25 @@ export function createApiHandler(options = {}) {
         return
       }
 
+      if (req.method === 'GET' && pathname === '/api/homepage/featured-word') {
+        const featured = await store.resolveHomepageFeaturedWord({
+          date: now()
+        })
+        sendJson(res, 200, {
+          ok: true,
+          word: featured.word,
+          source: featured.source
+        })
+        return
+      }
+
       if (req.method === 'GET' && pathname === '/api/words') {
         const query = requestUrl.searchParams.get('q') || ''
-        const words = await store.listWords({ query })
+        const words = await store.listWords({
+          query,
+          publishedOnly: true,
+          limit: 20
+        })
         sendJson(res, 200, {
           ok: true,
           count: words.length,
@@ -106,7 +131,9 @@ export function createApiHandler(options = {}) {
 
       if (req.method === 'GET' && pathname.startsWith('/api/words/')) {
         const id = decodeURIComponent(pathname.slice('/api/words/'.length))
-        const word = await store.findWordById(id)
+        const word = await store.findWordById(id, {
+          publishedOnly: true
+        })
         if (!word) {
           sendJson(res, 404, {
             ok: false,
@@ -117,6 +144,69 @@ export function createApiHandler(options = {}) {
         sendJson(res, 200, {
           ok: true,
           word
+        })
+        return
+      }
+
+      if (req.method === 'GET' && pathname === '/api/admin/homepage-featured') {
+        const authResult = requireAdminAuth(req, adminAuthOptions)
+        if (!authResult.ok) {
+          sendJson(res, authResult.statusCode, {
+            ok: false,
+            message: 'Unauthorized'
+          })
+          return
+        }
+
+        const featured = await store.resolveHomepageFeaturedWord({
+          date: now()
+        })
+        const publishedWords = await store.listWords({
+          publishedOnly: true,
+          query: ''
+        })
+        sendJson(res, 200, {
+          ok: true,
+          config: featured.config,
+          currentWord: featured.word,
+          source: featured.source,
+          publishedWords: summarizePublishedWords(publishedWords)
+        })
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/admin/homepage-featured') {
+        const authResult = requireAdminAuth(req, adminAuthOptions)
+        if (!authResult.ok) {
+          sendJson(res, authResult.statusCode, {
+            ok: false,
+            message: 'Unauthorized'
+          })
+          return
+        }
+
+        const body = await readJsonBody(req)
+        const result = await store.saveHomepageFeaturedConfig(body, {
+          updatedBy: 'admin-api'
+        })
+        if (!result.ok) {
+          sendJson(res, 400, {
+            ok: false,
+            message: 'Homepage featured configuration validation failed.',
+            errors: result.errors,
+            config: result.config
+          })
+          return
+        }
+
+        const featured = await store.resolveHomepageFeaturedWord({
+          date: now()
+        })
+        sendJson(res, 200, {
+          ok: true,
+          config: result.config,
+          currentWord: featured.word,
+          source: featured.source
         })
         return
       }

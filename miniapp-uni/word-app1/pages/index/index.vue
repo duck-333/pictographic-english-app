@@ -106,8 +106,13 @@
             <view v-else class="panel-section">
               <view class="panel-head">
                 <text class="panel-title">推荐结果</text>
-                <text class="panel-hint" v-if="results.length">{{ results.length }} 个</text>
+                <text class="panel-hint" v-if="searching">正在查询线上词库</text>
+                <text class="panel-hint" v-else-if="results.length">{{ results.length }} 个</text>
                 <text class="panel-hint" v-else>没有匹配结果</text>
+              </view>
+
+              <view v-if="searchErrorMessage" class="search-error">
+                <text>{{ searchErrorMessage }}</text>
               </view>
 
               <scroll-view
@@ -184,10 +189,10 @@
               </block>
             </view>
 
-            <text class="tip">{{ todayWord.tip }}</text>
+            <text v-if="todayWordSummary" class="tip">{{ todayWordSummary }}</text>
 
             <view class="card-foot">
-              <text class="level-badge">{{ todayWord.level }} 必备</text>
+              <text v-if="todayWord.level || todayWord.cardType" class="level-badge">{{ todayWord.level || todayWord.cardType }}</text>
               <text class="tap-tip">点击查看完整解析 -></text>
             </view>
           </view>
@@ -201,10 +206,15 @@
 
 <script>
 import BottomNav from '../../components/BottomNav.vue'
-import { TODAY_WORD_ID, fetchWordByWord, fetchWords, getWordById, getWordByWord, searchWords, normalizeWordQuery } from '../../common/word-repository.js'
+import {
+  fetchHomepageFeaturedWord,
+  fetchWordByWord,
+  fetchWords,
+  getWordByWord,
+  searchWords,
+  normalizeWordQuery
+} from '../../common/word-repository.js'
 import { addRecentWord, clearRecentWords, getRecentWords, getUserState, savePendingWordId } from '../../common/user-store.js'
-
-const initialTodayWord = getWordById(TODAY_WORD_ID)
 
 export default {
   components: {
@@ -220,16 +230,20 @@ export default {
       searching: false,
       missingWord: '',
       results: [],
+      searchErrorMessage: '',
       recentWords: [],
       userState: getUserState(),
-      todayWord: initialTodayWord,
-      todayParts: initialTodayWord && Array.isArray(initialTodayWord.parts) ? initialTodayWord.parts : [],
-      todayPartsLastIndex: initialTodayWord && Array.isArray(initialTodayWord.parts) ? initialTodayWord.parts.length - 1 : -1,
+      todayWord: null,
+      todayWordSource: 'empty',
+      todayWordRequestId: 0,
+      todayParts: [],
+      todayPartsLastIndex: -1,
       missingDescription: ''
     }
   },
   onShow() {
     this.refreshUserData()
+    this.loadTodayWord()
   },
   onUnload() {
     this.clearSearchBlurTimer()
@@ -246,6 +260,15 @@ export default {
     },
     showRecentPanel() {
       return !this.normalizedQuery
+    },
+    todayWordSummary() {
+      if (!this.todayWord) return ''
+      return String(
+        this.todayWord.explanation ||
+        this.todayWord.tip ||
+        this.todayWord.pictograph ||
+        ''
+      ).trim()
     }
   },
   methods: {
@@ -253,23 +276,54 @@ export default {
       this.recentWords = getRecentWords()
       this.userState = getUserState()
     },
+    applyTodayWord(word, source = 'empty') {
+      const publishedWord = word && word.status === 'published' ? word : null
+      this.todayWord = publishedWord
+      this.todayWordSource = publishedWord ? source : 'empty'
+      this.todayParts = publishedWord && Array.isArray(publishedWord.parts) ? publishedWord.parts : []
+      this.todayPartsLastIndex = this.todayParts.length - 1
+    },
+    async loadTodayWord() {
+      const requestId = this.todayWordRequestId + 1
+      this.todayWordRequestId = requestId
+      try {
+        const result = await fetchHomepageFeaturedWord()
+        if (this.todayWordRequestId !== requestId) return
+        this.applyTodayWord(result && result.word, result && result.source)
+      } catch (error) {
+        if (this.todayWordRequestId !== requestId) return
+        this.applyTodayWord(null, 'empty')
+      }
+    },
     resetSuggestionState() {
       this.results = []
       this.missingWord = ''
       this.missingDescription = ''
+      this.searchErrorMessage = ''
     },
     buildMissingDescription(word) {
       if (!word) return ''
       return `暂未收录“${word}”。`
     },
     async updateSuggestionState(word) {
-      this.results = searchWords(word)
+      this.results = []
       this.missingWord = word
       this.missingDescription = this.buildMissingDescription(word)
+      this.searchErrorMessage = ''
       const requestWord = word
-      const remoteResults = await fetchWords(word)
-      if (this.normalizedQuery !== requestWord) return
-      this.results = remoteResults
+      try {
+        const remoteResults = await fetchWords(word)
+        if (this.normalizedQuery !== requestWord) return
+        this.results = remoteResults
+      } catch (error) {
+        if (this.normalizedQuery !== requestWord) return
+        const fallback = error && Array.isArray(error.fallback) ? error.fallback : searchWords(word)
+        this.results = fallback
+        this.searchErrorMessage = fallback.length
+          ? '线上词库暂时无法连接，当前显示本地备用词条，内容可能不是最新版本。'
+          : '线上词库暂时无法连接，请检查网络后重试。'
+        this.missingDescription = fallback.length ? '' : this.searchErrorMessage
+      }
     },
     handleQueryInput(event) {
       this.query = event && event.detail ? event.detail.value : ''
@@ -330,13 +384,27 @@ export default {
 
       this.searching = true
       try {
-        const exact = getWordByWord(word)
-        if (exact) {
-          this.openDetail(exact.id, true)
+        let remoteExact = null
+        try {
+          remoteExact = await fetchWordByWord(word)
+        } catch (error) {
+          const fallbackExact = error && error.fallback ? error.fallback : getWordByWord(word)
+          this.searchErrorMessage = fallbackExact
+            ? '线上词库暂时无法连接，正在打开本地备用词条。'
+            : '线上词库暂时无法连接，请检查网络后重试。'
+          if (fallbackExact) {
+            uni.showToast({
+              title: '网络异常，显示本地备用内容',
+              icon: 'none'
+            })
+            this.openDetail(fallbackExact.id, true)
+            return
+          }
+          this.results = []
+          this.missingDescription = this.searchErrorMessage
+          this.searchPanelOpen = true
           return
         }
-
-        const remoteExact = await fetchWordByWord(word)
         if (remoteExact) {
           this.openDetail(remoteExact.id, true)
           return
@@ -709,6 +777,16 @@ export default {
   color: #5d88aa;
   font-size: 22rpx;
   line-height: 1.6;
+}
+
+.search-error {
+  margin-top: 16rpx;
+  padding: 16rpx 20rpx;
+  border-radius: 18rpx;
+  background: rgba(255, 235, 162, 0.16);
+  color: #ffeba2;
+  font-size: 21rpx;
+  line-height: 1.55;
 }
 
 .stats-row {

@@ -159,3 +159,40 @@ export function saveAdminWordToServer(word, options = {}) {
       return data
     })
 }
+
+export function getAdminHomepageFeatured(options = {}) {
+  if (typeof fetch !== 'function') {
+    return Promise.reject(new Error('Admin API is not available in this runtime.'))
+  }
+
+  return fetch(buildAdminApiUrl('/api/admin/homepage-featured', options), {
+    method: 'GET',
+    headers: buildAdminHeaders(options)
+  })
+    .then((response) => response.json().catch(() => ({})).then((data) => ({ response, data })))
+    .then(({ response, data }) => {
+      if (!response.ok || data.ok === false) {
+        throw createAdminApiError(response, data)
+      }
+      return data
+    })
+}
+
+export function saveAdminHomepageFeatured(config, options = {}) {
+  if (typeof fetch !== 'function') {
+    return Promise.reject(new Error('Admin API is not available in this runtime.'))
+  }
+
+  return fetch(buildAdminApiUrl('/api/admin/homepage-featured', options), {
+    method: 'POST',
+    headers: buildAdminHeaders(options),
+    body: JSON.stringify(config || {})
+  })
+    .then((response) => response.json().catch(() => ({})).then((data) => ({ response, data })))
+    .then(({ response, data }) => {
+      if (!response.ok || data.ok === false) {
+        throw createAdminApiError(response, data)
+      }
+      return data
+    })
+}

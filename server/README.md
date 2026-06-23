@@ -86,6 +86,20 @@ GET /api/words?q=study
 
 Returns one published word by stable `id`.
 
+### GET /api/homepage/featured-word
+
+Returns the current published homepage recommendation:
+
+```json
+{
+  "ok": true,
+  "word": null,
+  "source": "empty"
+}
+```
+
+`source` is `manual`, `dailyRotation`, or `empty`. The endpoint never returns draft, unpublished, archived, review, pending, unknown, or missing-status words.
+
 ### GET /api/admin/auth/check
 
 Checks whether the provided admin token can access management APIs.
@@ -116,7 +130,7 @@ Wrong token:
 
 ### POST /api/admin/words
 
-Saves or updates one admin-managed word. The admin portal uses this endpoint directly for `发布当前词条`, `撤下当前词条`, and `发布全部本地草稿到服务器`.
+Saves or updates one admin-managed word. The admin portal uses this endpoint directly for `发布当前词条`, `撤下当前词条`, `归档当前词条`, and `发布全部本地草稿到服务器`.
 
 Requires:
 
@@ -146,8 +160,48 @@ Request body:
 
 The server reuses `miniapp-uni/word-app1/common/content-schema.js` to normalize and validate records.
 
+### GET /api/admin/homepage-featured
+
+Returns the saved homepage recommendation configuration, the currently resolved word, and published words available for selection.
+
+Requires:
+
+```text
+Authorization: Bearer <ADMIN_API_TOKEN>
+```
+
+### POST /api/admin/homepage-featured
+
+Saves the homepage recommendation configuration:
+
+```json
+{
+  "featuredWordIds": ["tud", "cool"],
+  "mode": "dailyRotation",
+  "manualWordId": ""
+}
+```
+
+The stored configuration is:
+
+```json
+{
+  "featuredWordIds": ["tud", "cool"],
+  "mode": "dailyRotation",
+  "manualWordId": "",
+  "updatedAt": "2026-06-23T00:00:00.000Z",
+  "updatedBy": "admin-api"
+}
+```
+
+Only published word IDs can be saved. Daily rotation uses the Asia/Shanghai calendar-day number modulo the number of currently published pool words. Manual mode returns `manualWordId` when it is still published; otherwise it falls back to the published recommendation pool. An empty valid pool returns `word: null`.
+
 ## Safety Boundaries
 
+- Production mini programs read published text entries from `https://admin.baxiaota.com/api/words` and `https://admin.baxiaota.com/api/words/:id`.
+- Public word APIs use strict `status === "published"` filtering. Missing or any other status is treated as non-public.
+- The public homepage recommendation API applies the same strict published filtering at response time, so later unpublish/archive actions take effect without rewriting the recommendation configuration.
+- `GET /api/words` returns at most 20 matching records per request.
 - Admin write APIs require a Bearer token. This is the minimum guard for development and deployment testing, not a complete admin login system.
 - `GET /api/admin/auth/check` uses the same token guard so the admin portal can verify a token before showing the workbench.
 - The frontend may store a local development token in `localStorage` under `pictographic:adminApiToken`. Do not treat it as a real account session.

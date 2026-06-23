@@ -180,7 +180,7 @@
 							{{ serverSync.busy ? '同步中...' : primaryActionText }}
 						</button>
 						<button v-if="canUnpublishCurrent" class="danger-button" :disabled="serverSync.busy" @click="unpublishCurrent">撤下当前词条</button>
-						<button v-if="canArchiveCurrent" class="archive-button" @click="archiveCurrent">归档当前词条</button>
+						<button v-if="canArchiveCurrent" class="archive-button" :disabled="serverSync.busy" @click="archiveCurrent">归档当前词条</button>
 					</view>
 				</view>
 
@@ -547,6 +547,104 @@
 				</text>
 			</view>
 
+			<view class="homepage-featured-manager panel">
+				<view class="panel-head featured-manager-head">
+					<view>
+						<text class="panel-title">首页每日象形词</text>
+						<text class="panel-note">只允许选择服务器中已发布的词条；保存后小程序首页立即读取新配置。</text>
+					</view>
+					<view class="featured-manager-actions">
+						<button class="secondary-button" :disabled="homepageFeatured.loading || homepageFeatured.saving" @click="loadHomepageFeaturedConfig">
+							{{ homepageFeatured.loading ? '加载中...' : '重新加载' }}
+						</button>
+						<button class="publish-button" :disabled="homepageFeatured.loading || homepageFeatured.saving" @click="saveHomepageFeaturedConfig">
+							{{ homepageFeatured.saving ? '保存中...' : '保存首页推荐' }}
+						</button>
+					</view>
+				</view>
+
+				<text class="featured-status-message">{{ homepageFeatured.message }}</text>
+
+				<view class="featured-mode-row">
+					<button
+						:class="['featured-mode-button', homepageFeatured.mode === 'dailyRotation' ? 'active' : '']"
+						@click="setHomepageFeaturedMode('dailyRotation')"
+					>
+						自动每日轮播
+					</button>
+					<button
+						:class="['featured-mode-button', homepageFeatured.mode === 'manual' ? 'active' : '']"
+						@click="setHomepageFeaturedMode('manual')"
+					>
+						手动指定今日展示
+					</button>
+				</view>
+
+				<view class="featured-manager-grid">
+					<view class="featured-column">
+						<text class="featured-column-title">添加已发布词条</text>
+						<input
+							v-model="homepageFeatured.search"
+							class="featured-search-input"
+							placeholder="搜索 id、单词或中文释义"
+						/>
+						<scroll-view class="featured-candidate-list" scroll-y>
+							<view v-for="item in homepageFeaturedCandidates" :key="item.id" class="featured-candidate-row">
+								<view class="featured-word-copy">
+									<text class="featured-word-title">{{ item.word }}</text>
+									<text class="featured-word-meta">{{ item.id }} · {{ item.meaning || '暂无释义' }}</text>
+								</view>
+								<button class="featured-mini-button" @click="addHomepageFeaturedWord(item.id)">添加</button>
+							</view>
+							<text v-if="!homepageFeaturedCandidates.length" class="featured-empty">没有可添加的已发布词条。</text>
+						</scroll-view>
+					</view>
+
+					<view class="featured-column">
+						<text class="featured-column-title">当前推荐池（按此顺序轮播）</text>
+						<view class="featured-pool-list">
+							<view v-for="(item, index) in homepageFeaturedPoolWords" :key="item.id" class="featured-pool-row">
+								<view class="featured-order">{{ index + 1 }}</view>
+								<view class="featured-word-copy">
+									<text class="featured-word-title">{{ item.word }}</text>
+									<text class="featured-word-meta">{{ item.id }} · {{ item.meaning || '暂无释义' }} · {{ item.status }}</text>
+								</view>
+								<view class="featured-row-actions">
+									<button class="featured-icon-button" :disabled="index === 0" @click="moveHomepageFeaturedWord(index, -1)">上移</button>
+									<button class="featured-icon-button" :disabled="index === homepageFeaturedPoolWords.length - 1" @click="moveHomepageFeaturedWord(index, 1)">下移</button>
+									<button class="featured-icon-button danger" @click="removeHomepageFeaturedWord(item.id)">移除</button>
+								</view>
+							</view>
+							<text v-if="!homepageFeaturedPoolWords.length" class="featured-empty">推荐池为空，小程序首页将隐藏每日象形词模块。</text>
+						</view>
+					</view>
+
+					<view class="featured-column featured-preview-column">
+						<text class="featured-column-title">当前首页预览</text>
+						<view v-if="homepageFeatured.mode === 'manual'" class="featured-manual-picker">
+							<text class="featured-field-label">手动指定词条</text>
+							<picker
+								:range="homepageManualOptions"
+								range-key="label"
+								:value="homepageManualPickerIndex"
+								@change="changeHomepageManualWord"
+							>
+								<view class="picker-box">{{ homepageManualSelectionLabel }}</view>
+							</picker>
+						</view>
+						<view v-if="homepageFeatured.currentWord" class="featured-current-card">
+							<text class="featured-current-source">{{ homepageFeaturedSourceText }}</text>
+							<text class="featured-current-word">{{ homepageFeatured.currentWord.word }}</text>
+							<text class="featured-current-id">{{ homepageFeatured.currentWord.id }}</text>
+							<text class="featured-current-meaning">{{ homepageFeatured.currentWord.meaning || '暂无释义' }}</text>
+						</view>
+						<view v-else class="featured-current-empty">
+							<text>当前没有可公开展示的首页推荐词。</text>
+						</view>
+					</view>
+				</view>
+			</view>
+
 			<view class="dashboard-summary-grid">
 				<view class="dashboard-summary-card" v-for="item in dashboardSummaryCards" :key="item.label">
 					<text class="dashboard-summary-value">{{ item.value }}</text>
@@ -645,7 +743,14 @@
 </template>
 
 <script>
-import { checkAdminAuth, getAdminApiToken, saveAdminApiToken, saveAdminWordToServer } from '../../common/api-client.js'
+import {
+	checkAdminAuth,
+	getAdminApiToken,
+	getAdminHomepageFeatured,
+	saveAdminApiToken,
+	saveAdminHomepageFeatured,
+	saveAdminWordToServer
+} from '../../common/api-client.js'
 
 const STORAGE_KEY = 'pictographic-admin:words-draft'
 const PENDING_STORAGE_KEY = 'pictographic-admin:pending-imports'
@@ -765,6 +870,18 @@ export default {
 				{ id: 'mock-3', time: '待接入', user: 'openid 待接入', type: '查看详情', word: 'tud', note: '当前仅为布局占位' }
 			],
 			dashboardApiPlaceholders: DASHBOARD_API_PLACEHOLDERS,
+			homepageFeatured: {
+				loading: false,
+				saving: false,
+				message: '进入数据看板后加载服务器推荐配置。',
+				mode: 'dailyRotation',
+				featuredWordIds: [],
+				manualWordId: '',
+				publishedWords: [],
+				currentWord: null,
+				source: 'empty',
+				search: ''
+			},
 			keywordDraft: '',
 			keyword: '',
 			expandedLetters: [],
@@ -970,6 +1087,51 @@ export default {
 		},
 		listSummary() {
 			return `全部分类 · ${this.visibleWordCount} 个词条`
+		},
+		homepageFeaturedPoolWords() {
+			const byId = this.homepageFeatured.publishedWords.reduce((result, word) => {
+				result[word.id] = word
+				return result
+			}, {})
+			return this.homepageFeatured.featuredWordIds
+				.map((id) => byId[id])
+				.filter((word) => word && word.status === 'published')
+		},
+		homepageFeaturedCandidates() {
+			const keyword = String(this.homepageFeatured.search || '').trim().toLowerCase()
+			const selectedIds = new Set(this.homepageFeatured.featuredWordIds)
+			return this.homepageFeatured.publishedWords
+				.filter((word) => word && word.status === 'published' && !selectedIds.has(word.id))
+				.filter((word) => {
+					if (!keyword) return true
+					return [word.id, word.word, word.meaning]
+						.some((value) => String(value || '').toLowerCase().includes(keyword))
+				})
+				.slice(0, 30)
+		},
+		homepageManualOptions() {
+			return [
+				{ id: '', label: '请选择一个已发布词条' },
+				...this.homepageFeatured.publishedWords
+					.filter((word) => word && word.status === 'published')
+					.map((word) => ({
+						id: word.id,
+						label: `${word.word} · ${word.id}`
+					}))
+			]
+		},
+		homepageManualPickerIndex() {
+			const index = this.homepageManualOptions.findIndex((item) => item.id === this.homepageFeatured.manualWordId)
+			return index > -1 ? index : 0
+		},
+		homepageManualSelectionLabel() {
+			const selected = this.homepageManualOptions[this.homepageManualPickerIndex]
+			return selected ? selected.label : '请选择一个已发布词条'
+		},
+		homepageFeaturedSourceText() {
+			if (this.homepageFeatured.source === 'manual') return '手动指定'
+			if (this.homepageFeatured.source === 'dailyRotation') return '自动每日轮播'
+			return '当前无推荐'
 		}
 	},
 	onLoad() {
@@ -991,6 +1153,178 @@ export default {
 	methods: {
 		switchAdminView(view) {
 			this.activeAdminView = view === 'dashboard' ? 'dashboard' : 'workbench'
+			if (this.activeAdminView === 'dashboard' && this.adminUnlocked) {
+				this.loadHomepageFeaturedConfig()
+			}
+		},
+		applyHomepageFeaturedResponse(data, options = {}) {
+			const config = data && data.config ? data.config : {}
+			this.homepageFeatured.mode = config.mode === 'manual' ? 'manual' : 'dailyRotation'
+			this.homepageFeatured.featuredWordIds = Array.isArray(config.featuredWordIds)
+				? config.featuredWordIds.map((id) => String(id || '').trim()).filter((id) => id)
+				: []
+			this.homepageFeatured.manualWordId = String(config.manualWordId || '').trim()
+			if (Array.isArray(data && data.publishedWords)) {
+				this.homepageFeatured.publishedWords = data.publishedWords.filter((word) => word && word.status === 'published')
+			}
+			this.homepageFeatured.currentWord = data && data.currentWord && data.currentWord.status === 'published'
+				? data.currentWord
+				: null
+			this.homepageFeatured.source = String(data && data.source || 'empty')
+			if (!options.keepMessage) {
+				this.homepageFeatured.message = this.homepageFeatured.currentWord
+					? `当前首页展示：${this.homepageFeatured.currentWord.word}`
+					: '当前没有可公开展示的首页推荐词。'
+			}
+		},
+		async loadHomepageFeaturedConfig() {
+			if (!this.adminUnlocked || this.homepageFeatured.loading) return
+			this.homepageFeatured.loading = true
+			this.homepageFeatured.message = '正在加载服务器推荐配置...'
+			try {
+				const data = await getAdminHomepageFeatured({
+					adminApiToken: this.adminApiTokenDraft
+				})
+				this.applyHomepageFeaturedResponse(data)
+			} catch (error) {
+				if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+					this.handleAdminUnauthorized()
+					return
+				}
+				this.homepageFeatured.message = error && error.message
+					? error.message
+					: '首页推荐配置加载失败。'
+			} finally {
+				this.homepageFeatured.loading = false
+			}
+		},
+		setHomepageFeaturedMode(mode) {
+			this.homepageFeatured.mode = mode === 'manual' ? 'manual' : 'dailyRotation'
+			if (this.homepageFeatured.mode === 'dailyRotation') {
+				this.homepageFeatured.manualWordId = ''
+			}
+			this.refreshHomepageFeaturedPreview()
+		},
+		addHomepageFeaturedWord(id) {
+			const wordId = String(id || '').trim()
+			const word = this.homepageFeatured.publishedWords.find((item) => item.id === wordId && item.status === 'published')
+			if (!word) {
+				uni.showToast({ title: '只能添加已发布词条', icon: 'none' })
+				return
+			}
+			if (!this.homepageFeatured.featuredWordIds.includes(wordId)) {
+				this.homepageFeatured.featuredWordIds.push(wordId)
+			}
+			this.refreshHomepageFeaturedPreview()
+		},
+		removeHomepageFeaturedWord(id) {
+			const wordId = String(id || '').trim()
+			this.homepageFeatured.featuredWordIds = this.homepageFeatured.featuredWordIds.filter((item) => item !== wordId)
+			if (this.homepageFeatured.manualWordId === wordId) {
+				this.homepageFeatured.manualWordId = ''
+			}
+			this.refreshHomepageFeaturedPreview()
+		},
+		moveHomepageFeaturedWord(index, offset) {
+			const targetIndex = Number(index) + Number(offset)
+			const ids = [...this.homepageFeatured.featuredWordIds]
+			if (index < 0 || index >= ids.length || targetIndex < 0 || targetIndex >= ids.length) return
+			const moved = ids.splice(index, 1)[0]
+			ids.splice(targetIndex, 0, moved)
+			this.homepageFeatured.featuredWordIds = ids
+			this.refreshHomepageFeaturedPreview()
+		},
+		changeHomepageManualWord(event) {
+			const index = Number(event && event.detail ? event.detail.value : 0)
+			const selected = this.homepageManualOptions[index]
+			this.homepageFeatured.manualWordId = selected ? selected.id : ''
+			this.refreshHomepageFeaturedPreview()
+		},
+		refreshHomepageFeaturedPreview() {
+			const publishedById = this.homepageFeatured.publishedWords.reduce((result, word) => {
+				if (word && word.status === 'published') result[word.id] = word
+				return result
+			}, {})
+			if (this.homepageFeatured.mode === 'manual' && publishedById[this.homepageFeatured.manualWordId]) {
+				this.homepageFeatured.currentWord = publishedById[this.homepageFeatured.manualWordId]
+				this.homepageFeatured.source = 'manual'
+				return
+			}
+			const pool = this.homepageFeatured.featuredWordIds
+				.map((id) => publishedById[id])
+				.filter((word) => word)
+			if (!pool.length) {
+				this.homepageFeatured.currentWord = null
+				this.homepageFeatured.source = 'empty'
+				return
+			}
+			const date = new Date()
+			const dayNumber = Math.floor((date.getTime() + 8 * 60 * 60 * 1000) / 86400000)
+			this.homepageFeatured.currentWord = pool[dayNumber % pool.length]
+			this.homepageFeatured.source = 'dailyRotation'
+		},
+		async saveHomepageFeaturedConfig() {
+			if (!this.adminUnlocked || this.homepageFeatured.saving) return
+			const publishedIds = new Set(
+				this.homepageFeatured.publishedWords
+					.filter((word) => word && word.status === 'published')
+					.map((word) => word.id)
+			)
+			const invalidIds = this.homepageFeatured.featuredWordIds.filter((id) => !publishedIds.has(id))
+			if (invalidIds.length) {
+				uni.showModal({
+					title: '无法保存',
+					content: `推荐池包含未发布或已下架词条：${invalidIds.join(', ')}`,
+					showCancel: false
+				})
+				return
+			}
+			if (
+				this.homepageFeatured.mode === 'manual' &&
+				(!this.homepageFeatured.manualWordId || !publishedIds.has(this.homepageFeatured.manualWordId))
+			) {
+				uni.showModal({
+					title: '无法保存',
+					content: '手动指定模式必须选择一个已发布词条。',
+					showCancel: false
+				})
+				return
+			}
+
+			this.homepageFeatured.saving = true
+			this.homepageFeatured.message = '正在保存首页推荐配置...'
+			try {
+				const data = await saveAdminHomepageFeatured({
+					featuredWordIds: this.homepageFeatured.featuredWordIds,
+					mode: this.homepageFeatured.mode,
+					manualWordId: this.homepageFeatured.manualWordId
+				}, {
+					adminApiToken: this.adminApiTokenDraft
+				})
+				this.applyHomepageFeaturedResponse({
+					...data,
+					publishedWords: this.homepageFeatured.publishedWords
+				}, { keepMessage: true })
+				this.homepageFeatured.message = data.currentWord
+					? `保存成功，当前首页展示：${data.currentWord.word}`
+					: '保存成功，当前没有可公开展示的推荐词。'
+				uni.showToast({ title: '首页推荐已保存', icon: 'success' })
+			} catch (error) {
+				if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+					this.handleAdminUnauthorized()
+					return
+				}
+				this.homepageFeatured.message = error && error.message
+					? error.message
+					: '首页推荐配置保存失败。'
+				uni.showModal({
+					title: '保存失败',
+					content: this.homepageFeatured.message,
+					showCancel: false
+				})
+			} finally {
+				this.homepageFeatured.saving = false
+			}
 		},
 		loadDraft() {
 			const saved = uni.getStorageSync(STORAGE_KEY)
@@ -1234,6 +1568,9 @@ export default {
 				this.adminUnlocked = true
 				this.adminTokenStatus = ''
 				this.serverSync.message = '管理员已解锁'
+				if (this.activeAdminView === 'dashboard') {
+					await this.loadHomepageFeaturedConfig()
+				}
 			} catch (error) {
 				saveAdminApiToken('')
 				this.adminApiTokenDraft = ''
@@ -1257,6 +1594,9 @@ export default {
 				this.adminUnlocked = true
 				this.adminTokenStatus = ''
 				this.serverSync.message = '管理员已解锁'
+				if (this.activeAdminView === 'dashboard') {
+					await this.loadHomepageFeaturedConfig()
+				}
 				uni.showToast({ title: '已进入后台', icon: 'success' })
 			} catch (error) {
 				saveAdminApiToken('')
@@ -1277,6 +1617,9 @@ export default {
 			this.adminUnlocked = false
 			this.adminTokenStatus = ''
 			this.serverSync.message = '管理员已锁定'
+			this.homepageFeatured.currentWord = null
+			this.homepageFeatured.publishedWords = []
+			this.homepageFeatured.message = '管理员已锁定。'
 			uni.showToast({ title: '已锁定后台', icon: 'none' })
 		},
 		handleAdminUnauthorized() {
@@ -1377,23 +1720,33 @@ export default {
 				}
 			)
 		},
-		archiveCurrent() {
+		async archiveCurrent() {
+			if (this.serverSync.busy) return
 			if (this.selectedSource === 'pending' || this.form.status === 'archived') return
 			if (!this.validateStatusActionTarget()) return
-			this.confirmStatusChange(
+
+			const confirmed = await this.confirmServerAction(
 				'归档当前词条',
-				'归档后，该词条将从默认后台列表隐藏，但不会删除数据。',
-				'确认归档',
-				() => {
-					this.form.status = 'archived'
-					this.persistFormToList()
-					uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
-					this.activeBucket = 'archived'
-					this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
-					this.saveState = '当前词条已归档，默认列表将隐藏'
-					uni.showToast({ title: '已归档当前词条', icon: 'success' })
-				}
+				'归档后，该词条将从默认后台列表隐藏，并同步到服务器；小程序公开接口将不再返回该词条。',
+				'确认归档'
 			)
+			if (!confirmed) return
+
+			const previousForm = clone(this.form)
+			const previousWords = clone(this.words)
+			this.form.status = 'archived'
+			this.persistFormToList()
+			const word = this.stripRuntimeVideoFields(this.normalizeWord(this.form))
+			const result = await this.syncWordToServer(word, '当前词条已归档并同步到服务器')
+			if (!result) {
+				this.form = previousForm
+				this.words = previousWords
+				return
+			}
+
+			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
+			this.activeBucket = 'archived'
+			this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
 		},
 		publishAllDrafts() {
 			if (!this.validateCurrent()) return
@@ -4088,6 +4441,231 @@ button::after {
 	box-shadow: 0 10px 26px rgba(254, 133, 0, 0.08);
 }
 
+.homepage-featured-manager {
+	border: 1px solid rgba(14, 58, 92, 0.08);
+}
+
+.featured-manager-head,
+.featured-manager-actions,
+.featured-mode-row,
+.featured-candidate-row,
+.featured-pool-row,
+.featured-row-actions {
+	display: flex;
+	align-items: center;
+}
+
+.featured-manager-head {
+	justify-content: space-between;
+	gap: 18px;
+}
+
+.featured-manager-actions,
+.featured-mode-row,
+.featured-row-actions {
+	gap: 10px;
+}
+
+.featured-status-message {
+	display: block;
+	margin-top: 14px;
+	color: #66869b;
+	font-size: 13px;
+}
+
+.featured-mode-row {
+	margin-top: 18px;
+}
+
+.featured-mode-button {
+	margin: 0;
+	padding: 0 18px;
+	border: 1px solid #cfe7f4;
+	border-radius: 999px;
+	background: #f5fbff;
+	color: #315c82;
+	font-size: 14px;
+	line-height: 38px;
+}
+
+.featured-mode-button.active {
+	border-color: #fe8500;
+	background: #fff6df;
+	color: #a65300;
+	font-weight: 800;
+}
+
+.featured-manager-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.2fr) minmax(260px, 0.8fr);
+	gap: 16px;
+	margin-top: 18px;
+}
+
+.featured-column {
+	min-width: 0;
+	padding: 18px;
+	border: 1px solid #e0eef6;
+	border-radius: 20px;
+	background: #f9fcfe;
+}
+
+.featured-column-title,
+.featured-field-label,
+.featured-word-title,
+.featured-word-meta,
+.featured-current-source,
+.featured-current-word,
+.featured-current-id,
+.featured-current-meaning,
+.featured-empty {
+	display: block;
+}
+
+.featured-column-title {
+	color: #12344d;
+	font-size: 15px;
+	font-weight: 900;
+}
+
+.featured-search-input {
+	height: 40px;
+	margin-top: 12px;
+	padding: 0 14px;
+	border: 1px solid #cfe3ef;
+	border-radius: 14px;
+	background: #fff;
+	color: #12344d;
+}
+
+.featured-candidate-list,
+.featured-pool-list {
+	max-height: 330px;
+	margin-top: 12px;
+	overflow-y: auto;
+}
+
+.featured-candidate-row,
+.featured-pool-row {
+	gap: 12px;
+	padding: 12px;
+	border-radius: 14px;
+	background: #fff;
+}
+
+.featured-candidate-row + .featured-candidate-row,
+.featured-pool-row + .featured-pool-row {
+	margin-top: 8px;
+}
+
+.featured-word-copy {
+	flex: 1;
+	min-width: 0;
+}
+
+.featured-word-title {
+	color: #0e3a5c;
+	font-weight: 900;
+}
+
+.featured-word-meta {
+	margin-top: 4px;
+	overflow: hidden;
+	color: #7892a3;
+	font-size: 12px;
+	line-height: 1.5;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.featured-mini-button,
+.featured-icon-button {
+	flex-shrink: 0;
+	margin: 0;
+	padding: 0 10px;
+	border-radius: 10px;
+	background: #e9f7ff;
+	color: #0e3a5c;
+	font-size: 12px;
+	line-height: 30px;
+}
+
+.featured-icon-button.danger {
+	background: #fff1ec;
+	color: #c64c24;
+}
+
+.featured-order {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	width: 28px;
+	height: 28px;
+	border-radius: 999px;
+	background: #0e3a5c;
+	color: #fff;
+	font-size: 12px;
+	font-weight: 900;
+}
+
+.featured-preview-column {
+	background: linear-gradient(160deg, #eef9ff, #fff8e8);
+}
+
+.featured-manual-picker {
+	margin-top: 14px;
+}
+
+.featured-field-label {
+	margin-bottom: 8px;
+	color: #66869b;
+	font-size: 13px;
+}
+
+.featured-current-card,
+.featured-current-empty {
+	margin-top: 16px;
+	padding: 20px;
+	border-radius: 20px;
+}
+
+.featured-current-card {
+	background: linear-gradient(145deg, #0e3a5c, #1a5a8a);
+	color: #fff;
+}
+
+.featured-current-source {
+	color: #ffeba2;
+	font-size: 12px;
+	font-weight: 800;
+}
+
+.featured-current-word {
+	margin-top: 12px;
+	font-size: 34px;
+	font-weight: 900;
+}
+
+.featured-current-id,
+.featured-current-meaning {
+	margin-top: 6px;
+	color: rgba(255, 255, 255, 0.72);
+	font-size: 13px;
+	line-height: 1.6;
+}
+
+.featured-current-empty,
+.featured-empty {
+	color: #7892a3;
+	font-size: 13px;
+	line-height: 1.7;
+}
+
+.featured-current-empty {
+	background: rgba(255, 255, 255, 0.72);
+}
+
 .dashboard-summary-grid {
 	display: grid;
 	grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -5606,7 +6184,8 @@ button.file-button::after {
 	}
 
 	.dashboard-grid,
-	.dashboard-summary-grid {
+	.dashboard-summary-grid,
+	.featured-manager-grid {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 
@@ -5646,7 +6225,8 @@ button.file-button::after {
 	.clip-draft-actions,
 	.clip-list-head,
 	.viewer-preview-head,
-	.dashboard-hero {
+	.dashboard-hero,
+	.featured-manager-head {
 		flex-direction: column;
 		align-items: flex-start;
 	}
@@ -5659,9 +6239,16 @@ button.file-button::after {
 	.admin-view-nav,
 	.dashboard-grid,
 	.dashboard-summary-grid,
+	.featured-manager-grid,
 	.api-list {
 		grid-template-columns: 1fr;
 		width: 100%;
+	}
+
+	.featured-manager-actions,
+	.featured-mode-row,
+	.featured-row-actions {
+		flex-wrap: wrap;
 	}
 
 	.dashboard-table-row,

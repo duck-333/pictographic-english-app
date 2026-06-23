@@ -1,13 +1,16 @@
 import {
   HOT_WORDS as LOCAL_HOT_WORDS,
   NAV_ITEMS as LOCAL_NAV_ITEMS,
-  TODAY_WORD_ID as LOCAL_TODAY_WORD_ID,
   WORDS as LOCAL_WORDS
 } from './mock-data.js'
 import { DEV_PREVIEW_WORDS } from './dev-preview-data.js'
 import { getWordApiBaseUrl } from './api-config.js'
 import { createWordDraft, normalizeWordQuery, normalizeWordRecord, validateWordRecord } from './content-schema.js'
-import { fetchServerWordById, fetchServerWords } from './word-api-client.js'
+import {
+  fetchServerHomepageFeaturedWord,
+  fetchServerWordById,
+  fetchServerWords
+} from './word-api-client.js'
 
 function mergePreviewWords(localWords, previewWords) {
   const result = []
@@ -123,10 +126,11 @@ let REMOTE_WORD_RECORDS = []
 export const CONTENT_REPOSITORY_MODE = ACTIVE_DEV_PREVIEW_WORDS.length
   ? 'local-preview-bridge'
   : getWordApiBaseUrl()
-    ? 'development-api-with-local-fallback'
+    ? isProductionRuntime()
+      ? 'production-api-with-explicit-local-fallback'
+      : 'development-api-with-explicit-local-fallback'
     : 'offline-published-content'
 export const HOT_WORDS = LOCAL_HOT_WORDS
-export const TODAY_WORD_ID = LOCAL_TODAY_WORD_ID
 export const NAV_ITEMS = LOCAL_NAV_ITEMS
 
 const WORD_RECORDS = SOURCE_WORDS.map((item) => normalizeWordRecord(item))
@@ -144,13 +148,31 @@ function getAllWordRecords() {
   return mergePreviewWords(WORD_RECORDS, REMOTE_WORD_RECORDS).map((item) => normalizeWordRecord(item))
 }
 
+function normalizePublishedRemoteWords(words) {
+  return (Array.isArray(words) ? words : [])
+    .filter((item) => item && item.status === 'published')
+    .map((item) => normalizeWordRecord(item))
+    .filter((item) => item.status === 'published')
+}
+
 function cacheRemoteWords(words) {
-  if (!Array.isArray(words) || !words.length) return []
-  const publishedWords = words.filter((item) => item && item.status === 'published')
+  const publishedWords = normalizePublishedRemoteWords(words)
+  if (!publishedWords.length) return []
   REMOTE_WORD_RECORDS = mergePreviewWords(REMOTE_WORD_RECORDS, publishedWords)
     .map((item) => normalizeWordRecord(item))
     .filter((item) => item.status === 'published')
-  return REMOTE_WORD_RECORDS.map((item) => cloneWord(item))
+  return publishedWords.map((item) => cloneWord(item))
+}
+
+function createRemoteFailure(error, fallback) {
+  const repositoryError = new Error(error && error.message ? error.message : 'Word API request failed.')
+  repositoryError.code = error && error.code ? error.code : 'WORD_API_ERROR'
+  repositoryError.statusCode = error && error.statusCode ? error.statusCode : 0
+  repositoryError.remoteFailed = true
+  repositoryError.fallback = Array.isArray(fallback)
+    ? fallback.map((item) => cloneWord(item))
+    : cloneWord(fallback)
+  return repositoryError
 }
 
 function getLookupCandidates(value) {
@@ -218,12 +240,10 @@ export function getContentRepositoryInfo() {
     mode: CONTENT_REPOSITORY_MODE,
     remoteEnabled: Boolean(apiBaseUrl),
     apiBaseUrl,
-    note: isProductionRuntime()
-      ? 'Production runtime uses the bundled published word collection without remote requests.'
-      : ACTIVE_DEV_PREVIEW_WORDS.length
+    note: ACTIVE_DEV_PREVIEW_WORDS.length
       ? 'Development runtime reads locally synchronized preview records before bundled content.'
       : apiBaseUrl
-      ? 'Development runtime can read words from the configured API before falling back to bundled content.'
+      ? 'Runtime reads published words from the remote API and uses bundled published content only after an explicit request failure.'
       : 'Runtime reads the bundled published word collection.'
   }
 }
@@ -276,11 +296,34 @@ export function fetchWords(query) {
     return Promise.resolve(searchWords(query))
   }
   return fetchServerWords(query)
-    .then((words) => {
-      const remoteWords = cacheRemoteWords(words)
-      return remoteWords.length ? remoteWords : searchWords(query)
+    .then((words) => cacheRemoteWords(words))
+    .catch((error) => {
+      throw createRemoteFailure(error, searchWords(query))
     })
-    .catch(() => searchWords(query))
+}
+
+export function fetchHomepageFeaturedWord() {
+  if (!getWordApiBaseUrl()) {
+    return Promise.resolve({
+      word: null,
+      source: 'empty'
+    })
+  }
+  return fetchServerHomepageFeaturedWord()
+    .then((result) => {
+      const word = result && result.word
+      if (!word || word.status !== 'published') {
+        return {
+          word: null,
+          source: 'empty'
+        }
+      }
+      cacheRemoteWords([word])
+      return {
+        word: cloneWord(normalizeWordRecord(word)),
+        source: String(result.source || 'dailyRotation')
+      }
+    })
 }
 
 export function fetchWordById(id) {
@@ -289,11 +332,13 @@ export function fetchWordById(id) {
   }
   return fetchServerWordById(id)
     .then((word) => {
-      if (!word || word.status !== 'published') return getWordById(id)
+      if (!word || word.status !== 'published') return null
       cacheRemoteWords([word])
-      return getWordById(word.id) || getWordById(id)
+      return cloneWord(normalizeWordRecord(word))
     })
-    .catch(() => getWordById(id))
+    .catch((error) => {
+      throw createRemoteFailure(error, getWordById(id) || getWordByWord(id))
+    })
 }
 
 export function fetchWordByWord(word) {
@@ -304,7 +349,9 @@ export function fetchWordByWord(word) {
     .then((words) => {
       const remoteWords = cacheRemoteWords(words)
       const keyword = normalizeWordQuery(word)
-      return remoteWords.find((item) => item.word.toLowerCase() === keyword) || getWordByWord(word)
+      return remoteWords.find((item) => item.word.toLowerCase() === keyword) || null
     })
-    .catch(() => getWordByWord(word))
+    .catch((error) => {
+      throw createRemoteFailure(error, getWordByWord(word))
+    })
 }
