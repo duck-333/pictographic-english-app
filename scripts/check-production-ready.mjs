@@ -1,7 +1,10 @@
 import fs from 'node:fs'
 
 import { DEFAULT_DEV_ADMIN_API_TOKEN, getAdminApiToken } from '../server/auth.mjs'
-import { getWordApiBaseUrl } from '../miniapp-uni/word-app1/common/api-config.js'
+import {
+  PRODUCTION_WORD_API_BASE_URL,
+  getWordApiBaseUrl
+} from '../miniapp-uni/word-app1/common/api-config.js'
 import { DEV_PREVIEW_WORDS } from '../miniapp-uni/word-app1/common/dev-preview-data.js'
 import { WORDS } from '../miniapp-uni/word-app1/common/mock-data.js'
 import { normalizeWordRecord } from '../miniapp-uni/word-app1/common/content-schema.js'
@@ -14,6 +17,7 @@ import {
 
 const APP_WORD_DATA_PATH = 'miniapp-uni/word-app1/common/mock-data.js'
 const DEV_PREVIEW_DATA_PATH = 'miniapp-uni/word-app1/common/dev-preview-data.js'
+const HOME_PAGE_PATH = 'miniapp-uni/word-app1/pages/index/index.vue'
 const WORD_DETAIL_PATH = 'miniapp-uni/word-app1/pages/word-detail/index.vue'
 const MINIAPP_PAGES_PATH = 'miniapp-uni/word-app1/pages'
 const MINIAPP_PAGES_JSON_PATH = 'miniapp-uni/word-app1/pages.json'
@@ -205,23 +209,26 @@ function checkApiBaseGuards(errors) {
   if (developmentLocalApi !== 'http://127.0.0.1:3001') {
     addError(errors, 'development API config must allow local/server HTTP API base URLs for testing.')
   }
-  if (productionDefaultApi) {
-    addError(errors, 'production API config must not fall back to the local development API base URL.')
+  if (productionDefaultApi !== PRODUCTION_WORD_API_BASE_URL) {
+    addError(errors, 'production API config must use the official HTTPS word API base URL.')
   }
-  if (productionLocalApi) {
-    addError(errors, 'production API config must block local HTTP API base URLs.')
+  if (productionLocalApi !== PRODUCTION_WORD_API_BASE_URL) {
+    addError(errors, 'production API config must ignore local HTTP overrides.')
   }
-  if (missingEnvLocalApi) {
-    addError(errors, 'missing NODE_ENV must fail closed and disable remote word API requests.')
+  if (missingEnvLocalApi !== PRODUCTION_WORD_API_BASE_URL) {
+    addError(errors, 'missing NODE_ENV must fail closed to the official production API base URL.')
   }
-  if (productionHttpsApi) {
-    addError(errors, 'first-release production config must keep the remote word API disabled even when an HTTPS URL is configured.')
+  if (productionHttpsApi !== PRODUCTION_WORD_API_BASE_URL) {
+    addError(errors, 'production API config must ignore non-official HTTPS overrides.')
   }
-  if (productionMiniappDefaultApi || productionMiniappLocalApi) {
-    addError(errors, 'production mini program runtime must not enable local HTTP API base URLs.')
+  if (productionMiniappDefaultApi !== PRODUCTION_WORD_API_BASE_URL) {
+    addError(errors, 'production mini program runtime must use the official HTTPS API base URL.')
   }
-  if (productionMiniappHttpsApi) {
-    addError(errors, 'first-release production mini program runtime must keep the remote word API disabled.')
+  if (productionMiniappLocalApi !== PRODUCTION_WORD_API_BASE_URL) {
+    addError(errors, 'production mini program runtime must ignore local HTTP API base URLs.')
+  }
+  if (productionMiniappHttpsApi !== PRODUCTION_WORD_API_BASE_URL) {
+    addError(errors, 'production mini program runtime must ignore non-official HTTPS API base URLs.')
   }
 }
 
@@ -253,6 +260,9 @@ function checkAdminAuthGuards(errors) {
 
 function checkWordDetailUsesMediaGuard(errors) {
   const sourceText = fs.readFileSync(new URL(`../${WORD_DETAIL_PATH}`, import.meta.url), 'utf8')
+  if (!/const\s+ENABLE_VIDEO_MODULE\s*=\s*false/.test(sourceText)) {
+    addError(errors, `${WORD_DETAIL_PATH}: second-release text-only build must keep the video module disabled.`)
+  }
   if (!/hasPlayableVideo\(\)\s*\{[\s\S]*?return\s+isPlayableMediaUrl\(this\.activeVideoUrl\)\s*&&\s*this\.activeClipHasValidRange[\s\S]*?\}/.test(sourceText)) {
     addError(errors, `${WORD_DETAIL_PATH}: hasPlayableVideo must use the shared production media guard for activeVideoUrl.`)
   }
@@ -261,6 +271,35 @@ function checkWordDetailUsesMediaGuard(errors) {
   }
   if (/isLocalBridgeVideo|127\\\.0\\\.0\\\.1\|localhost/.test(sourceText)) {
     addError(errors, `${WORD_DETAIL_PATH}: word detail page must not keep local preview playback regexes outside the shared guard.`)
+  }
+}
+
+function checkHomepageFeaturedGuards(errors) {
+  const homeSource = fs.readFileSync(new URL(`../${HOME_PAGE_PATH}`, import.meta.url), 'utf8')
+  const repositorySource = fs.readFileSync(
+    new URL('../miniapp-uni/word-app1/common/word-repository.js', import.meta.url),
+    'utf8'
+  )
+  const clientSource = fs.readFileSync(
+    new URL('../miniapp-uni/word-app1/common/word-api-client.js', import.meta.url),
+    'utf8'
+  )
+  const miniappPublicSources = [homeSource, repositorySource, clientSource].join('\n')
+
+  if (!/fetchHomepageFeaturedWord/.test(homeSource)) {
+    addError(errors, `${HOME_PAGE_PATH}: homepage must load the server-managed featured word.`)
+  }
+  if (/TODAY_WORD_ID|initialTodayWord|word-study/.test(homeSource)) {
+    addError(errors, `${HOME_PAGE_PATH}: homepage must not keep the old static study recommendation.`)
+  }
+  if (!/\/api\/homepage\/featured-word/.test(clientSource)) {
+    addError(errors, 'word-api-client.js: homepage featured request must use the public featured endpoint.')
+  }
+  if (!/fetchHomepageFeaturedWord\(\)[\s\S]*?word\.status\s*!==\s*['"]published['"]/.test(repositorySource)) {
+    addError(errors, 'word-repository.js: homepage featured words must be filtered to published status.')
+  }
+  if (/\/api\/admin\//.test(miniappPublicSources)) {
+    addError(errors, 'mini program public code must not call admin APIs.')
   }
 }
 
@@ -274,6 +313,7 @@ function main() {
   checkApiBaseGuards(errors)
   checkAdminAuthGuards(errors)
   checkWordDetailUsesMediaGuard(errors)
+  checkHomepageFeaturedGuards(errors)
 
   if (errors.length > 0) {
     console.error('Production readiness check failed')
@@ -287,8 +327,9 @@ function main() {
   console.log('- production runtime ignores local preview words')
   console.log('- published words do not contain blocked preview URLs')
   console.log('- production media guard blocks local/mock/blob/data/example URLs')
-  console.log('- production runtime keeps the remote word API disabled')
+  console.log(`- production runtime uses ${PRODUCTION_WORD_API_BASE_URL}`)
   console.log('- production admin API auth rejects empty/default tokens')
+  console.log('- homepage featured word uses the public API with published filtering')
 }
 
 main()

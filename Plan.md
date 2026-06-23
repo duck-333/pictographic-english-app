@@ -152,6 +152,47 @@
 状态：
 - 代码和自动检查已完成，等待 HBuilderX/微信开发者工具真机验收。
 
+## 2026-06-22：第二版前后台文字词条动态跑通
+
+目标：
+- 后台通过受 Admin Token 保护的 `POST /api/admin/words` 发布或撤下词条。
+- 小程序生产环境通过 `GET /api/words?q=...` 搜索，并通过 `GET /api/words/:id` 获取详情。
+- 公开 API 与小程序仓储层均只允许 `published`；远程正常返回空结果时不使用本地旧内容。
+- 网络请求 7 秒超时，失败后恢复 loading，并明确提示远程失败或本地备用状态。
+- 第二版继续关闭视频模块，不新增登录、会员、收费、兑换码或未完成页面入口。
+
+验收：
+- `npm.cmd run audit`
+- `npm.cmd run validate:content`
+- `npm.cmd run check:miniapp`
+- `npm.cmd run check:production`
+- `npm.cmd run check:server`
+- `npm.cmd run check`
+- HBuilderX 编译并在微信开发者工具、真机体验版验证搜索、详情、未收录、下架和断网状态。
+
+状态：
+- 代码和自动检查已完成；等待 HBuilderX、微信开发者工具和真机体验版手动验收。
+
+## 2026-06-23：首页每日象形词推荐管理
+
+目标：
+- 后台维护已发布词条推荐池、自动每日轮播模式和手动指定模式。
+- 后端公开接口只返回当天有效的 published 推荐词；推荐池为空时返回空状态。
+- 小程序首页通过公开 API 加载推荐，不再使用静态 `study / word-study`。
+- 推荐接口失败或返回空时隐藏模块，搜索功能继续可用。
+
+验收：
+- 单词池单项、双项跨日轮播、手动指定、推荐词下架回退、空池。
+- Admin API 鉴权和未发布词条配置拒绝。
+- `npm.cmd run validate:content`
+- `npm.cmd run check:miniapp`
+- `npm.cmd run check:production`
+- `npm.cmd run check:server`
+- `npm.cmd run check`
+
+状态：
+- 代码和自动检查完成后，等待 server/admin 部署以及 HBuilderX 真机体验版验收。
+
 ## 每次长任务的标准流程
 
 1. 主代理读取 `AGENTS.md`、`Prompt.md`、`Plan.md`、`Documentation.md`。

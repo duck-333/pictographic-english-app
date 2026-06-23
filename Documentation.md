@@ -1,5 +1,39 @@
 # Documentation
 
+### 2026-06-23: server-managed homepage featured word
+
+Decision:
+- Store `homepageFeatured` beside `words` in the existing server JSON payload. Word saves preserve the homepage configuration.
+- Configuration fields are `featuredWordIds`, `mode`, `manualWordId`, `updatedAt`, and `updatedBy`.
+- Add public `GET /api/homepage/featured-word` and Admin Token-protected `GET/POST /api/admin/homepage-featured`.
+- Only published IDs can be saved. Public resolution filters status again so later unpublish/archive operations cannot leak content.
+- Daily rotation uses the Asia/Shanghai calendar-day number modulo the ordered published recommendation pool; no cron job or daily write is needed.
+- Manual mode uses the published `manualWordId`; if it becomes unavailable, resolution falls back to the published pool rotation.
+- An empty valid pool returns `word: null, source: "empty"` rather than selecting arbitrary content.
+- The admin dashboard provides published-word search, add/remove, ordering, mode selection, manual selection, saving, and current homepage preview.
+- The mini program homepage no longer initializes from `TODAY_WORD_ID` or `word-study`; it hides the recommendation section when the public API returns empty or fails.
+
+Safety:
+- The mini program calls only the public homepage endpoint and filters `status === "published"` again.
+- Video remains disabled. No login, membership, payment, redemption, or sharing-reward functionality is added.
+
+### 2026-06-22: production published text API enabled
+
+Decision:
+- The production mini program word API base is fixed to `https://admin.baxiaota.com`; development may still use an explicitly configured local HTTP/HTTPS API.
+- Reuse `GET /api/words?q=...` for search and `GET /api/words/:id` for detail. Public list responses are capped at 20 records.
+- Public server reads explicitly request `publishedOnly: true`. Store normalization treats a missing status as `draft`, and strict equality excludes draft, unpublished, archived, review, pending, unknown, and missing statuses.
+- The mini program filters remote payloads again with strict `status === "published"` checks.
+- A normal remote empty result is authoritative and does not fall back to bundled data. Bundled published content is used only after an explicit request failure and is visibly labeled as local backup content.
+- Mini program word requests time out after 7 seconds. Search and detail pages restore loading state and show distinct network-failure, empty, unpublished, and removed states.
+- The admin publish/status chain remains: Admin Token check -> `POST /api/admin/words` -> server word store -> public published APIs. Publish, unpublish, and archive actions now synchronize their status to the server. No Admin Token is included in mini program code.
+- The second-release text-only build keeps `ENABLE_VIDEO_MODULE = false`; no login, membership, payment, redemption, or sharing-reward work is included.
+
+Verification:
+- Server integration tests cover public exclusion of draft, unpublished, archived, review, pending, and missing status records.
+- Production checks require the official HTTPS API base and require the detail-page video feature flag to remain disabled.
+- WeChat must configure `https://admin.baxiaota.com` as a request legal domain before real-device testing or release.
+
 ### 2026-06-08: admin unlock page and publish action hierarchy
 
 Decision:

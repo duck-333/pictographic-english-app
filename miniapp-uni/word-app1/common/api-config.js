@@ -1,9 +1,11 @@
+export const PRODUCTION_WORD_API_BASE_URL = 'https://admin.baxiaota.com'
+
 function getNodeEnv(options = {}) {
   if (Object.prototype.hasOwnProperty.call(options, 'nodeEnv')) {
-    return String(options.nodeEnv || '').toLowerCase()
+    return String(options.nodeEnv || '').trim().toLowerCase()
   }
   if (typeof process === 'undefined' || !process || !process.env) return ''
-  return String(process.env.NODE_ENV || '').toLowerCase()
+  return String(process.env.NODE_ENV || '').trim().toLowerCase()
 }
 
 function getEnvApiBaseUrl() {
@@ -22,22 +24,18 @@ function normalizeApiBaseUrl(value) {
 
 export function isDevelopmentApiBaseUrl(value) {
   const normalized = normalizeApiBaseUrl(value)
-  return /^https?:\/\/\S+$/i.test(normalized)
+  return /^https?:\/\/[^\s]+$/i.test(normalized)
 }
 
 export function getWordApiBaseUrl(options = {}) {
   const nodeEnv = getNodeEnv(options)
-  const isDevelopment = nodeEnv === 'development'
+  if (nodeEnv !== 'development') {
+    return PRODUCTION_WORD_API_BASE_URL
+  }
+
   const configured = Object.prototype.hasOwnProperty.call(options, 'apiBaseUrl')
     ? options.apiBaseUrl
     : getEnvApiBaseUrl()
-
-  // 第一版生产包固定使用本地已发布词库，不发起远程词条请求。
-  if (!isDevelopment) {
-    return ''
-  }
-
-  // 开发环境仅在显式配置地址时启用 API，未配置时同样使用本地词库。
   const candidate = normalizeApiBaseUrl(configured)
   return isDevelopmentApiBaseUrl(candidate) ? candidate : ''
 }

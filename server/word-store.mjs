@@ -5,6 +5,15 @@ import { fileURLToPath } from 'node:url'
 import { normalizeWordQuery, normalizeWordRecord, validateWordRecord } from '../miniapp-uni/word-app1/common/content-schema.js'
 
 const DEFAULT_DATA_PATH = new URL('./local-data/words.json', import.meta.url)
+const HOMEPAGE_FEATURED_MODES = ['dailyRotation', 'manual']
+const SHANGHAI_UTC_OFFSET_MS = 8 * 60 * 60 * 1000
+const DEFAULT_HOMEPAGE_FEATURED_CONFIG = Object.freeze({
+  featuredWordIds: [],
+  mode: 'dailyRotation',
+  manualWordId: '',
+  updatedAt: '',
+  updatedBy: ''
+})
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -23,6 +32,42 @@ function normalizeStorePayload(payload) {
   return { words: [] }
 }
 
+function normalizeId(value) {
+  return String(value || '').trim()
+}
+
+function normalizeIdList(values) {
+  const result = []
+  const used = new Set()
+  ;(Array.isArray(values) ? values : []).forEach((value) => {
+    const id = normalizeId(value)
+    if (!id || used.has(id)) return
+    used.add(id)
+    result.push(id)
+  })
+  return result
+}
+
+function normalizeHomepageFeaturedConfig(source) {
+  const config = source && typeof source === 'object' ? source : {}
+  const mode = HOMEPAGE_FEATURED_MODES.includes(config.mode)
+    ? config.mode
+    : DEFAULT_HOMEPAGE_FEATURED_CONFIG.mode
+  return {
+    featuredWordIds: normalizeIdList(config.featuredWordIds),
+    mode,
+    manualWordId: mode === 'manual' ? normalizeId(config.manualWordId) : '',
+    updatedAt: String(config.updatedAt || ''),
+    updatedBy: String(config.updatedBy || '')
+  }
+}
+
+function getShanghaiDayNumber(value) {
+  const date = value instanceof Date ? value : new Date(value || Date.now())
+  if (Number.isNaN(date.getTime())) return 0
+  return Math.floor((date.getTime() + SHANGHAI_UTC_OFFSET_MS) / 86400000)
+}
+
 function matchesQuery(word, query) {
   const keyword = normalizeWordQuery(query)
   if (!keyword) return true
@@ -33,6 +78,7 @@ function matchesQuery(word, query) {
 export function createWordStore(options = {}) {
   const dataPath = options.dataPath ? new URL(options.dataPath, import.meta.url) : DEFAULT_DATA_PATH
   const dataFilePath = fileURLToPath(dataPath)
+  const now = options.now || (() => new Date())
 
   async function readPayload() {
     try {
@@ -56,16 +102,22 @@ export function createWordStore(options = {}) {
 
   async function replaceWords(words) {
     const normalizedWords = (Array.isArray(words) ? words : []).map((word) => normalizeWordRecord(word))
-    await writePayload({ words: normalizedWords })
+    const payload = await readPayload()
+    await writePayload({
+      ...payload,
+      words: normalizedWords
+    })
     return normalizedWords.map((word) => clone(word))
   }
 
   async function listWords(options = {}) {
     const payload = await readPayload()
     const allNormalized = payload.words.map((word) => normalizeWordRecord(word))
+    const limit = Number(options.limit || 0)
     const filtered = allNormalized
       .filter((word) => (options.publishedOnly === false ? true : word.status === 'published'))
       .filter((word) => matchesQuery(word, options.query))
+      .slice(0, limit > 0 ? limit : undefined)
       .map((word) => clone(word))
     return filtered
   }
@@ -103,11 +155,106 @@ export function createWordStore(options = {}) {
       words.unshift(validation.value)
     }
 
-    await writePayload({ words })
+    await writePayload({
+      ...payload,
+      words
+    })
     return {
       ok: true,
       errors: [],
       word: clone(validation.value)
+    }
+  }
+
+  async function getHomepageFeaturedConfig() {
+    const payload = await readPayload()
+    return clone(normalizeHomepageFeaturedConfig(payload.homepageFeatured))
+  }
+
+  async function saveHomepageFeaturedConfig(sourceConfig, options = {}) {
+    const source = sourceConfig && typeof sourceConfig === 'object' ? sourceConfig : {}
+    const errors = []
+    if (source.mode && !HOMEPAGE_FEATURED_MODES.includes(source.mode)) {
+      errors.push(`mode must be one of: ${HOMEPAGE_FEATURED_MODES.join(', ')}`)
+    }
+
+    const config = normalizeHomepageFeaturedConfig(source)
+    const payload = await readPayload()
+    const words = payload.words.map((word) => normalizeWordRecord(word))
+    const publishedIds = new Set(
+      words
+        .filter((word) => word.status === 'published')
+        .map((word) => word.id)
+    )
+    const invalidFeaturedWordIds = config.featuredWordIds.filter((id) => !publishedIds.has(id))
+    if (invalidFeaturedWordIds.length) {
+      errors.push(`featuredWordIds must contain published words only: ${invalidFeaturedWordIds.join(', ')}`)
+    }
+    if (config.mode === 'manual' && !config.manualWordId) {
+      errors.push('manualWordId is required when mode is manual')
+    }
+    if (config.mode === 'manual' && config.manualWordId && !publishedIds.has(config.manualWordId)) {
+      errors.push(`manualWordId must reference a published word: ${config.manualWordId}`)
+    }
+    if (errors.length) {
+      return {
+        ok: false,
+        errors,
+        config
+      }
+    }
+
+    const savedConfig = {
+      ...config,
+      updatedAt: now().toISOString(),
+      updatedBy: String(options.updatedBy || config.updatedBy || 'admin-api')
+    }
+    await writePayload({
+      ...payload,
+      homepageFeatured: savedConfig
+    })
+    return {
+      ok: true,
+      errors: [],
+      config: clone(savedConfig)
+    }
+  }
+
+  async function resolveHomepageFeaturedWord(options = {}) {
+    const payload = await readPayload()
+    const config = normalizeHomepageFeaturedConfig(payload.homepageFeatured)
+    const publishedWords = payload.words
+      .map((word) => normalizeWordRecord(word))
+      .filter((word) => word.status === 'published')
+    const publishedById = new Map(publishedWords.map((word) => [word.id, word]))
+    const featuredWords = config.featuredWordIds
+      .map((id) => publishedById.get(id))
+      .filter((word) => word)
+
+    if (config.mode === 'manual') {
+      const manualWord = publishedById.get(config.manualWordId)
+      if (manualWord) {
+        return {
+          word: clone(manualWord),
+          source: 'manual',
+          config: clone(config)
+        }
+      }
+    }
+
+    if (featuredWords.length) {
+      const index = getShanghaiDayNumber(options.date || now()) % featuredWords.length
+      return {
+        word: clone(featuredWords[index]),
+        source: 'dailyRotation',
+        config: clone(config)
+      }
+    }
+
+    return {
+      word: null,
+      source: 'empty',
+      config: clone(config)
     }
   }
 
@@ -117,6 +264,9 @@ export function createWordStore(options = {}) {
     listWords,
     getWordCount,
     findWordById,
-    saveWord
+    saveWord,
+    getHomepageFeaturedConfig,
+    saveHomepageFeaturedConfig,
+    resolveHomepageFeaturedWord
   }
 }

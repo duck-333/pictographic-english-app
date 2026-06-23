@@ -14,7 +14,16 @@
       </view>
     </view>
 
-    <view v-if="word">
+    <view v-if="loading" class="empty-state">
+      <view class="empty-mark">象</view>
+      <text class="empty-title">正在加载词条</text>
+      <text class="empty-description">正在从线上词库获取最新内容。</text>
+    </view>
+
+    <view v-else-if="word">
+      <view v-if="loadErrorMessage" class="remote-warning">
+        <text>{{ loadErrorMessage }}</text>
+      </view>
       <view class="hero">
         <view class="type-badge">{{ word.cardType || '单词' }} · {{ word.level }}</view>
         <view class="word-line">
@@ -94,8 +103,6 @@
             </view>
             <text v-if="part.showPlus" class="plus">+</text>
           </block>
-          <text class="equals">=</text>
-          <text class="equals-word">{{ word.word }}</text>
         </view>
         <view v-if="expandedPart" class="part-detail">
           <text class="part-detail-title">{{ expandedPart }}</text>
@@ -112,20 +119,20 @@
       <view id="section-imagery" class="section card">
         <view class="title-row">
           <text class="section-title">完整意象</text>
-          <text class="mini-action" hover-class="text-pressed" @tap="toggleDesc">{{ showFullDesc ? '收起' : '展开' }}</text>
+          <text v-if="fullImageryText" class="mini-action" hover-class="text-pressed" @tap="toggleDesc">{{ showFullDesc ? '收起' : '展开' }}</text>
         </view>
-        <text class="desc" :class="{ folded: !showFullDesc }">{{ word.pictograph }}</text>
+        <text v-if="fullImageryText" class="desc" :class="{ folded: !showFullDesc }">{{ fullImageryText }}</text>
+        <text v-else class="desc imagery-empty">暂无完整意象说明。</text>
       </view>
 
-      <view id="section-examples" class="section card">
+      <view v-if="displayExamples.length" id="section-examples" class="section card">
         <text class="section-title">例句</text>
-        <view v-if="word.examples && word.examples.length">
-          <view v-for="item in word.examples" :key="item.english" class="example">
-            <text class="example-en">{{ item.english }}</text>
-            <text class="example-cn">{{ item.chinese }}</text>
+        <view>
+          <view v-for="item in displayExamples" :key="item.key" class="example">
+            <text v-if="item.english" class="example-en">{{ item.english }}</text>
+            <text v-if="item.chinese" class="example-cn">{{ item.chinese }}</text>
           </view>
         </view>
-        <text v-else class="desc">暂无例句。</text>
       </view>
 
       <view v-if="relatedWords.length" id="section-related" class="section card">
@@ -265,12 +272,52 @@ import {
   fetchWordById,
   fetchWordByWord,
   getRelatedWords,
-  getWordAccessInfo,
   getWordById,
   getWordByWord,
   isPlayableMediaUrl
 } from '../../common/word-repository.js'
 import { addRecentWord, getPendingWordId, isFavorite, savePendingWordId, toggleFavorite } from '../../common/user-store.js'
+
+const ENABLE_VIDEO_MODULE = false
+
+function normalizeDisplayText(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function firstDisplayText(values) {
+  for (let index = 0; index < values.length; index += 1) {
+    const text = normalizeDisplayText(values[index])
+    if (text) return text
+  }
+  return ''
+}
+
+function normalizeDisplayExample(example, index) {
+  if (typeof example === 'string') {
+    const english = normalizeDisplayText(example)
+    return english ? { key: `example-${index}-${english}`, english, chinese: '' } : null
+  }
+  if (!example || typeof example !== 'object') return null
+
+  const english = firstDisplayText([
+    example.english,
+    example.text,
+    example.en,
+    example.sentence
+  ])
+  const chinese = firstDisplayText([
+    example.chinese,
+    example.zh,
+    example.translation
+  ])
+  if (!english && !chinese) return null
+
+  return {
+    key: `example-${index}-${english}-${chinese}`,
+    english,
+    chinese
+  }
+}
 
 export default {
   components: {
@@ -296,6 +343,8 @@ export default {
       resumeAfterSeeking: false,
       pronunciationAudioContext: null,
       pronunciationIsPlaying: false,
+      loading: true,
+      loadErrorMessage: '',
       notFoundQuery: '',
       notFoundTitle: '暂未收录这个单词',
       notFoundDescription: '这个单词还没有讲解内容。'
@@ -313,6 +362,16 @@ export default {
     this.stopPronunciationAudio()
   },
   computed: {
+    fullImageryText() {
+      const explanation = this.word ? this.word.explanation : ''
+      return typeof explanation === 'string' ? explanation.trim() : ''
+    },
+    displayExamples() {
+      const examples = this.word && Array.isArray(this.word.examples) ? this.word.examples : []
+      return examples
+        .map((example, index) => normalizeDisplayExample(example, index))
+        .filter((example) => example)
+    },
     displayParts() {
       if (!this.word || !Array.isArray(this.word.parts) || !this.word.parts.length) {
         return []
@@ -354,7 +413,7 @@ export default {
       })
     },
     hasVideoData() {
-      return this.videoClips.length > 0
+      return ENABLE_VIDEO_MODULE && this.videoClips.length > 0
     },
     learningTabs() {
       if (!this.word) return []
@@ -364,13 +423,15 @@ export default {
           targetId: 'section-breakdown',
           hint: this.word.parts && this.word.parts.length ? `${this.word.parts.length}块` : ''
         },
-        { label: '意象', targetId: 'section-imagery', hint: '' },
-        {
+        { label: '意象', targetId: 'section-imagery', hint: '' }
+      ]
+      if (this.displayExamples.length) {
+        tabs.push({
           label: '例句',
           targetId: 'section-examples',
-          hint: this.word.examples && this.word.examples.length ? `${this.word.examples.length}句` : ''
-        }
-      ]
+          hint: `${this.displayExamples.length}句`
+        })
+      }
       if (this.relatedWords.length) {
         tabs.push({ label: '同族词', targetId: 'section-related', hint: `${this.relatedWords.length}个` })
       }
@@ -492,65 +553,66 @@ export default {
     }
   },
   methods: {
-    loadWord(options) {
+    async loadWord(options) {
       this.stopPronunciationAudio()
       const optionValue = options && (options.id || options.word) ? options.id || options.word : ''
       const fallbackValue = optionValue || getPendingWordId() || 'word-study'
       const raw = decodeURIComponent(fallbackValue)
-      const target = this.resolveLearningNode(raw)
-      const accessInfo = target ? null : getWordAccessInfo(raw)
-      const hiddenWord = Boolean(accessInfo && accessInfo.exists && !accessInfo.published)
+      const preferWordLookup = Boolean(options && options.word && !options.id)
 
-      this.word = target
-      this.notFoundQuery = target ? '' : raw
-      this.notFoundTitle = target
-        ? ''
-        : hiddenWord
-          ? '词条暂未发布'
-          : '暂未收录这个单词'
-      this.notFoundDescription = target
-        ? ''
-        : hiddenWord
-          ? '该词条暂未发布或已撤下。'
-          : raw
-          ? `“${raw}” 还没有讲解内容。`
-          : '这个单词还没有讲解内容。'
-      this.relatedWords = target ? getRelatedWords(target) : []
-      this.bookmarked = target ? isFavorite(target.id) : false
-      this.expandedPart = ''
-      this.activePartMeaning = ''
-      this.showFullDesc = true
-      this.activeClipIndex = 0
-      this.clipCurrentTime = 0
-      this.clipIsPlaying = false
-      this.enforcingClipBoundary = false
-      this.pausedAtClipEnd = false
-      this.pendingClipAutoplay = false
-      this.clipIsSeeking = false
-      this.resumeAfterSeeking = false
-      this.pronunciationIsPlaying = false
-      this.clearClipPlaybackTimer()
+      this.loading = true
+      this.loadErrorMessage = ''
+      this.word = null
+      this.notFoundQuery = raw
+      this.notFoundTitle = '词条暂未发布或已下架'
+      this.notFoundDescription = '该词条当前没有可公开展示的内容。'
+      this.resetWordViewState()
 
-      if (target) {
-        addRecentWord(target.id, { countSearch: false })
-      }
-      this.loadRemoteWord(raw)
-    },
-    async loadRemoteWord(raw) {
       let remote = null
       try {
-        remote = (await fetchWordById(raw)) || (await fetchWordByWord(raw))
+        if (preferWordLookup) {
+          remote = await fetchWordByWord(raw)
+        } else {
+          remote = await fetchWordById(raw)
+          if (!remote && raw.indexOf('word-') !== 0 && raw.indexOf('node-') !== 0) {
+            remote = await fetchWordByWord(raw)
+          }
+        }
       } catch (error) {
+        const fallback = error && error.fallback && error.fallback.status === 'published'
+          ? error.fallback
+          : this.resolveLearningNode(raw)
+        if (fallback && fallback.status === 'published') {
+          this.applyLoadedWord(fallback)
+          this.loadErrorMessage = '线上词库暂时无法连接，当前显示本地备用词条，内容可能不是最新版本。'
+        } else {
+          this.notFoundTitle = '暂时无法加载词条'
+          this.notFoundDescription = '线上词库连接失败，请检查网络后重试。'
+        }
+        this.loading = false
         return
       }
-      if (!remote || remote.status !== 'published') return
 
-      this.word = remote
+      if (!remote || remote.status !== 'published') {
+        this.loading = false
+        return
+      }
+
+      this.applyLoadedWord(remote)
+      this.loading = false
+    },
+    applyLoadedWord(word) {
+      if (!word || word.status !== 'published') return
+      this.word = word
       this.notFoundQuery = ''
       this.notFoundTitle = ''
       this.notFoundDescription = ''
-      this.relatedWords = getRelatedWords(remote)
-      this.bookmarked = isFavorite(remote.id)
+      this.relatedWords = getRelatedWords(word)
+      this.bookmarked = isFavorite(word.id)
+      this.resetWordViewState()
+      addRecentWord(word.id, { countSearch: false })
+    },
+    resetWordViewState() {
       this.expandedPart = ''
       this.activePartMeaning = ''
       this.showFullDesc = true
@@ -564,7 +626,6 @@ export default {
       this.resumeAfterSeeking = false
       this.pronunciationIsPlaying = false
       this.clearClipPlaybackTimer()
-      addRecentWord(remote.id, { countSearch: false })
     },
     resolveLearningNode(rawValue) {
       const raw = (rawValue || '').trim()
@@ -1056,6 +1117,17 @@ export default {
   background: #f0f9ff;
 }
 
+.remote-warning {
+  margin-bottom: 20rpx;
+  padding: 18rpx 22rpx;
+  border: 2rpx solid rgba(254, 133, 0, 0.28);
+  border-radius: 22rpx;
+  background: #fff7df;
+  color: #8a4b00;
+  font-size: 22rpx;
+  line-height: 1.6;
+}
+
 .topbar,
 .tools,
 .title-row,
@@ -1438,17 +1510,14 @@ export default {
   font-weight: 800;
 }
 
-.plus,
-.equals {
+.plus {
   color: #7bbfe8;
   font-size: 36rpx;
   font-weight: 900;
 }
 
-.equals-word {
-  color: #0e3a5c;
-  font-size: 32rpx;
-  font-weight: 800;
+.imagery-empty {
+  color: #6baed6;
 }
 
 .part-detail {
