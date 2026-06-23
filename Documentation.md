@@ -1,5 +1,26 @@
 # Documentation
 
+### 2026-06-23: production API moved to apex domain
+
+Decision:
+- Change the production mini program API base from the former admin subdomain to `https://baxiaota.com`.
+- Keep all public endpoint paths unchanged: `/api/homepage/featured-word`, `/api/words`, and `/api/words/:id`.
+- Keep the production admin portal on same-origin relative `/api/...` requests. Development-only API overrides and Admin Token handling remain unchanged.
+- Published filtering, homepage featured-word resolution, and request timeout/error handling remain unchanged.
+
+### 2026-06-23: optional word illustration image
+
+Decision:
+- Add optional `illustrationImage` to the shared word schema with `url`, `title`, `alt`, `provider`, `assetId`, `uploadStatus`, and `uploadedAt`.
+- Treat an empty URL as no illustration. Only public HTTPS URLs are accepted; local, temporary, data, blob, mock, and example-domain addresses are rejected or normalized away.
+- Reuse the existing Admin word write and public word read APIs. No upload endpoint, COS SDK, VOD SDK, dependency, or new storage service is introduced.
+- The admin editor supports URL/title/alt fields, HTTPS validation, image preview, thumbnail preview, and clearing the image.
+- The mini program detail page renders the illustration card between complete imagery and examples only when the normalized URL is valid. It uses `uni.previewImage` and shows a bounded load-error state.
+- Published filtering and homepage featured-word resolution remain unchanged; illustration data follows the same published word record.
+
+Future extension:
+- Replace the manually entered URL with a COS upload result while retaining `provider`, `assetId`, `uploadStatus`, and `uploadedAt`.
+
 ### 2026-06-23: server-managed homepage featured word
 
 Decision:
@@ -20,7 +41,7 @@ Safety:
 ### 2026-06-22: production published text API enabled
 
 Decision:
-- The production mini program word API base is fixed to `https://admin.baxiaota.com`; development may still use an explicitly configured local HTTP/HTTPS API.
+- The production mini program word API base is fixed to `https://baxiaota.com`; development may still use an explicitly configured local HTTP/HTTPS API.
 - Reuse `GET /api/words?q=...` for search and `GET /api/words/:id` for detail. Public list responses are capped at 20 records.
 - Public server reads explicitly request `publishedOnly: true`. Store normalization treats a missing status as `draft`, and strict equality excludes draft, unpublished, archived, review, pending, unknown, and missing statuses.
 - The mini program filters remote payloads again with strict `status === "published"` checks.
@@ -32,7 +53,7 @@ Decision:
 Verification:
 - Server integration tests cover public exclusion of draft, unpublished, archived, review, pending, and missing status records.
 - Production checks require the official HTTPS API base and require the detail-page video feature flag to remain disabled.
-- WeChat must configure `https://admin.baxiaota.com` as a request legal domain before real-device testing or release.
+- WeChat must configure `https://baxiaota.com` as a request legal domain before real-device testing or release.
 
 ### 2026-06-08: admin unlock page and publish action hierarchy
 

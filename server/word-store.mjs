@@ -137,7 +137,7 @@ export function createWordStore(options = {}) {
 
   async function saveWord(sourceWord) {
     const normalized = normalizeWordRecord(sourceWord)
-    const validation = validateWordRecord(normalized)
+    const validation = validateWordRecord(sourceWord)
     if (!validation.ok) {
       return {
         ok: false,

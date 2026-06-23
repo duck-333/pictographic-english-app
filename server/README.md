@@ -160,6 +160,24 @@ Request body:
 
 The server reuses `miniapp-uni/word-app1/common/content-schema.js` to normalize and validate records.
 
+Word records may include an optional illustration image:
+
+```json
+{
+  "illustrationImage": {
+    "url": "https://cdn.baxiaota.com/images/study.png",
+    "title": "study 示意图",
+    "alt": "展示 study 的象形拆解关系",
+    "provider": "cos",
+    "assetId": "images/study.png",
+    "uploadStatus": "ready",
+    "uploadedAt": "2026-06-23T00:00:00.000Z"
+  }
+}
+```
+
+An empty URL means no public illustration. Non-string URLs and non-production addresses are rejected by the Admin write API. Public records only retain HTTPS image URLs that are not local, temporary, mock, or example-domain addresses.
+
 ### GET /api/admin/homepage-featured
 
 Returns the saved homepage recommendation configuration, the currently resolved word, and published words available for selection.
@@ -198,8 +216,9 @@ Only published word IDs can be saved. Daily rotation uses the Asia/Shanghai cale
 
 ## Safety Boundaries
 
-- Production mini programs read published text entries from `https://admin.baxiaota.com/api/words` and `https://admin.baxiaota.com/api/words/:id`.
+- Production mini programs read published text entries from `https://baxiaota.com/api/words` and `https://baxiaota.com/api/words/:id`.
 - Public word APIs use strict `status === "published"` filtering. Missing or any other status is treated as non-public.
+- `illustrationImage.url` is normalized through the shared content schema. Public mini program rendering accepts production HTTPS images only.
 - The public homepage recommendation API applies the same strict published filtering at response time, so later unpublish/archive actions take effect without rewriting the recommendation configuration.
 - `GET /api/words` returns at most 20 matching records per request.
 - Admin write APIs require a Bearer token. This is the minimum guard for development and deployment testing, not a complete admin login system.

@@ -125,6 +125,21 @@
         <text v-else class="desc imagery-empty">暂无完整意象说明。</text>
       </view>
 
+      <view v-if="hasIllustrationImage" id="section-illustration" class="section card">
+        <text class="section-title">示意图</text>
+        <view v-if="!illustrationImageFailed" class="illustration-image-wrap" hover-class="image-pressed" @tap="previewIllustrationImage">
+          <image
+            class="illustration-image"
+            :src="illustrationImage.url"
+            mode="widthFix"
+            :lazy-load="true"
+            @error="handleIllustrationImageError"
+          />
+        </view>
+        <text v-else class="illustration-error">图片暂时无法加载。</text>
+        <text v-if="illustrationImageCaption" class="illustration-caption">{{ illustrationImageCaption }}</text>
+      </view>
+
       <view v-if="displayExamples.length" id="section-examples" class="section card">
         <text class="section-title">例句</text>
         <view>
@@ -274,6 +289,7 @@ import {
   getRelatedWords,
   getWordById,
   getWordByWord,
+  isProductionIllustrationImageUrl,
   isPlayableMediaUrl
 } from '../../common/word-repository.js'
 import { addRecentWord, getPendingWordId, isFavorite, savePendingWordId, toggleFavorite } from '../../common/user-store.js'
@@ -343,6 +359,7 @@ export default {
       resumeAfterSeeking: false,
       pronunciationAudioContext: null,
       pronunciationIsPlaying: false,
+      illustrationImageFailed: false,
       loading: true,
       loadErrorMessage: '',
       notFoundQuery: '',
@@ -371,6 +388,16 @@ export default {
       return examples
         .map((example, index) => normalizeDisplayExample(example, index))
         .filter((example) => example)
+    },
+    illustrationImage() {
+      const image = this.word && this.word.illustrationImage
+      return image && typeof image === 'object' ? image : {}
+    },
+    hasIllustrationImage() {
+      return isProductionIllustrationImageUrl(this.illustrationImage.url)
+    },
+    illustrationImageCaption() {
+      return normalizeDisplayText(this.illustrationImage.alt || this.illustrationImage.title)
     },
     displayParts() {
       if (!this.word || !Array.isArray(this.word.parts) || !this.word.parts.length) {
@@ -425,6 +452,13 @@ export default {
         },
         { label: '意象', targetId: 'section-imagery', hint: '' }
       ]
+      if (this.hasIllustrationImage) {
+        tabs.push({
+          label: '示意图',
+          targetId: 'section-illustration',
+          hint: ''
+        })
+      }
       if (this.displayExamples.length) {
         tabs.push({
           label: '例句',
@@ -625,6 +659,7 @@ export default {
       this.clipIsSeeking = false
       this.resumeAfterSeeking = false
       this.pronunciationIsPlaying = false
+      this.illustrationImageFailed = false
       this.clearClipPlaybackTimer()
     },
     resolveLearningNode(rawValue) {
@@ -936,6 +971,22 @@ export default {
       uni.showToast({
         title: this.videoPlaceholderText,
         icon: 'none'
+      })
+    },
+    handleIllustrationImageError() {
+      this.illustrationImageFailed = true
+    },
+    previewIllustrationImage() {
+      if (!this.hasIllustrationImage || this.illustrationImageFailed) return
+      uni.previewImage({
+        current: this.illustrationImage.url,
+        urls: [this.illustrationImage.url],
+        fail: () => {
+          uni.showToast({
+            title: '图片暂时无法预览',
+            icon: 'none'
+          })
+        }
       })
     },
     isPlayableAudioUrl(url) {
@@ -1518,6 +1569,39 @@ export default {
 
 .imagery-empty {
   color: #6baed6;
+}
+
+.illustration-image-wrap {
+  margin-top: 20rpx;
+  overflow: hidden;
+  border-radius: 22rpx;
+  background: #f5fbff;
+}
+
+.illustration-image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+}
+
+.illustration-caption,
+.illustration-error {
+  display: block;
+  margin-top: 14rpx;
+  color: #6baed6;
+  font-size: 23rpx;
+  line-height: 1.65;
+}
+
+.illustration-error {
+  padding: 24rpx;
+  border-radius: 20rpx;
+  background: #f5fbff;
+  text-align: center;
+}
+
+.image-pressed {
+  opacity: 0.86;
 }
 
 .part-detail {

@@ -186,7 +186,16 @@ async function main() {
       word: 'servertest',
       status: 'published',
       meaning: 'server link test word',
-      pictograph: 'A minimal API integration test word.'
+      pictograph: 'A minimal API integration test word.',
+      illustrationImage: {
+        url: 'https://cdn.baxiaota.com/images/servertest.png',
+        title: 'Server test illustration',
+        alt: 'Server test visual',
+        provider: 'cos',
+        assetId: 'images/servertest.png',
+        uploadStatus: 'ready',
+        uploadedAt: '2026-06-23T00:00:00.000Z'
+      }
     }
 
     const missingAuthCheckToken = await readJson(await fetch(`${baseUrl}/api/admin/auth/check`))
@@ -261,15 +270,41 @@ async function main() {
     assert(saved.status === 200, 'POST /api/admin/words should return 200')
     assert(saved.body.ok === true, 'POST /api/admin/words should return ok=true')
     assert(saved.body.word.id === word.id, 'POST /api/admin/words should return the saved word')
+    assert(saved.body.word.illustrationImage.url === word.illustrationImage.url, 'POST /api/admin/words should preserve illustrationImage')
+
+    const invalidIllustrationSave = await readJson(await fetch(`${baseUrl}/api/admin/words`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+      },
+      body: JSON.stringify({
+        word: {
+          id: 'word-invalidillustration',
+          word: 'invalidillustration',
+          status: 'published',
+          meaning: 'invalid illustration',
+          illustrationImage: {
+            url: 'http://localhost/image.png'
+          }
+        }
+      })
+    }))
+    assert(invalidIllustrationSave.status === 400, 'POST /api/admin/words should reject non-production illustration URLs')
 
     const list = await readJson(await fetch(`${baseUrl}/api/words?q=servertest`))
     assert(list.status === 200, 'GET /api/words should return 200')
     assert(Array.isArray(list.body.words), 'GET /api/words should return a words array')
     assert(list.body.words.some((item) => item.id === word.id), 'GET /api/words should include the saved published word')
+    assert(
+      list.body.words.find((item) => item.id === word.id).illustrationImage.url === word.illustrationImage.url,
+      'GET /api/words should return illustrationImage for published words'
+    )
 
     const detail = await readJson(await fetch(`${baseUrl}/api/words/${word.id}`))
     assert(detail.status === 200, 'GET /api/words/:id should return 200 for saved word')
     assert(detail.body.word.word === word.word, 'GET /api/words/:id should return the saved word payload')
+    assert(detail.body.word.illustrationImage.url === word.illustrationImage.url, 'GET /api/words/:id should return illustrationImage')
 
     const hiddenWords = [
       { id: 'word-hidden-draft', word: 'hiddendraft', status: 'draft', meaning: 'hidden draft' },
@@ -296,7 +331,11 @@ async function main() {
         word: 'tud',
         status: 'published',
         meaning: 'strike root',
-        explanation: 'tud explanation'
+        explanation: 'tud explanation',
+        illustrationImage: {
+          url: 'https://cdn.baxiaota.com/images/tud.png',
+          title: 'tud illustration'
+        }
       },
       {
         id: 'cool',
@@ -341,6 +380,10 @@ async function main() {
     assert(singleFeaturedSave.status === 200, 'single-word homepage featured pool should save')
     const publicSingleFeatured = await readJson(await fetch(`${baseUrl}/api/homepage/featured-word`))
     assert(publicSingleFeatured.body.word.id === 'tud', 'single-word homepage featured pool should return tud')
+    assert(
+      publicSingleFeatured.body.word.illustrationImage.url === 'https://cdn.baxiaota.com/images/tud.png',
+      'homepage featured API should preserve illustrationImage'
+    )
 
     const dailyFeaturedSave = await readJson(await fetch(`${baseUrl}/api/admin/homepage-featured`, {
       method: 'POST',
@@ -444,11 +487,11 @@ async function main() {
       'development config should allow local HTTP API base URL'
     )
     assert(
-      getWordApiBaseUrl({ nodeEnv: 'production', apiBaseUrl: 'http://127.0.0.1:3001' }) === 'https://admin.baxiaota.com',
+      getWordApiBaseUrl({ nodeEnv: 'production', apiBaseUrl: 'http://127.0.0.1:3001' }) === 'https://baxiaota.com',
       'production config should ignore local overrides and use the official HTTPS API base URL'
     )
     assert(
-      getWordApiBaseUrl({ nodeEnv: '', apiBaseUrl: 'http://127.0.0.1:3001' }) === 'https://admin.baxiaota.com',
+      getWordApiBaseUrl({ nodeEnv: '', apiBaseUrl: 'http://127.0.0.1:3001' }) === 'https://baxiaota.com',
       'missing NODE_ENV should fail closed to the official production API base URL'
     )
 

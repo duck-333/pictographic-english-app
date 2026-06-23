@@ -1,4 +1,4 @@
-export const PRODUCTION_WORD_API_BASE_URL = 'https://admin.baxiaota.com'
+export const PRODUCTION_WORD_API_BASE_URL = 'https://baxiaota.com'
 
 function getNodeEnv(options = {}) {
   if (Object.prototype.hasOwnProperty.call(options, 'nodeEnv')) {

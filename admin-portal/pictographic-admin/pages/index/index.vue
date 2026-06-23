@@ -256,6 +256,52 @@
 					<textarea v-model="form.explanation" :maxlength="-1" placeholder="用力敲击 tud 知识，向外出发，这就是学习。" />
 				</label>
 
+				<view v-if="form.illustrationImage" class="section-head illustration-section-head">
+					<view>
+						<text class="section-title">示意图</text>
+						<text class="panel-note">本轮保存图片 HTTPS 地址；后续接入 COS/VOD 时继续复用同一字段结构。</text>
+					</view>
+					<button
+						v-if="hasIllustrationImagePayload"
+						class="danger-button"
+						@click="clearIllustrationImage"
+					>
+						删除示意图
+					</button>
+				</view>
+				<view v-if="form.illustrationImage" class="illustration-editor-card">
+					<label class="field">
+						<text>图片 URL</text>
+						<input
+							v-model="form.illustrationImage.url"
+							placeholder="https://cdn.your-domain.com/images/word.png"
+							@input="handleIllustrationUrlInput"
+						/>
+					</label>
+					<view class="illustration-meta-grid">
+						<label class="field">
+							<text>图片标题 title</text>
+							<input v-model="form.illustrationImage.title" placeholder="tud 的敲击动作示意图" />
+						</label>
+						<label class="field">
+							<text>图片说明 alt</text>
+							<input v-model="form.illustrationImage.alt" placeholder="展示 t、u、d 的象形关系" />
+						</label>
+					</view>
+					<text :class="['illustration-url-tip', illustrationImageUrlValid ? 'valid' : 'warning']">
+						{{ illustrationImageUrlTip }}
+					</text>
+					<view v-if="illustrationImagePreviewUrl" class="illustration-admin-preview">
+						<image
+							class="illustration-admin-image"
+							:src="illustrationImagePreviewUrl"
+							mode="widthFix"
+							@error="handleIllustrationPreviewError"
+						/>
+						<text v-if="illustrationImagePreviewError" class="illustration-preview-error">图片预览失败，请检查地址或图片访问权限。</text>
+					</view>
+				</view>
+
 				<view class="section-head">
 					<view>
 						<text class="section-title">讲解视频</text>
@@ -450,6 +496,11 @@
 							</view>
 						</view>
 						<text class="preview-explain">{{ form.explanation || '这里显示象形讲解。' }}</text>
+						<view v-if="illustrationImagePreviewUrl" class="preview-illustration">
+							<text class="preview-illustration-title">{{ form.illustrationImage.title || '示意图' }}</text>
+							<image class="preview-illustration-image" :src="illustrationImagePreviewUrl" mode="widthFix" />
+							<text v-if="form.illustrationImage.alt" class="preview-illustration-alt">{{ form.illustrationImage.alt }}</text>
+						</view>
 						<view v-if="videoClipCount" class="preview-video">
 							<text class="preview-video-title">讲解视频 · {{ videoClipCount }} 段</text>
 							<view class="preview-video-row" v-for="(clip, index) in form.videoClips" :key="clip.clipId || index">
@@ -893,6 +944,7 @@ export default {
 			selectedSource: 'uploaded',
 			selectedId: '',
 			form: clone(seedWords[0]),
+			illustrationImagePreviewError: false,
 			videoUpload: {
 				status: 'idle',
 				progress: 0,
@@ -1004,6 +1056,28 @@ export default {
 		},
 		currentJson() {
 			return JSON.stringify(this.stripRuntimeVideoFields(this.normalizeWord(this.form)), null, 2)
+		},
+		hasIllustrationImagePayload() {
+			const image = this.form && this.form.illustrationImage ? this.form.illustrationImage : {}
+			return ['url', 'title', 'alt', 'provider', 'assetId', 'uploadStatus', 'uploadedAt']
+				.some((field) => String(image[field] || '').trim())
+		},
+		illustrationImagePreviewUrl() {
+			const image = this.form && this.form.illustrationImage ? this.form.illustrationImage : {}
+			const url = String(image.url || '').trim()
+			return this.isProductionIllustrationImageUrl(url) ? url : ''
+		},
+		illustrationImageUrlValid() {
+			const image = this.form && this.form.illustrationImage ? this.form.illustrationImage : {}
+			const url = String(image.url || '').trim()
+			return !url || this.isProductionIllustrationImageUrl(url)
+		},
+		illustrationImageUrlTip() {
+			const image = this.form && this.form.illustrationImage ? this.form.illustrationImage : {}
+			const url = String(image.url || '').trim()
+			if (!url) return '未填写图片地址时，小程序不会显示示意图模块。'
+			if (this.isProductionIllustrationImageUrl(url)) return '图片地址有效，可用于正式小程序。'
+			return '正式小程序只允许 HTTPS 图片地址；本地地址、临时预览地址和示例域名不能保存为线上示意图。'
 		},
 		videoClipCount() {
 			return Array.isArray(this.form.videoClips) ? this.form.videoClips.length : 0
@@ -1337,6 +1411,7 @@ export default {
 			this.selectedSource = 'uploaded'
 			this.selectedId = initialWords[0] ? initialWords[0].id : ''
 			this.form = initialWords[0] ? clone(initialWords[0]) : clone(seedWords[0])
+			this.illustrationImagePreviewError = false
 			this.saveState = saved ? '已读取本地草稿' : '使用示例数据'
 			this.expandedLetters = this.defaultExpandedLetters(initialWords)
 			this.syncVideoUploadStateFromForm()
@@ -1409,6 +1484,7 @@ export default {
 			this.selectedSource = source
 			this.selectedId = id
 			this.form = source === 'pending' ? this.normalizePendingWord(target) : this.normalizeWord(target)
+			this.illustrationImagePreviewError = false
 			this.syncVideoUploadStateFromForm()
 			this.saveState = (source === 'pending' ? '正在检查未上传 ' : '正在编辑 ') + target.word
 		},
@@ -1440,6 +1516,7 @@ export default {
 				meaning: '',
 				status: 'draft',
 				explanation: '',
+				illustrationImage: this.normalizeIllustrationImage({}),
 				video: {
 					url: '',
 					title: '',
@@ -1980,6 +2057,11 @@ export default {
 				uni.showToast({ title: '单词 ID 已存在', icon: 'none' })
 				return false
 			}
+			const illustrationResult = this.validateIllustrationImage(this.form)
+			if (!illustrationResult.ok) {
+				uni.showToast({ title: illustrationResult.message, icon: 'none' })
+				return false
+			}
 			const videoResult = this.validateVideoTime(this.form, 1)
 			if (!videoResult.ok) {
 				uni.showToast({ title: videoResult.message, icon: 'none' })
@@ -2003,6 +2085,11 @@ export default {
 				}
 				if (seen[id]) {
 					uni.showToast({ title: '存在重复单词 ID', icon: 'none' })
+					return false
+				}
+				const illustrationResult = this.validateIllustrationImage(item)
+				if (!illustrationResult.ok) {
+					uni.showToast({ title: `${id} 的示意图地址无效`, icon: 'none' })
 					return false
 				}
 				const videoResult = this.validateVideoTime(item, id)
@@ -3137,6 +3224,62 @@ export default {
 				next.localPreviewUrl
 			return hasPayload ? next : {}
 		},
+		isProductionIllustrationImageUrl(value) {
+			const url = String(value || '').trim()
+			if (!url || /\s/.test(url)) return false
+			const match = url.match(/^https:\/\/([^/?#]+)(?:[/?#]|$)/i)
+			if (!match) return false
+			const authority = (match[1].split('@').pop() || '').toLowerCase()
+			let hostname = authority
+			if (authority.startsWith('[')) {
+				const closingIndex = authority.indexOf(']')
+				hostname = closingIndex > -1 ? authority.slice(1, closingIndex) : ''
+			} else {
+				hostname = authority.split(':')[0].replace(/\.$/, '')
+			}
+			if (!hostname || hostname === 'localhost' || hostname === '::1') return false
+			if (hostname === 'example.com' || hostname.endsWith('.example.com')) return false
+			const octets = hostname.split('.')
+			if (octets.length === 4 && octets.every((item) => /^\d{1,3}$/.test(item))) {
+				return Number(octets[0]) !== 127
+			}
+			return true
+		},
+		normalizeIllustrationImage(image) {
+			const source = image && typeof image === 'object' && !Array.isArray(image) ? image : {}
+			return {
+				url: String(source.url || '').trim(),
+				title: String(source.title || '').trim(),
+				alt: String(source.alt || '').trim(),
+				provider: String(source.provider || '').trim(),
+				assetId: String(source.assetId || source.asset_id || '').trim(),
+				uploadStatus: String(source.uploadStatus || source.upload_status || '').trim(),
+				uploadedAt: String(source.uploadedAt || source.uploaded_at || '').trim()
+			}
+		},
+		handleIllustrationUrlInput() {
+			this.illustrationImagePreviewError = false
+		},
+		handleIllustrationPreviewError() {
+			this.illustrationImagePreviewError = true
+		},
+		clearIllustrationImage() {
+			this.form.illustrationImage = this.normalizeIllustrationImage({})
+			this.illustrationImagePreviewError = false
+			this.saveState = '示意图已清空，保存或发布后生效'
+		},
+		validateIllustrationImage(word) {
+			const image = word && word.illustrationImage ? word.illustrationImage : {}
+			const url = String(image.url || '').trim()
+			if (!url) return { ok: true }
+			if (!this.isProductionIllustrationImageUrl(url)) {
+				return {
+					ok: false,
+					message: '示意图必须使用可公开访问的 HTTPS 图片地址'
+				}
+			}
+			return { ok: true }
+		},
 		normalizeWord(item) {
 			const next = clone(item)
 			next.id = String(next.id || '').trim()
@@ -3144,6 +3287,11 @@ export default {
 			next.phonetic = String(next.phonetic || '').trim()
 			next.meaning = String(next.meaning || '').trim()
 			next.explanation = String(next.explanation || '')
+			next.illustrationImage = this.normalizeIllustrationImage(
+				next.illustrationImage ||
+					next.illustration_image ||
+					{}
+			)
 			next.status = normalizeAdminStatus(next.status)
 			next.parts = Array.isArray(next.parts) ? next.parts.map((part) => ({
 				label: String(part.label || '').trim(),
@@ -3357,6 +3505,7 @@ export default {
 			raw = raw || {}
 			const rawVideo = raw.video || {}
 			const rawAudio = raw.pronunciationAudio || raw.pronunciation_audio || raw.audio || {}
+			const rawIllustration = raw.illustrationImage || raw.illustration_image || {}
 			const rawVideoClips = Array.isArray(raw.videoClips)
 				? raw.videoClips
 				: (Array.isArray(raw.video_clips) ? raw.video_clips : (Array.isArray(raw.clips) ? raw.clips : undefined))
@@ -3369,6 +3518,15 @@ export default {
 				phonetic: raw.phonetic || raw.pronunciation || '',
 				meaning: raw.meaning || raw.definition || raw.translation || '',
 				explanation: raw.explanation || raw.analysis || raw.note || '',
+				illustrationImage: {
+					url: valueOrBlank(firstNonEmpty(rawIllustration.url, raw.illustrationImageUrl, raw.illustration_image_url)),
+					title: valueOrBlank(firstNonEmpty(rawIllustration.title, raw.illustrationTitle, raw.illustration_title)),
+					alt: valueOrBlank(firstNonEmpty(rawIllustration.alt, rawIllustration.description, raw.illustrationAlt, raw.illustration_alt)),
+					provider: valueOrBlank(firstNonEmpty(rawIllustration.provider, raw.illustrationProvider, raw.illustration_provider)),
+					assetId: valueOrBlank(firstNonEmpty(rawIllustration.assetId, rawIllustration.asset_id, raw.illustrationAssetId, raw.illustration_asset_id)),
+					uploadStatus: valueOrBlank(firstNonEmpty(rawIllustration.uploadStatus, rawIllustration.upload_status)),
+					uploadedAt: valueOrBlank(firstNonEmpty(rawIllustration.uploadedAt, rawIllustration.uploaded_at))
+				},
 				status: 'draft',
 				parts: this.normalizeImportedParts(raw.parts || raw.breakdown || raw.children || []),
 				pronunciationAudio: {
@@ -3410,12 +3568,22 @@ export default {
 			const hasNonEmpty = (...values) => values.some((value) => value !== undefined && value !== null && String(value).trim() !== '')
 			const video = raw.video || {}
 			const audio = raw.pronunciationAudio || raw.pronunciation_audio || raw.audio || {}
+			const illustration = raw.illustrationImage || raw.illustration_image || {}
 			return {
 				word: hasNonEmpty(raw.word),
 				entryType: hasNonEmpty(raw.entryType, raw.type),
 				phonetic: hasNonEmpty(raw.phonetic, raw.pronunciation),
 				meaning: hasNonEmpty(raw.meaning, raw.definition, raw.translation),
 				explanation: hasNonEmpty(raw.explanation, raw.analysis, raw.note),
+				illustrationImage: hasNonEmpty(
+					illustration.url,
+					illustration.title,
+					illustration.alt,
+					illustration.assetId,
+					illustration.asset_id,
+					raw.illustrationImageUrl,
+					raw.illustration_image_url
+				),
 				pronunciationAudio: hasNonEmpty(audio.url, audio.audioUrl, audio.audio_url, raw.audioUrl, raw.audio_url, raw.pronunciationAudioUrl, raw.pronunciation_audio_url),
 				parts: (hasOwn(raw, 'parts') && Array.isArray(raw.parts) && raw.parts.length > 0) ||
 					(hasOwn(raw, 'breakdown') && Array.isArray(raw.breakdown) && raw.breakdown.length > 0) ||
@@ -3664,6 +3832,9 @@ export default {
 			})
 			if ((!hasProvidedMeta || provided.parts) && Array.isArray(incoming.parts) && incoming.parts.length) {
 				next.parts = incoming.parts
+			}
+			if ((!hasProvidedMeta || provided.illustrationImage) && incoming.illustrationImage) {
+				next.illustrationImage = incoming.illustrationImage
 			}
 			const incomingAudio = incoming.pronunciationAudio || {}
 			const incomingAudioUrl = incoming.audioUrl || incomingAudio.url || incomingAudio.audioUrl || ''
@@ -5261,6 +5432,70 @@ button::after {
 	margin-top: 10px;
 }
 
+.illustration-section-head {
+	margin-top: 20px;
+}
+
+.illustration-editor-card {
+	margin-bottom: 18px;
+	padding: 16px;
+	border: 1px solid #d8e9f2;
+	border-radius: 20px;
+	background: #f8fcff;
+}
+
+.illustration-meta-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+}
+
+.illustration-url-tip,
+.illustration-preview-error,
+.preview-illustration-title,
+.preview-illustration-alt {
+	display: block;
+}
+
+.illustration-url-tip {
+	margin-top: -4px;
+	font-size: 12px;
+	line-height: 1.7;
+}
+
+.illustration-url-tip.valid {
+	color: #28855b;
+}
+
+.illustration-url-tip.warning {
+	color: #bd5a22;
+}
+
+.illustration-admin-preview {
+	margin-top: 14px;
+	padding: 12px;
+	border-radius: 16px;
+	background: #fff;
+}
+
+.illustration-admin-image,
+.preview-illustration-image {
+	display: block;
+	width: 100%;
+	border-radius: 14px;
+}
+
+.illustration-admin-image {
+	max-height: 420px;
+	object-fit: contain;
+}
+
+.illustration-preview-error {
+	margin-top: 10px;
+	color: #c64c24;
+	font-size: 12px;
+}
+
 .video-upload-main {
 	display: flex;
 	align-items: center;
@@ -5985,6 +6220,26 @@ button.file-button::after {
 	line-height: 1.8;
 }
 
+.preview-illustration {
+	margin-top: 16px;
+	padding: 12px;
+	border-radius: 16px;
+	background: rgba(255, 255, 255, 0.1);
+}
+
+.preview-illustration-title {
+	margin-bottom: 10px;
+	color: #ffeba2;
+	font-weight: 800;
+}
+
+.preview-illustration-alt {
+	margin-top: 8px;
+	color: rgba(255, 255, 255, 0.66);
+	font-size: 12px;
+	line-height: 1.6;
+}
+
 .preview-parts {
 	display: flex;
 	flex-wrap: wrap;
@@ -6234,6 +6489,7 @@ button.file-button::after {
 	.hero-actions,
 	.editor-actions,
 	.form-grid,
+	.illustration-meta-grid,
 	.part-row,
 	.status-grid,
 	.admin-view-nav,

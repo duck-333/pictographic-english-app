@@ -5,7 +5,13 @@ import {
 } from './mock-data.js'
 import { DEV_PREVIEW_WORDS } from './dev-preview-data.js'
 import { getWordApiBaseUrl } from './api-config.js'
-import { createWordDraft, normalizeWordQuery, normalizeWordRecord, validateWordRecord } from './content-schema.js'
+import {
+  createWordDraft,
+  isProductionIllustrationImageUrl,
+  normalizeWordQuery,
+  normalizeWordRecord,
+  validateWordRecord
+} from './content-schema.js'
 import {
   fetchServerHomepageFeaturedWord,
   fetchServerWordById,
@@ -218,6 +224,10 @@ function clonePronunciationAudio(audio) {
   return audio ? { ...audio } : {}
 }
 
+function cloneIllustrationImage(image) {
+  return image ? { ...image } : {}
+}
+
 function cloneWord(word) {
   if (!word) return null
   return {
@@ -225,6 +235,7 @@ function cloneWord(word) {
     parts: Array.isArray(word.parts) ? word.parts.map((part) => clonePart(part)) : [],
     examples: Array.isArray(word.examples) ? word.examples.map((item) => cloneExample(item)) : [],
     siblingIds: Array.isArray(word.siblingIds) ? [...word.siblingIds] : [],
+    illustrationImage: cloneIllustrationImage(word.illustrationImage),
     pronunciationAudio: clonePronunciationAudio(word.pronunciationAudio),
     audioUrl: word.audioUrl || '',
     videoSegment: word.videoSegment ? { ...word.videoSegment } : {},
@@ -232,7 +243,12 @@ function cloneWord(word) {
   }
 }
 
-export { createWordDraft, normalizeWordQuery, validateWordRecord }
+export {
+  createWordDraft,
+  isProductionIllustrationImageUrl,
+  normalizeWordQuery,
+  validateWordRecord
+}
 
 export function getContentRepositoryInfo() {
   const apiBaseUrl = getWordApiBaseUrl()

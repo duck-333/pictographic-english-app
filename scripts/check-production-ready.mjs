@@ -7,7 +7,10 @@ import {
 } from '../miniapp-uni/word-app1/common/api-config.js'
 import { DEV_PREVIEW_WORDS } from '../miniapp-uni/word-app1/common/dev-preview-data.js'
 import { WORDS } from '../miniapp-uni/word-app1/common/mock-data.js'
-import { normalizeWordRecord } from '../miniapp-uni/word-app1/common/content-schema.js'
+import {
+  isProductionIllustrationImageUrl,
+  normalizeWordRecord
+} from '../miniapp-uni/word-app1/common/content-schema.js'
 import {
   hasBlockedProductionMediaSource,
   isPlayableMediaUrl,
@@ -187,6 +190,34 @@ function checkMediaGuards(errors) {
   }
 }
 
+function checkIllustrationImageGuards(errors) {
+  const cases = [
+    ['https://cdn.baxiaota.com/images/study.png', true],
+    ['http://cdn.baxiaota.com/images/study.png', false],
+    ['https://localhost/images/study.png', false],
+    ['https://127.0.0.1/images/study.png', false],
+    ['https://[::1]/images/study.png', false],
+    ['blob:https://cdn.baxiaota.com/id', false],
+    ['data:image/png;base64,AAAA', false],
+    ['mock-cloud://images/study.png', false],
+    ['https://example.com/images/study.png', false]
+  ]
+  cases.forEach(([url, expected]) => {
+    const actual = isProductionIllustrationImageUrl(url)
+    if (actual !== expected) {
+      addError(errors, `illustration image URL guard mismatch for ${url}: expected ${expected}, received ${actual}`)
+    }
+  })
+
+  const detailSource = fs.readFileSync(new URL(`../${WORD_DETAIL_PATH}`, import.meta.url), 'utf8')
+  if (!/v-if="hasIllustrationImage"[\s\S]*?id="section-illustration"/.test(detailSource)) {
+    addError(errors, `${WORD_DETAIL_PATH}: illustration card must render only for a valid image.`)
+  }
+  if (!/uni\.previewImage\(/.test(detailSource)) {
+    addError(errors, `${WORD_DETAIL_PATH}: illustration image must support previewImage.`)
+  }
+}
+
 function checkApiBaseGuards(errors) {
   const developmentLocalApi = getWordApiBaseUrl({ nodeEnv: 'development', apiBaseUrl: 'http://127.0.0.1:3001' })
   const productionDefaultApi = getWordApiBaseUrl({ nodeEnv: 'production' })
@@ -310,6 +341,7 @@ function main() {
   checkPublishedWords(errors)
   checkUserFacingSource(errors)
   checkMediaGuards(errors)
+  checkIllustrationImageGuards(errors)
   checkApiBaseGuards(errors)
   checkAdminAuthGuards(errors)
   checkWordDetailUsesMediaGuard(errors)
@@ -327,6 +359,7 @@ function main() {
   console.log('- production runtime ignores local preview words')
   console.log('- published words do not contain blocked preview URLs')
   console.log('- production media guard blocks local/mock/blob/data/example URLs')
+  console.log('- illustration images allow production HTTPS URLs only')
   console.log(`- production runtime uses ${PRODUCTION_WORD_API_BASE_URL}`)
   console.log('- production admin API auth rejects empty/default tokens')
   console.log('- homepage featured word uses the public API with published filtering')

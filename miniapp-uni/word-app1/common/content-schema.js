@@ -62,6 +62,53 @@ export function normalizeExample(example) {
   }
 }
 
+function normalizeStringField(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function getHttpsHostname(value) {
+  const normalized = normalizeStringField(value)
+  if (!normalized || /\s/.test(normalized)) return ''
+  const match = normalized.match(/^https:\/\/([^/?#]+)(?:[/?#]|$)/i)
+  if (!match) return ''
+  const authority = match[1].split('@').pop() || ''
+  if (authority.startsWith('[')) {
+    const closingIndex = authority.indexOf(']')
+    return closingIndex > -1
+      ? authority.slice(1, closingIndex).toLowerCase()
+      : ''
+  }
+  return authority.split(':')[0].replace(/\.$/, '').toLowerCase()
+}
+
+export function isProductionIllustrationImageUrl(value) {
+  const hostname = getHttpsHostname(value)
+  if (!hostname) return false
+  if (hostname === 'localhost' || hostname === '::1') return false
+  if (hostname === 'example.com' || hostname.endsWith('.example.com')) return false
+  const octets = hostname.split('.')
+  if (octets.length === 4 && octets.every((item) => /^\d{1,3}$/.test(item))) {
+    return Number(octets[0]) !== 127
+  }
+  return true
+}
+
+export function normalizeIllustrationImage(image) {
+  const source = image && typeof image === 'object' && !Array.isArray(image) ? image : {}
+  const rawUrl = typeof source.url === 'string' ? source.url.trim() : ''
+  const url = rawUrl && isProductionIllustrationImageUrl(rawUrl) ? rawUrl : ''
+  const normalized = {
+    url,
+    title: normalizeStringField(source.title),
+    alt: normalizeStringField(source.alt),
+    provider: normalizeStringField(source.provider),
+    assetId: normalizeStringField(source.assetId || source.asset_id),
+    uploadStatus: normalizeStringField(source.uploadStatus || source.upload_status),
+    uploadedAt: normalizeStringField(source.uploadedAt || source.uploaded_at)
+  }
+  return Object.values(normalized).some((value) => value) ? normalized : {}
+}
+
 export function normalizeVideoSegment(segment) {
   const source = segment || {}
   const segmentTitle = source.segmentTitle || source.segment_title || source.title || ''
@@ -196,6 +243,7 @@ export function createWordDraft(overrides = {}) {
     richTextHtml: overrides.richTextHtml || '',
     videoTitle: overrides.videoTitle || '',
     videoDuration: overrides.videoDuration || '',
+    illustrationImage: overrides.illustrationImage || {},
     pronunciationAudio: overrides.pronunciationAudio || {},
     audioUrl: overrides.audioUrl || '',
     videoSegment: overrides.videoSegment || {},
@@ -224,6 +272,11 @@ export function normalizeWordRecord(record) {
         url: source.audioUrl || source.audio_url || source.pronunciationAudioUrl || source.pronunciation_audio_url || ''
       }
   )
+  const illustrationImage = normalizeIllustrationImage(
+    source.illustrationImage ||
+      source.illustration_image ||
+      {}
+  )
 
   return {
     ...source,
@@ -240,6 +293,7 @@ export function normalizeWordRecord(record) {
     tip: source.tip || '',
     pictograph: source.pictograph || '',
     richTextHtml: source.richTextHtml || '',
+    illustrationImage,
     pronunciationAudio,
     audioUrl: pronunciationAudio.url || '',
     videoTitle: source.videoTitle || (source.video && source.video.title) || '',
@@ -277,6 +331,23 @@ export function validateWordRecord(record) {
   }
   if (!normalized.meaning && !normalized.richTextHtml && !normalized.pictograph) {
     errors.push('at least one explanation field is required')
+  }
+  const rawIllustrationImage = source.illustrationImage || source.illustration_image
+  if (rawIllustrationImage !== undefined && rawIllustrationImage !== null) {
+    if (typeof rawIllustrationImage !== 'object' || Array.isArray(rawIllustrationImage)) {
+      errors.push('illustrationImage must be an object')
+    } else if (
+      rawIllustrationImage.url !== undefined &&
+      rawIllustrationImage.url !== null &&
+      typeof rawIllustrationImage.url !== 'string'
+    ) {
+      errors.push('illustrationImage.url must be a string')
+    } else {
+      const rawIllustrationUrl = normalizeStringField(rawIllustrationImage.url)
+      if (rawIllustrationUrl && !isProductionIllustrationImageUrl(rawIllustrationUrl)) {
+        errors.push('illustrationImage.url must be a production HTTPS URL')
+      }
+    }
   }
   normalized.parts.forEach((part, index) => {
     if (!part.text) {
