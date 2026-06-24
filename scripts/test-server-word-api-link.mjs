@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { once } from 'node:events'
-import { unlink } from 'node:fs/promises'
+import { unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -305,6 +305,61 @@ async function main() {
     assert(detail.status === 200, 'GET /api/words/:id should return 200 for saved word')
     assert(detail.body.word.word === word.word, 'GET /api/words/:id should return the saved word payload')
     assert(detail.body.word.illustrationImage.url === word.illustrationImage.url, 'GET /api/words/:id should return illustrationImage')
+
+    const storedStudentWord = {
+      id: 'student',
+      word: 'student',
+      status: 'published',
+      meaning: 'a learner',
+      illustrationImage: {
+        url: 'https://cdn.baxiaota.com/images/student.png',
+        title: 'student illustration',
+        alt: 'student pictographic explanation'
+      }
+    }
+    const storedUnsafeWords = [
+      ['unsafe-http', 'http://cdn.baxiaota.com/private.png'],
+      ['unsafe-localhost', 'https://localhost/private.png'],
+      ['unsafe-loopback', 'https://127.0.0.1/private.png'],
+      ['unsafe-blob', 'blob:https://baxiaota.com/private'],
+      ['unsafe-data', 'data:image/png;base64,AAAA'],
+      ['unsafe-mock', 'mock-cloud://images/private.png']
+    ].map(([id, url]) => ({
+      id,
+      word: id.replace(/-/g, ''),
+      status: 'published',
+      meaning: 'unsafe image test',
+      illustrationImage: {
+        url,
+        title: 'must not be public'
+      }
+    }))
+    await writeFile(testDataUrl, `${JSON.stringify({
+      words: [storedStudentWord, ...storedUnsafeWords]
+    }, null, 2)}\n`, 'utf8')
+
+    const storedStudentDetail = await readJson(await fetch(`${baseUrl}/api/words/student`))
+    assert(storedStudentDetail.status === 200, 'GET /api/words/student should read an existing words.json record')
+    assert(
+      storedStudentDetail.body.word.illustrationImage.url === storedStudentWord.illustrationImage.url,
+      'GET /api/words/student should expose a stored production illustrationImage'
+    )
+
+    const storedStudentSearch = await readJson(await fetch(`${baseUrl}/api/words?q=student`))
+    assert(storedStudentSearch.status === 200, 'GET /api/words?q=student should return 200')
+    assert(
+      storedStudentSearch.body.words[0].illustrationImage.url === storedStudentWord.illustrationImage.url,
+      'GET /api/words?q=student should expose a stored production illustrationImage'
+    )
+
+    for (const unsafeWord of storedUnsafeWords) {
+      const unsafeImageDetail = await readJson(await fetch(`${baseUrl}/api/words/${unsafeWord.id}`))
+      assert(unsafeImageDetail.status === 200, 'published words with unsafe stored images should remain readable')
+      assert(
+        Object.keys(unsafeImageDetail.body.word.illustrationImage).length === 0,
+        `public detail API should remove stored unsafe illustrationImage URL: ${unsafeWord.illustrationImage.url}`
+      )
+    }
 
     const hiddenWords = [
       { id: 'word-hidden-draft', word: 'hiddendraft', status: 'draft', meaning: 'hidden draft' },

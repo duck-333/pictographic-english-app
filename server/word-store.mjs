@@ -2,7 +2,11 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { normalizeWordQuery, normalizeWordRecord, validateWordRecord } from '../miniapp-uni/word-app1/common/content-schema.js'
+import {
+  normalizeWordQuery,
+  normalizeWordRecord,
+  validateWordRecord
+} from '../miniapp-uni/word-app1/common/content-schema.js'
 
 const DEFAULT_DATA_PATH = new URL('./local-data/words.json', import.meta.url)
 const HOMEPAGE_FEATURED_MODES = ['dailyRotation', 'manual']
@@ -75,6 +79,60 @@ function matchesQuery(word, query) {
     .some((value) => String(value || '').toLowerCase().includes(keyword))
 }
 
+function normalizePublicText(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function isProductionIllustrationImageUrl(value) {
+  const source = normalizePublicText(value)
+  if (!source || /\s/.test(source)) return false
+
+  try {
+    const parsed = new URL(source)
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase()
+    if (parsed.protocol !== 'https:' || !hostname) return false
+    if (hostname === 'localhost' || hostname === '::1') return false
+    if (hostname === 'example.com' || hostname.endsWith('.example.com')) return false
+    const octets = hostname.split('.')
+    if (octets.length === 4 && octets.every((item) => /^\d{1,3}$/.test(item))) {
+      return Number(octets[0]) !== 127
+    }
+    return true
+  } catch (error) {
+    return false
+  }
+}
+
+function normalizePublicIllustrationImage(image) {
+  const source = image && typeof image === 'object' && !Array.isArray(image) ? image : {}
+  const url = normalizePublicText(source.url)
+  if (!isProductionIllustrationImageUrl(url)) return {}
+
+  return {
+    url,
+    title: normalizePublicText(source.title),
+    alt: normalizePublicText(source.alt),
+    provider: normalizePublicText(source.provider),
+    assetId: normalizePublicText(source.assetId || source.asset_id),
+    uploadStatus: normalizePublicText(source.uploadStatus || source.upload_status),
+    uploadedAt: normalizePublicText(source.uploadedAt || source.uploaded_at)
+  }
+}
+
+function normalizePublicWord(source) {
+  const word = normalizeWordRecord(source)
+  const illustrationImage = normalizePublicIllustrationImage(
+    source && typeof source === 'object'
+      ? source.illustrationImage || source.illustration_image || word.illustrationImage
+      : word.illustrationImage
+  )
+
+  return {
+    ...word,
+    illustrationImage
+  }
+}
+
 export function createWordStore(options = {}) {
   const dataPath = options.dataPath ? new URL(options.dataPath, import.meta.url) : DEFAULT_DATA_PATH
   const dataFilePath = fileURLToPath(dataPath)
@@ -118,7 +176,11 @@ export function createWordStore(options = {}) {
       .filter((word) => (options.publishedOnly === false ? true : word.status === 'published'))
       .filter((word) => matchesQuery(word, options.query))
       .slice(0, limit > 0 ? limit : undefined)
-      .map((word) => clone(word))
+      .map((word) => clone(
+        options.publishedOnly === false
+          ? word
+          : normalizePublicWord(word)
+      ))
     return filtered
   }
 
@@ -235,7 +297,7 @@ export function createWordStore(options = {}) {
       const manualWord = publishedById.get(config.manualWordId)
       if (manualWord) {
         return {
-          word: clone(manualWord),
+          word: clone(normalizePublicWord(manualWord)),
           source: 'manual',
           config: clone(config)
         }
@@ -245,7 +307,7 @@ export function createWordStore(options = {}) {
     if (featuredWords.length) {
       const index = getShanghaiDayNumber(options.date || now()) % featuredWords.length
       return {
-        word: clone(featuredWords[index]),
+        word: clone(normalizePublicWord(featuredWords[index])),
         source: 'dailyRotation',
         config: clone(config)
       }

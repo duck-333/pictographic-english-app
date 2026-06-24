@@ -1,5 +1,13 @@
 # Documentation
 
+### 2026-06-23: explicit public illustration projection
+
+Decision:
+- Public word responses now pass through `normalizePublicWord()` in `server/word-store.mjs`.
+- Search, detail, and homepage featured responses explicitly include a cleaned `illustrationImage` for published words.
+- Existing `words.json` records are cleaned at read time: only production HTTPS image URLs survive; HTTP, localhost, loopback, blob, data, and mock URLs become an empty image object.
+- Published status filtering and all non-image word fields remain unchanged.
+
 ### 2026-06-23: production API moved to apex domain
 
 Decision:

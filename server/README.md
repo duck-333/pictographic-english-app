@@ -86,6 +86,20 @@ GET /api/words?q=study
 
 Returns one published word by stable `id`.
 
+Published search and detail responses explicitly pass through `normalizePublicWord()` in `server/word-store.mjs`. A valid stored `illustrationImage` is returned with the word:
+
+```json
+{
+  "illustrationImage": {
+    "url": "https://cdn.baxiaota.com/images/student.png",
+    "title": "student 示意图",
+    "alt": "student 象形讲解"
+  }
+}
+```
+
+If the stored image URL is empty or is not a production HTTPS URL, the public response uses an empty `illustrationImage` object. Unsafe stored URLs are never returned to the mini program.
+
 ### GET /api/homepage/featured-word
 
 Returns the current published homepage recommendation:
@@ -99,6 +113,8 @@ Returns the current published homepage recommendation:
 ```
 
 `source` is `manual`, `dailyRotation`, or `empty`. The endpoint never returns draft, unpublished, archived, review, pending, unknown, or missing-status words.
+
+When `word` is present, it uses the same `normalizePublicWord()` projection as public search and detail responses, including the cleaned `illustrationImage`.
 
 ### GET /api/admin/auth/check
 
