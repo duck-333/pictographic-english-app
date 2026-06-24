@@ -9,7 +9,7 @@
     "build:legacy-demo": "vite build",
     "check": "npm run audit && npm run validate:content && npm run check:miniapp && npm run check:admin && npm run check:server && npm run check:production",
     "check:admin": "node --check admin-portal/pictographic-admin/main.js && node --check admin-portal/pictographic-admin/common/api-client.js",
-    "check:miniapp": "node --check miniapp-uni/word-app1/common/mock-data.js && node --check miniapp-uni/word-app1/common/user-store.js && node --check miniapp-uni/word-app1/common/content-schema.js && node --check miniapp-uni/word-app1/common/api-config.js && node --check miniapp-uni/word-app1/common/word-api-client.js && node --check miniapp-uni/word-app1/common/word-repository.js && npm run test:audio-schema",
+    "check:miniapp": "node --check miniapp-uni/word-app1/common/mock-data.js && node --check miniapp-uni/word-app1/common/user-store.js && node --check miniapp-uni/word-app1/common/content-schema.js && node --check miniapp-uni/word-app1/common/part-visual-style.js && node --check miniapp-uni/word-app1/common/api-config.js && node --check miniapp-uni/word-app1/common/word-api-client.js && node --check miniapp-uni/word-app1/common/word-repository.js && npm run test:audio-schema",
     "check:production": "node scripts/check-production-ready.mjs",
     "check:server": "node --check server/auth.mjs && node --check server/index.mjs && node --check server/word-store.mjs && node scripts/test-server-word-api-link.mjs",
     "dev": "vite",

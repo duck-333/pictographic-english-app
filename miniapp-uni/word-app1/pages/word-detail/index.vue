@@ -292,6 +292,10 @@ import {
   isProductionIllustrationImageUrl,
   isPlayableMediaUrl
 } from '../../common/word-repository.js'
+import {
+  getPartFallbackStyle as resolvePartFallbackStyle,
+  getPartVisualStyle as resolvePartVisualStyle
+} from '../../common/part-visual-style.js'
 import { addRecentWord, getPendingWordId, isFavorite, savePendingWordId, toggleFavorite } from '../../common/user-store.js'
 
 const ENABLE_VIDEO_MODULE = false
@@ -707,42 +711,10 @@ export default {
       this.activePartMeaning = part ? part.meaning : ''
     },
     getPartFallbackStyle(index) {
-      const fallbackStyles = [
-        {
-          color: '#7C3AED',
-          bgColor: '#F3F0FF',
-          borderColor: '#C4B5FD'
-        },
-        {
-          color: '#C9973A',
-          bgColor: '#FFFBEB',
-          borderColor: '#FCD34D'
-        },
-        {
-          color: '#0E7490',
-          bgColor: '#ECFEFF',
-          borderColor: '#A5F3FC'
-        },
-        {
-          color: '#2563EB',
-          bgColor: '#EFF6FF',
-          borderColor: '#BFDBFE'
-        },
-        {
-          color: '#E11D48',
-          bgColor: '#FFF1F2',
-          borderColor: '#FECACA'
-        }
-      ]
-      return fallbackStyles[index % fallbackStyles.length]
+      return resolvePartFallbackStyle(index)
     },
     getPartVisualStyle(part, index) {
-      const fallback = this.getPartFallbackStyle(index)
-      return {
-        color: part && part.color ? part.color : fallback.color,
-        bgColor: part && part.bgColor ? part.bgColor : fallback.bgColor,
-        borderColor: part && part.borderColor ? part.borderColor : fallback.borderColor
-      }
+      return resolvePartVisualStyle(part, index)
     },
     toggleDesc() {
       this.showFullDesc = !this.showFullDesc

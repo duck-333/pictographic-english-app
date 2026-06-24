@@ -179,13 +179,13 @@
               <text class="today-phonetic">{{ todayWord.phonetic }}</text>
             </view>
 
-            <view class="parts-line">
-              <block v-for="(part, index) in todayParts" :key="part.text">
-                <view class="part-chip" :style="{ backgroundColor: part.bgColor, borderColor: part.borderColor }">
-                  <text class="part-text" :style="{ color: part.color }">{{ part.text }}</text>
+            <view v-if="todayDisplayParts.length" class="parts-line">
+              <block v-for="part in todayDisplayParts" :key="part.key">
+                <view class="part-chip" :style="part.chipStyle">
+                  <text class="part-text" :style="part.textStyle">{{ part.text }}</text>
                   <text class="part-meaning">{{ part.meaning }}</text>
                 </view>
-                <text v-if="index < todayPartsLastIndex" class="plus">+</text>
+                <text v-if="part.showPlus" class="plus">+</text>
               </block>
             </view>
 
@@ -214,6 +214,10 @@ import {
   searchWords,
   normalizeWordQuery
 } from '../../common/word-repository.js'
+import {
+  buildPartChipStyle,
+  buildPartTextStyle
+} from '../../common/part-visual-style.js'
 import { addRecentWord, clearRecentWords, getRecentWords, getUserState, savePendingWordId } from '../../common/user-store.js'
 
 export default {
@@ -237,7 +241,6 @@ export default {
       todayWordSource: 'empty',
       todayWordRequestId: 0,
       todayParts: [],
-      todayPartsLastIndex: -1,
       missingDescription: ''
     }
   },
@@ -269,6 +272,29 @@ export default {
         this.todayWord.pictograph ||
         ''
       ).trim()
+    },
+    todayDisplayParts() {
+      if (!Array.isArray(this.todayParts) || !this.todayParts.length) return []
+      const normalizedParts = this.todayParts
+        .map((part, index) => {
+          const source = part && typeof part === 'object' ? part : {}
+          const text = String(source.text || source.label || '').trim()
+          const meaning = String(source.meaning || source.title || '').trim()
+          if (!text && !meaning) return null
+          return {
+            ...source,
+            key: `${text || 'part'}-${index}`,
+            text,
+            meaning,
+            chipStyle: buildPartChipStyle(source, index),
+            textStyle: buildPartTextStyle(source, index)
+          }
+        })
+        .filter((part) => part)
+      return normalizedParts.map((part, index) => ({
+        ...part,
+        showPlus: index < normalizedParts.length - 1
+      }))
     }
   },
   methods: {
@@ -281,7 +307,6 @@ export default {
       this.todayWord = publishedWord
       this.todayWordSource = publishedWord ? source : 'empty'
       this.todayParts = publishedWord && Array.isArray(publishedWord.parts) ? publishedWord.parts : []
-      this.todayPartsLastIndex = this.todayParts.length - 1
     },
     async loadTodayWord() {
       const requestId = this.todayWordRequestId + 1
