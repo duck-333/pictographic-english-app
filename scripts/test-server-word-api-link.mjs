@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { once } from 'node:events'
-import { unlink, writeFile } from 'node:fs/promises'
+import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -48,6 +48,83 @@ async function readJson(response) {
   return {
     status: response.status,
     body
+  }
+}
+
+async function testAdminWordClientPreservesIllustrationPayload() {
+  const originalFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({
+      url: String(url),
+      options
+    })
+    const body = JSON.parse(String(options.body || '{}'))
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        word: body.word
+      })
+    }
+  }
+
+  try {
+    const { saveAdminWordToServer } = await import('../admin-portal/pictographic-admin/common/api-client.js')
+    const illustrationImage = {
+      url: 'https://cdn.baxiaota.com/images/admin-client.png',
+      title: 'Admin client illustration',
+      alt: 'Admin client payload visual'
+    }
+
+    await saveAdminWordToServer({
+      id: 'word-adminclient',
+      word: 'adminclient',
+      status: 'published',
+      meaning: 'admin client payload test',
+      illustrationImage
+    }, {
+      adminApiToken: 'test-admin-token'
+    })
+
+    const payload = JSON.parse(String(calls[0].options.body || '{}'))
+    assert(payload.word.illustrationImage.url === illustrationImage.url, 'admin client payload should include illustrationImage.url')
+    assert(payload.word.illustrationImage.title === illustrationImage.title, 'admin client payload should include illustrationImage.title')
+    assert(payload.word.illustrationImage.alt === illustrationImage.alt, 'admin client payload should include illustrationImage.alt')
+
+    await saveAdminWordToServer({
+      id: 'word-adminclient',
+      word: 'adminclient',
+      status: 'published',
+      meaning: 'admin client payload test',
+      illustration_image: illustrationImage
+    }, {
+      adminApiToken: 'test-admin-token'
+    })
+
+    const aliasPayload = JSON.parse(String(calls[1].options.body || '{}'))
+    assert(aliasPayload.word.illustrationImage.url === illustrationImage.url, 'admin client payload should preserve illustration_image alias as illustrationImage')
+    assert(!Object.prototype.hasOwnProperty.call(aliasPayload.word, 'illustration_image'), 'admin client payload should not send illustration_image alias')
+
+    await saveAdminWordToServer({
+      id: 'word-adminclient',
+      word: 'adminclient',
+      status: 'published',
+      meaning: 'admin client clear payload test',
+      illustrationImage: {
+        url: '',
+        title: '',
+        alt: ''
+      }
+    }, {
+      adminApiToken: 'test-admin-token'
+    })
+
+    const clearedPayload = JSON.parse(String(calls[2].options.body || '{}'))
+    assert(Object.keys(clearedPayload.word.illustrationImage).length === 0, 'admin client payload should send an empty illustrationImage object when cleared')
+  } finally {
+    globalThis.fetch = originalFetch
   }
 }
 
@@ -174,6 +251,8 @@ async function testMiniappPublishedGuards() {
 }
 
 async function main() {
+  await testAdminWordClientPreservesIllustrationPayload()
+
   const fixedNow = () => new Date('2026-06-23T08:00:00.000Z')
   const { server, store, baseUrl } = await startTestServer({ now: fixedNow })
   try {
@@ -271,6 +350,12 @@ async function main() {
     assert(saved.body.ok === true, 'POST /api/admin/words should return ok=true')
     assert(saved.body.word.id === word.id, 'POST /api/admin/words should return the saved word')
     assert(saved.body.word.illustrationImage.url === word.illustrationImage.url, 'POST /api/admin/words should preserve illustrationImage')
+    const persistedAfterSave = JSON.parse(await readFile(testDataUrl, 'utf8'))
+    const persistedSavedWord = persistedAfterSave.words.find((item) => item.id === word.id)
+    assert(
+      persistedSavedWord.illustrationImage.url === word.illustrationImage.url,
+      'POST /api/admin/words should persist illustrationImage to words.json'
+    )
 
     const invalidIllustrationSave = await readJson(await fetch(`${baseUrl}/api/admin/words`, {
       method: 'POST',

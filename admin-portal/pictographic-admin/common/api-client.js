@@ -117,6 +117,38 @@ function createAdminApiError(response, data) {
   return error
 }
 
+function normalizePayloadText(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeIllustrationImagePayload(image) {
+  const source = image && typeof image === 'object' && !Array.isArray(image) ? image : {}
+  const normalized = {
+    url: normalizePayloadText(source.url),
+    title: normalizePayloadText(source.title),
+    alt: normalizePayloadText(source.alt),
+    provider: normalizePayloadText(source.provider),
+    assetId: normalizePayloadText(source.assetId || source.asset_id),
+    uploadStatus: normalizePayloadText(source.uploadStatus || source.upload_status),
+    uploadedAt: normalizePayloadText(source.uploadedAt || source.uploaded_at)
+  }
+  return Object.values(normalized).some((value) => value) ? normalized : {}
+}
+
+function buildAdminWordPayload(word) {
+  const source = word && typeof word === 'object' && !Array.isArray(word) ? word : {}
+  const payload = {
+    ...source,
+    illustrationImage: normalizeIllustrationImagePayload(
+      source.illustrationImage ||
+        source.illustration_image ||
+        {}
+    )
+  }
+  delete payload.illustration_image
+  return payload
+}
+
 export function checkAdminAuth(token, options = {}) {
   if (typeof fetch !== 'function') {
     return Promise.reject(new Error('Admin API is not available in this runtime.'))
@@ -143,7 +175,7 @@ export function saveAdminWordToServer(word, options = {}) {
     return Promise.reject(new Error('Admin API is not available in this runtime.'))
   }
 
-  const payload = { word }
+  const payload = { word: buildAdminWordPayload(word) }
   const url = buildAdminApiUrl('/api/admin/words', options)
 
   return fetch(url, {

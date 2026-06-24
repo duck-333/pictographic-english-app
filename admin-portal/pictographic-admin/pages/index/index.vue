@@ -1055,12 +1055,11 @@ export default {
 			}
 		},
 		currentJson() {
-			return JSON.stringify(this.stripRuntimeVideoFields(this.normalizeWord(this.form)), null, 2)
+			return JSON.stringify(this.buildServerWordPayload(this.form), null, 2)
 		},
 		hasIllustrationImagePayload() {
 			const image = this.form && this.form.illustrationImage ? this.form.illustrationImage : {}
-			return ['url', 'title', 'alt', 'provider', 'assetId', 'uploadStatus', 'uploadedAt']
-				.some((field) => String(image[field] || '').trim())
+			return this.hasIllustrationImageFields(image)
 		},
 		illustrationImagePreviewUrl() {
 			const image = this.form && this.form.illustrationImage ? this.form.illustrationImage : {}
@@ -1600,7 +1599,7 @@ export default {
 			if (this.serverSync.busy) return
 			if (!this.validateCurrent()) return
 			this.persistFormToList()
-			const word = this.stripRuntimeVideoFields(this.normalizeWord(this.form))
+			const word = this.buildServerWordPayload(this.form)
 
 			this.serverSync.busy = true
 			this.serverSync.message = 'Saving current word to server API...'
@@ -1734,7 +1733,7 @@ export default {
 			this.serverSync.message = '正在同步到服务器...'
 			this.saveState = '正在同步到服务器...'
 			try {
-				const result = await saveAdminWordToServer(word, {
+				const result = await saveAdminWordToServer(this.buildServerWordPayload(word), {
 					adminApiToken: this.adminApiTokenDraft
 				})
 				this.serverSync.message = successMessage
@@ -1813,7 +1812,7 @@ export default {
 			const previousWords = clone(this.words)
 			this.form.status = 'archived'
 			this.persistFormToList()
-			const word = this.stripRuntimeVideoFields(this.normalizeWord(this.form))
+			const word = this.buildServerWordPayload(this.form)
 			const result = await this.syncWordToServer(word, '当前词条已归档并同步到服务器')
 			if (!result) {
 				this.form = previousForm
@@ -1879,7 +1878,7 @@ export default {
 				return
 			}
 
-			const word = this.stripRuntimeVideoFields(this.normalizeWord(this.form))
+			const word = this.buildServerWordPayload(this.form)
 			const result = await this.syncWordToServer(word, '当前词条已发布到服务器')
 			if (!result) {
 				this.form = previousForm
@@ -1909,7 +1908,7 @@ export default {
 			const previousWords = clone(this.words)
 			this.form.status = 'unpublished'
 			this.persistFormToList()
-			const word = this.stripRuntimeVideoFields(this.normalizeWord(this.form))
+			const word = this.buildServerWordPayload(this.form)
 			const result = await this.syncWordToServer(word, '当前词条已撤下并同步到服务器')
 			if (!result) {
 				this.form = previousForm
@@ -1943,10 +1942,10 @@ export default {
 
 			const previousForm = clone(this.form)
 			const previousWords = clone(this.words)
-			const publishedPayloads = draftWords.map((item) => this.stripRuntimeVideoFields(this.normalizeWord({
+			const publishedPayloads = draftWords.map((item) => this.buildServerWordPayload({
 				...clone(item),
 				status: 'published'
-			})))
+			}))
 
 			this.serverSync.busy = true
 			this.serverSync.message = `正在发布 ${publishedPayloads.length} 个本地草稿到服务器...`
@@ -3256,6 +3255,24 @@ export default {
 				uploadStatus: String(source.uploadStatus || source.upload_status || '').trim(),
 				uploadedAt: String(source.uploadedAt || source.uploaded_at || '').trim()
 			}
+		},
+		hasIllustrationImageFields(image) {
+			const source = image && typeof image === 'object' && !Array.isArray(image) ? image : {}
+			return ['url', 'title', 'alt', 'provider', 'assetId', 'uploadStatus', 'uploadedAt']
+				.some((field) => String(source[field] || '').trim())
+		},
+		buildServerWordPayload(sourceWord) {
+			const word = this.stripRuntimeVideoFields(this.normalizeWord(sourceWord || this.form))
+			const illustrationImage = this.normalizeIllustrationImage(
+				(word && (word.illustrationImage || word.illustration_image)) ||
+					(sourceWord && (sourceWord.illustrationImage || sourceWord.illustration_image)) ||
+					{}
+			)
+			word.illustrationImage = this.hasIllustrationImageFields(illustrationImage)
+				? illustrationImage
+				: {}
+			delete word.illustration_image
+			return word
 		},
 		handleIllustrationUrlInput() {
 			this.illustrationImagePreviewError = false
