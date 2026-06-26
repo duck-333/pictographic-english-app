@@ -1,9 +1,11 @@
-import { getWordById } from './word-repository.js'
+import { getCachedPublishedRemoteWordById } from './word-repository.js'
 
 export const USER_STATE_KEY = 'pictographic:userState'
 export const PENDING_WORD_ID_KEY = 'pictographic:pendingWordId'
+export const SEARCH_HISTORY_VERSION = 2
 
 const DEFAULT_STATE = {
+  searchHistoryVersion: SEARCH_HISTORY_VERSION,
   recentWordIds: [],
   favoriteWordIds: [],
   searchCount: 0,
@@ -43,6 +45,47 @@ function writeStorage(key, value) {
   return value
 }
 
+function normalizeHistoryId(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return String(value.id || value.word || '').trim()
+  }
+  return String(value || '').trim()
+}
+
+export function isBlockedLegacyHistoryId(value) {
+  const id = normalizeHistoryId(value).toLowerCase()
+  return (
+    !id ||
+    id === 'word-study' ||
+    id.indexOf('mock-') === 0 ||
+    id.indexOf('demo-') === 0
+  )
+}
+
+function normalizeHistoryIds(values) {
+  const result = []
+  const used = {}
+  ;(Array.isArray(values) ? values : []).forEach((value) => {
+    const id = normalizeHistoryId(value)
+    if (!id || isBlockedLegacyHistoryId(id) || used[id]) return
+    used[id] = true
+    result.push(id)
+  })
+  return result.slice(0, 12)
+}
+
+function normalizeFavoriteIds(values) {
+  const result = []
+  const used = {}
+  ;(Array.isArray(values) ? values : []).forEach((value) => {
+    const id = normalizeHistoryId(value)
+    if (!id || isBlockedLegacyHistoryId(id) || used[id]) return
+    used[id] = true
+    result.push(id)
+  })
+  return result
+}
+
 function touchActiveDay(state) {
   const today = todayKey()
   if (state.lastActiveDate === today) {
@@ -58,14 +101,25 @@ function touchActiveDay(state) {
 
 export function getUserState() {
   const state = readStorage(USER_STATE_KEY, DEFAULT_STATE)
-  return {
+  const normalized = {
     ...state,
-    recentWordIds: Array.isArray(state.recentWordIds) ? state.recentWordIds : [],
-    favoriteWordIds: Array.isArray(state.favoriteWordIds) ? state.favoriteWordIds : [],
+    searchHistoryVersion: SEARCH_HISTORY_VERSION,
+    recentWordIds: normalizeHistoryIds(state.recentWordIds),
+    favoriteWordIds: normalizeFavoriteIds(state.favoriteWordIds),
     searchCount: Number(state.searchCount) || 0,
     streakDays: Number(state.streakDays) || 0,
     lastActiveDate: state.lastActiveDate || ''
   }
+
+  if (
+    state.searchHistoryVersion !== SEARCH_HISTORY_VERSION ||
+    JSON.stringify(state.recentWordIds || []) !== JSON.stringify(normalized.recentWordIds) ||
+    JSON.stringify(state.favoriteWordIds || []) !== JSON.stringify(normalized.favoriteWordIds)
+  ) {
+    saveUserState(normalized)
+  }
+
+  return normalized
 }
 
 export function saveUserState(state) {
@@ -76,11 +130,12 @@ export function saveUserState(state) {
 }
 
 export function addRecentWord(wordId, options = {}) {
-  if (!getWordById(wordId)) {
+  const id = normalizeHistoryId(wordId)
+  if (isBlockedLegacyHistoryId(id) || (!options.skipPublishedCacheCheck && !getCachedPublishedRemoteWordById(id))) {
     return getUserState()
   }
   const state = touchActiveDay(getUserState())
-  const recentWordIds = [wordId, ...state.recentWordIds.filter((id) => id !== wordId)].slice(0, 12)
+  const recentWordIds = [id, ...state.recentWordIds.filter((item) => item !== id)].slice(0, 12)
   const shouldCountSearch = options.countSearch !== false
   return saveUserState({
     ...state,
@@ -90,11 +145,13 @@ export function addRecentWord(wordId, options = {}) {
 }
 
 export function toggleFavorite(wordId) {
+  const id = normalizeHistoryId(wordId)
+  if (isBlockedLegacyHistoryId(id)) return false
   const state = getUserState()
-  const hasFavorite = state.favoriteWordIds.includes(wordId)
+  const hasFavorite = state.favoriteWordIds.includes(id)
   const favoriteWordIds = hasFavorite
-    ? state.favoriteWordIds.filter((id) => id !== wordId)
-    : [wordId, ...state.favoriteWordIds]
+    ? state.favoriteWordIds.filter((item) => item !== id)
+    : [id, ...state.favoriteWordIds]
   saveUserState({
     ...state,
     favoriteWordIds
@@ -103,13 +160,41 @@ export function toggleFavorite(wordId) {
 }
 
 export function isFavorite(wordId) {
-  return getUserState().favoriteWordIds.includes(wordId)
+  const id = normalizeHistoryId(wordId)
+  return !isBlockedLegacyHistoryId(id) && getUserState().favoriteWordIds.includes(id)
+}
+
+export function getRecentWordIds() {
+  return getUserState().recentWordIds
 }
 
 export function getRecentWords() {
   return getUserState()
-    .recentWordIds.map((id) => getWordById(id))
+    .recentWordIds.map((id) => getCachedPublishedRemoteWordById(id))
     .filter((item) => item)
+}
+
+export function removeRecentWord(wordId) {
+  const id = normalizeHistoryId(wordId)
+  const state = getUserState()
+  return saveUserState({
+    ...state,
+    recentWordIds: state.recentWordIds.filter((item) => item !== id)
+  })
+}
+
+export function replaceRecentWordId(previousWordId, nextWordId) {
+  const previousId = normalizeHistoryId(previousWordId)
+  const nextId = normalizeHistoryId(nextWordId)
+  if (!previousId || !nextId || isBlockedLegacyHistoryId(nextId)) return getUserState()
+  const state = getUserState()
+  const recentWordIds = state.recentWordIds
+    .map((item) => (item === previousId ? nextId : item))
+    .filter((item, index, list) => list.indexOf(item) === index)
+  return saveUserState({
+    ...state,
+    recentWordIds
+  })
 }
 
 export function clearRecentWords() {
@@ -122,7 +207,7 @@ export function clearRecentWords() {
 
 export function getFavoriteWords() {
   return getUserState()
-    .favoriteWordIds.map((id) => getWordById(id))
+    .favoriteWordIds.map((id) => getCachedPublishedRemoteWordById(id))
     .filter((item) => item)
 }
 

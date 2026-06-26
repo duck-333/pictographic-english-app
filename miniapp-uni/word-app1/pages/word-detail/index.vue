@@ -287,8 +287,6 @@ import {
   fetchWordById,
   fetchWordByWord,
   getRelatedWords,
-  getWordById,
-  getWordByWord,
   isProductionIllustrationImageUrl,
   isPlayableMediaUrl
 } from '../../common/word-repository.js'
@@ -594,7 +592,7 @@ export default {
     async loadWord(options) {
       this.stopPronunciationAudio()
       const optionValue = options && (options.id || options.word) ? options.id || options.word : ''
-      const fallbackValue = optionValue || getPendingWordId() || 'word-study'
+      const fallbackValue = optionValue || getPendingWordId() || ''
       const raw = decodeURIComponent(fallbackValue)
       const preferWordLookup = Boolean(options && options.word && !options.id)
 
@@ -617,16 +615,8 @@ export default {
           }
         }
       } catch (error) {
-        const fallback = error && error.fallback && error.fallback.status === 'published'
-          ? error.fallback
-          : this.resolveLearningNode(raw)
-        if (fallback && fallback.status === 'published') {
-          this.applyLoadedWord(fallback)
-          this.loadErrorMessage = '线上词库暂时无法连接，当前显示本地备用词条，内容可能不是最新版本。'
-        } else {
-          this.notFoundTitle = '暂时无法加载词条'
-          this.notFoundDescription = '线上词库连接失败，请检查网络后重试。'
-        }
+        this.notFoundTitle = '暂时无法加载词条'
+        this.notFoundDescription = '线上词库连接失败，请检查网络后重试。'
         this.loading = false
         return
       }
@@ -648,7 +638,10 @@ export default {
       this.relatedWords = getRelatedWords(word)
       this.bookmarked = isFavorite(word.id)
       this.resetWordViewState()
-      addRecentWord(word.id, { countSearch: false })
+      addRecentWord(word.id, {
+        countSearch: false,
+        skipPublishedCacheCheck: true
+      })
     },
     resetWordViewState() {
       this.expandedPart = ''
@@ -665,21 +658,6 @@ export default {
       this.pronunciationIsPlaying = false
       this.illustrationImageFailed = false
       this.clearClipPlaybackTimer()
-    },
-    resolveLearningNode(rawValue) {
-      const raw = (rawValue || '').trim()
-      if (!raw) return null
-
-      const candidates = [
-        raw,
-        raw.indexOf('word-') === 0 || raw.indexOf('node-') === 0 ? raw : `word-${raw}`,
-        raw.indexOf('word-') === 0 || raw.indexOf('node-') === 0 ? raw : `node-${raw}`
-      ]
-      for (let i = 0; i < candidates.length; i += 1) {
-        const byId = getWordById(candidates[i])
-        if (byId) return byId
-      }
-      return getWordByWord(raw)
     },
     toggleBookmark() {
       if (!this.word) return

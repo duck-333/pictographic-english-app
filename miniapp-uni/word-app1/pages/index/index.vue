@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <view class="page">
     <view class="content">
       <view class="hero">
@@ -86,6 +86,7 @@
                     class="panel-row"
                     hover-class="row-pressed"
                     :data-id="item.id"
+                    data-source="recent"
                     :data-count-search="false"
                     @tap="openDetailFromEvent"
                   >
@@ -207,18 +208,27 @@
 <script>
 import BottomNav from '../../components/BottomNav.vue'
 import {
+  fetchWordById,
   fetchHomepageFeaturedWord,
   fetchWordByWord,
   fetchWords,
-  getWordByWord,
-  searchWords,
   normalizeWordQuery
 } from '../../common/word-repository.js'
 import {
   buildPartChipStyle,
   buildPartTextStyle
 } from '../../common/part-visual-style.js'
-import { addRecentWord, clearRecentWords, getRecentWords, getUserState, savePendingWordId } from '../../common/user-store.js'
+import {
+  addRecentWord,
+  clearRecentWords,
+  getRecentWordIds,
+  getRecentWords,
+  getUserState,
+  isBlockedLegacyHistoryId,
+  removeRecentWord,
+  replaceRecentWordId,
+  savePendingWordId
+} from '../../common/user-store.js'
 
 export default {
   components: {
@@ -240,6 +250,7 @@ export default {
       todayWord: null,
       todayWordSource: 'empty',
       todayWordRequestId: 0,
+      recentWordsRequestId: 0,
       todayParts: [],
       missingDescription: ''
     }
@@ -299,8 +310,80 @@ export default {
   },
   methods: {
     refreshUserData() {
-      this.recentWords = getRecentWords()
       this.userState = getUserState()
+      this.recentWords = getRecentWords()
+      this.refreshRecentWordsFromServer()
+    },
+    async refreshRecentWordsFromServer() {
+      const ids = getRecentWordIds()
+      const requestId = this.recentWordsRequestId + 1
+      this.recentWordsRequestId = requestId
+
+      if (!ids.length) {
+        this.recentWords = []
+        return
+      }
+
+      const verifiedWords = []
+      for (let index = 0; index < ids.length; index += 1) {
+        const id = ids[index]
+        const result = await this.resolvePublishedHistoryWord(id)
+        if (this.recentWordsRequestId !== requestId) return
+        if (result.word) {
+          verifiedWords.push(result.word)
+          if (result.word.id !== id) {
+            replaceRecentWordId(id, result.word.id)
+          }
+        } else if (result.remove) {
+          removeRecentWord(id)
+        }
+      }
+
+      if (this.recentWordsRequestId !== requestId) return
+      const used = {}
+      this.recentWords = verifiedWords.filter((word) => {
+        if (!word || !word.id || used[word.id]) return false
+        used[word.id] = true
+        return word.status === 'published'
+      })
+      this.userState = getUserState()
+    },
+    async resolvePublishedHistoryWord(value) {
+      const raw = String(value || '').trim()
+      if (!raw || isBlockedLegacyHistoryId(raw)) {
+        return { word: null, remove: true }
+      }
+
+      const candidates = [raw]
+      if (raw.indexOf('word-') === 0 || raw.indexOf('node-') === 0) {
+        candidates.push(raw.replace(/^(word|node)-/, ''))
+      }
+
+      for (let index = 0; index < candidates.length; index += 1) {
+        const candidate = candidates[index]
+        try {
+          const byId = await fetchWordById(candidate)
+          if (byId && byId.status === 'published') {
+            return { word: byId, remove: false }
+          }
+        } catch (error) {
+          return { word: null, remove: false, error }
+        }
+      }
+
+      const query = normalizeWordQuery(candidates[candidates.length - 1] || raw)
+      if (query) {
+        try {
+          const byWord = await fetchWordByWord(query)
+          if (byWord && byWord.status === 'published') {
+            return { word: byWord, remove: false }
+          }
+        } catch (error) {
+          return { word: null, remove: false, error }
+        }
+      }
+
+      return { word: null, remove: true }
     },
     applyTodayWord(word, source = 'empty') {
       const publishedWord = word && word.status === 'published' ? word : null
@@ -342,12 +425,9 @@ export default {
         this.results = remoteResults
       } catch (error) {
         if (this.normalizedQuery !== requestWord) return
-        const fallback = error && Array.isArray(error.fallback) ? error.fallback : searchWords(word)
-        this.results = fallback
-        this.searchErrorMessage = fallback.length
-          ? '线上词库暂时无法连接，当前显示本地备用词条，内容可能不是最新版本。'
-          : '线上词库暂时无法连接，请检查网络后重试。'
-        this.missingDescription = fallback.length ? '' : this.searchErrorMessage
+        this.results = []
+        this.searchErrorMessage = '线上词库暂时无法连接，请检查网络后重试。'
+        this.missingDescription = this.searchErrorMessage
       }
     },
     handleQueryInput(event) {
@@ -413,25 +493,14 @@ export default {
         try {
           remoteExact = await fetchWordByWord(word)
         } catch (error) {
-          const fallbackExact = error && error.fallback ? error.fallback : getWordByWord(word)
-          this.searchErrorMessage = fallbackExact
-            ? '线上词库暂时无法连接，正在打开本地备用词条。'
-            : '线上词库暂时无法连接，请检查网络后重试。'
-          if (fallbackExact) {
-            uni.showToast({
-              title: '网络异常，显示本地备用内容',
-              icon: 'none'
-            })
-            this.openDetail(fallbackExact.id, true)
-            return
-          }
           this.results = []
+          this.searchErrorMessage = '线上词库暂时无法连接，请检查网络后重试。'
           this.missingDescription = this.searchErrorMessage
           this.searchPanelOpen = true
           return
         }
         if (remoteExact) {
-          this.openDetail(remoteExact.id, true)
+          this.openDetail(remoteExact.id, true, { trustedWord: remoteExact })
           return
         }
 
@@ -448,22 +517,58 @@ export default {
     },
     openTodayWord() {
       if (!this.todayWord) return
-      this.openDetail(this.todayWord.id, false)
+      this.openDetail(this.todayWord.id, false, { trustedWord: this.todayWord })
     },
-    openDetailFromEvent(event) {
+    async openDetailFromEvent(event) {
       const dataset = event && event.currentTarget ? event.currentTarget.dataset : {}
       const countSearch = dataset.countSearch === true || dataset.countSearch === 'true'
+      const source = String(dataset.source || '')
+      if (source === 'recent') {
+        await this.openRecentDetail(dataset.id)
+        return
+      }
       this.openDetail(dataset.id, countSearch)
     },
-    openDetail(id, countSearch = false) {
+    async openRecentDetail(id) {
+      const result = await this.resolvePublishedHistoryWord(id)
+      if (result.word) {
+        if (result.word.id !== id) {
+          replaceRecentWordId(id, result.word.id)
+          this.refreshUserData()
+        }
+        this.openDetail(result.word.id, false, { trustedWord: result.word })
+        return
+      }
+
+      if (result.remove) {
+        removeRecentWord(id)
+        this.refreshUserData()
+        uni.showToast({
+          title: '该词条暂未发布',
+          icon: 'none'
+        })
+        return
+      }
+
+      uni.showToast({
+        title: '线上词库暂时无法连接',
+        icon: 'none'
+      })
+    },
+    openDetail(id, countSearch = false, options = {}) {
       if (!id) return
       this.searchPanelOpen = false
       this.clearSearchBlurTimer()
-      savePendingWordId(id)
-      addRecentWord(id, { countSearch })
+      const trustedWord = options.trustedWord && options.trustedWord.status === 'published' ? options.trustedWord : null
+      const targetId = trustedWord ? trustedWord.id : id
+      savePendingWordId(targetId)
+      addRecentWord(targetId, {
+        countSearch,
+        skipPublishedCacheCheck: Boolean(trustedWord)
+      })
       this.refreshUserData()
       uni.navigateTo({
-        url: `/pages/word-detail/index?id=${id}`
+        url: `/pages/word-detail/index?id=${targetId}`
       })
     },
     goMine() {

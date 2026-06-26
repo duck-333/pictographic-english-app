@@ -281,10 +281,21 @@ export function getWordById(id) {
   return cloneWord(word)
 }
 
+export function getCachedPublishedRemoteWordById(id) {
+  const word = findWordById(REMOTE_WORD_RECORDS, String(id || '').trim())
+  return word && word.status === 'published' ? cloneWord(word) : null
+}
+
 export function getWordByWord(word) {
   const keyword = normalizeWordQuery(word)
   const record = getPublishedWordRecords().find((item) => item.word.toLowerCase() === keyword)
   return cloneWord(record)
+}
+
+export function getCachedPublishedRemoteWordByWord(word) {
+  const keyword = normalizeWordQuery(word)
+  const record = REMOTE_WORD_RECORDS.find((item) => item.word.toLowerCase() === keyword)
+  return record && record.status === 'published' ? cloneWord(record) : null
 }
 
 export function getWordAccessInfo(value) {

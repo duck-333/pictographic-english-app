@@ -131,15 +131,26 @@ async function testAdminWordClientPreservesIllustrationPayload() {
 async function testMiniappPublishedGuards() {
   const originalUni = globalThis.uni
   let requestHandler = null
+  const storage = {}
   globalThis.uni = {
     request(options) {
       return requestHandler(options)
+    },
+    getStorageSync(key) {
+      return storage[key]
+    },
+    setStorageSync(key, value) {
+      storage[key] = value
+    },
+    removeStorageSync(key) {
+      delete storage[key]
     }
   }
 
   try {
     const repository = await import('../miniapp-uni/word-app1/common/word-repository.js')
     const apiClient = await import('../miniapp-uni/word-app1/common/word-api-client.js')
+    const userStore = await import('../miniapp-uni/word-app1/common/user-store.js')
 
     requestHandler = (options) => {
       options.success({
@@ -158,6 +169,17 @@ async function testMiniappPublishedGuards() {
     const filtered = await repository.fetchWords('client')
     assert(filtered.length === 1, 'mini program repository should keep only published remote search results')
     assert(filtered[0].id === 'word-client-published', 'mini program repository should return the published remote word')
+
+    storage[userStore.USER_STATE_KEY] = {
+      searchHistoryVersion: 1,
+      recentWordIds: ['word-study', 'mock-study', 'demo-study', '', 'word-client-published'],
+      favoriteWordIds: ['word-study']
+    }
+    const migratedUserState = userStore.getUserState()
+    assert(migratedUserState.searchHistoryVersion === userStore.SEARCH_HISTORY_VERSION, 'user store should migrate search history version')
+    assert(migratedUserState.recentWordIds.length === 1, 'user store should remove legacy mock/demo recent ids')
+    assert(migratedUserState.recentWordIds[0] === 'word-client-published', 'user store should keep valid remote recent ids')
+    assert(userStore.getRecentWords()[0].id === 'word-client-published', 'recent words should resolve from remote cache only')
 
     requestHandler = (options) => {
       options.success({
