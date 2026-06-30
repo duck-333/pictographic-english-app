@@ -25,8 +25,12 @@ export function normalizeWordQuery(query) {
   return (query || '').trim().toLowerCase()
 }
 
+export function normalizeWordText(value) {
+  return String(value || '').trim()
+}
+
 export function isEnglishToken(value) {
-  return /^[a-z][a-z'-]{0,44}$/.test(normalizeWordQuery(value))
+  return /^[A-Za-z][A-Za-z'-]{0,44}$/.test(normalizeWordText(value))
 }
 
 export function inferCardKind(record) {
@@ -256,7 +260,8 @@ export function createWordDraft(overrides = {}) {
 
 export function normalizeWordRecord(record) {
   const source = record || {}
-  const word = normalizeWordQuery(source.word)
+  const word = normalizeWordText(source.word)
+  const id = normalizeWordText(source.id || (word ? `word-${word}` : ''))
   const parts = Array.isArray(source.parts) ? source.parts.map((part) => normalizeWordPart(part)) : []
   const examples = Array.isArray(source.examples) ? source.examples.map((item) => normalizeExample(item)) : []
   const siblingIds = Array.isArray(source.siblingIds) ? source.siblingIds.filter((id) => id) : []
@@ -280,7 +285,7 @@ export function normalizeWordRecord(record) {
 
   return {
     ...source,
-    id: source.id || (word ? `word-${word}` : ''),
+    id,
     kind: source.kind || inferCardKind(source),
     status: source.status || CONTENT_STATUS.draft,
     word,
@@ -318,7 +323,10 @@ export function validateWordRecord(record) {
     errors.push('word is required')
   }
   if (source.word && String(source.word) !== normalized.word) {
-    errors.push('word must be lowercase and trimmed')
+    errors.push('word must be trimmed')
+  }
+  if (source.id && String(source.id) !== normalized.id) {
+    errors.push('id must be trimmed')
   }
   if (!Object.values(CARD_KIND).includes(normalized.kind)) {
     errors.push(`kind must be one of: ${Object.values(CARD_KIND).join(', ')}`)

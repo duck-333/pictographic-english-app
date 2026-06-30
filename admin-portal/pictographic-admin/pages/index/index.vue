@@ -111,7 +111,10 @@
 				</view>
 				<view class="bucket-tabs">
 					<button :class="['bucket-tab', activeBucket === 'uploaded' ? 'active' : '']" @click="switchBucket('uploaded')">
-						已上传 {{ stats.manageable }}
+						已发布 {{ uploadedWords.length }}
+					</button>
+					<button :class="['bucket-tab', activeBucket === 'draft' ? 'active' : '']" @click="switchBucket('draft')">
+						草稿 {{ stats.draft }}
 					</button>
 					<button :class="['bucket-tab', activeBucket === 'pending' ? 'active' : '']" @click="switchBucket('pending')">
 						未上传 {{ pendingWords.length }}
@@ -126,6 +129,15 @@
 						<text class="summary-main">{{ activeListTotal }} 个词条</text>
 					</view>
 					<text class="summary-sub">搜索结果 {{ visibleWordCount }} 个</text>
+				</view>
+				<view v-if="hasBatchSelectionToolbar" class="batch-toolbar">
+					<button class="select-all-control" :class="{ checked: allVisibleSelected }" :disabled="serverSync.busy || !visibleSelectableWords.length" @click="toggleSelectAllVisible">
+						<text class="select-box">{{ allVisibleSelected ? '✓' : '' }}</text>
+						<text>{{ allVisibleSelected ? '取消全选' : '全选当前结果' }}</text>
+					</button>
+					<button class="batch-action-button" :disabled="serverSync.busy || !selectedBatchCount" @click="applyBatchOperation">
+						{{ batchActionLabel }}
+					</button>
 				</view>
 				<scroll-view class="word-list accordion-list" scroll-y>
 					<view v-for="group in letterGroups" :key="activeBucket + '-' + group.letter" class="letter-group">
@@ -143,9 +155,16 @@
 							<view
 								v-for="word in group.words"
 								:key="word.id"
-								:class="['accordion-word-row', selectedId === word.id ? 'active' : '', getEntryType(word)]"
+								:class="['accordion-word-row', hasBatchSelectionToolbar ? 'selectable' : '', selectedId === word.id ? 'active' : '', getEntryType(word)]"
 								@click.stop="selectEntry(word.id)"
 							>
+								<view
+									v-if="hasBatchSelectionToolbar"
+									:class="['entry-checkbox', isWordSelected(word) ? 'checked' : '']"
+									@click.stop="toggleWordSelection(word)"
+								>
+									<text>{{ isWordSelected(word) ? '✓' : '' }}</text>
+								</view>
 								<view :class="['entry-dot', getEntryType(word)]">
 									<text>{{ entryTypeShort(word) }}</text>
 								</view>
@@ -942,6 +961,9 @@ export default {
 			importResult: '可以先导入 20-50 条试跑，确认字段和拆解无误后再导入整章。',
 			words: [],
 			pendingWords: [],
+			uploadedSelectedIds: [],
+			draftSelectedIds: [],
+			archivedSelectedIds: [],
 			activeBucket: 'uploaded',
 			selectedSource: 'uploaded',
 			selectedId: '',
@@ -1014,15 +1036,24 @@ export default {
 		}
 	},
 	computed: {
+		uploadedWords() {
+			return this.words.filter((item) =>
+				item.status !== 'archived' &&
+				item.status !== 'draft' &&
+				item.status !== 'pending'
+			)
+		},
 		activeWords() {
 			if (this.activeBucket === 'pending') return this.pendingWords
 			if (this.activeBucket === 'archived') return this.words.filter((item) => item.status === 'archived')
-			return this.words.filter((item) => item.status !== 'archived')
+			if (this.activeBucket === 'draft') return this.words.filter((item) => item.status === 'draft')
+			return this.uploadedWords
 		},
 		activeBucketLabel() {
 			if (this.activeBucket === 'pending') return '未上传待检查'
 			if (this.activeBucket === 'archived') return '已归档词条'
-			return '已上传草稿库'
+			if (this.activeBucket === 'draft') return '本地草稿列表'
+			return '已发布 / 已撤下词条'
 		},
 		activeListTotal() {
 			return this.activeWords.length
@@ -1044,6 +1075,40 @@ export default {
 		},
 		filteredWords() {
 			return this.activeWords.filter((item) => this.matchesKeyword(item))
+		},
+		hasBatchSelectionToolbar() {
+			return ['uploaded', 'draft', 'archived'].includes(this.activeBucket)
+		},
+		visibleSelectableWords() {
+			return this.hasBatchSelectionToolbar
+				? this.filteredWords.filter((item) => item && String(item.id || '').trim())
+				: []
+		},
+		currentBatchSelectedIds() {
+			const key = this.getSelectionKeyForBucket(this.activeBucket)
+			return key ? this[key] : []
+		},
+		selectedBatchCount() {
+			return this.currentBatchSelectedIds.length
+		},
+		allVisibleSelected() {
+			const visibleIds = this.visibleSelectableWords.map((item) => item.id)
+			if (!visibleIds.length) return false
+			const selected = this.currentBatchSelectedIds.reduce((result, id) => {
+				result[id] = true
+				return result
+			}, {})
+			return visibleIds.every((id) => selected[id])
+		},
+		batchActionText() {
+			if (this.activeBucket === 'archived') return '删除所选词条'
+			if (this.activeBucket === 'draft') return '归档所选词条'
+			return '撤下所选词条到草稿'
+		},
+		batchActionLabel() {
+			return this.selectedBatchCount
+				? `${this.batchActionText}（${this.selectedBatchCount}）`
+				: this.batchActionText
 		},
 		stats() {
 			return {
@@ -1407,8 +1472,10 @@ export default {
 			const source = saved && saved.length ? saved : seedWords
 			this.words = clone(source).map((item) => this.normalizeWord(item))
 			this.pendingWords = savedPending && savedPending.length ? clone(savedPending).map((item) => this.normalizePendingWord(item)) : []
-			const initialWords = this.words.filter((item) => item.status !== 'archived')
-			this.activeBucket = 'uploaded'
+			const initialUploadedWords = this.words.filter((item) => item.status !== 'archived' && item.status !== 'draft')
+			const initialDraftWords = this.words.filter((item) => item.status === 'draft')
+			const initialWords = initialUploadedWords.length ? initialUploadedWords : initialDraftWords
+			this.activeBucket = initialUploadedWords.length ? 'uploaded' : 'draft'
 			this.selectedSource = 'uploaded'
 			this.selectedId = initialWords[0] ? initialWords[0].id : ''
 			this.form = initialWords[0] ? clone(initialWords[0]) : clone(seedWords[0])
@@ -1417,9 +1484,66 @@ export default {
 			this.expandedLetters = this.defaultExpandedLetters(initialWords)
 			this.syncVideoUploadStateFromForm()
 		},
+		getSelectionKeyForBucket(bucket) {
+			if (bucket === 'uploaded') return 'uploadedSelectedIds'
+			if (bucket === 'draft') return 'draftSelectedIds'
+			if (bucket === 'archived') return 'archivedSelectedIds'
+			return ''
+		},
+		clearBatchSelection(bucket) {
+			const key = this.getSelectionKeyForBucket(bucket)
+			if (key) {
+				this[key] = []
+			}
+		},
+		clearAllBatchSelections() {
+			this.uploadedSelectedIds = []
+			this.draftSelectedIds = []
+			this.archivedSelectedIds = []
+		},
+		setBatchSelection(ids) {
+			const key = this.getSelectionKeyForBucket(this.activeBucket)
+			if (!key) return
+			const used = {}
+			this[key] = (Array.isArray(ids) ? ids : [])
+				.map((id) => String(id || '').trim())
+				.filter((id) => {
+					if (!id || used[id]) return false
+					used[id] = true
+					return true
+				})
+		},
+		isWordSelected(word) {
+			const id = String(word && word.id ? word.id : '').trim()
+			return !!id && this.currentBatchSelectedIds.includes(id)
+		},
+		toggleWordSelection(word) {
+			const id = String(word && word.id ? word.id : '').trim()
+			if (!id) return
+			const selected = this.currentBatchSelectedIds.slice()
+			const index = selected.indexOf(id)
+			if (index >= 0) {
+				selected.splice(index, 1)
+			} else {
+				selected.push(id)
+			}
+			this.setBatchSelection(selected)
+		},
+		toggleSelectAllVisible() {
+			if (!this.visibleSelectableWords.length) return
+			if (this.allVisibleSelected) {
+				this.setBatchSelection([])
+				return
+			}
+			this.setBatchSelection(this.visibleSelectableWords.map((item) => item.id))
+		},
 		switchBucket(bucket) {
 			if (this.activeBucket === bucket) return
-			const applySwitch = () => this.applyBucketSwitch(bucket)
+			const previousBucket = this.activeBucket
+			const applySwitch = () => {
+				this.clearBatchSelection(previousBucket)
+				this.applyBucketSwitch(bucket)
+			}
 			if (this.validateCurrent()) {
 				this.persistFormToList()
 				applySwitch()
@@ -1506,7 +1630,7 @@ export default {
 		createWord() {
 			if (!this.validateCurrent()) return
 			this.persistFormToList()
-			this.activeBucket = 'uploaded'
+			this.activeBucket = 'draft'
 			this.selectedSource = 'uploaded'
 			const nextIndex = this.words.length + 1
 			const next = {
@@ -1572,10 +1696,8 @@ export default {
 			this.persistFormToList()
 			if (!this.validateAllWords()) return
 			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
-			if (this.activeBucket === 'archived') {
-				this.activeBucket = 'uploaded'
-				this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
-			}
+			this.activeBucket = 'draft'
+			this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
 			this.saveState = '当前词条已保存为草稿'
 			uni.showToast({ title: '已保存为草稿', icon: 'success' })
 		},
@@ -1764,7 +1886,10 @@ export default {
 			}
 		},
 		normalizePublishIdentityValue(value) {
-			return String(value || '').trim().toLowerCase()
+			return String(value || '').trim()
+		},
+		normalizeLookupIdentityValue(value) {
+			return this.normalizePublishIdentityValue(value).toLowerCase()
 		},
 		getWordLookupValues(...sources) {
 			const values = []
@@ -1792,7 +1917,7 @@ export default {
 		},
 		hasWordIdentityOverlap(leftSources, rightSources) {
 			const leftKeys = this.getWordLookupValues(...leftSources)
-				.map((value) => this.normalizePublishIdentityValue(value))
+				.map((value) => this.normalizeLookupIdentityValue(value))
 				.filter(Boolean)
 			if (!leftKeys.length) return false
 			const leftSet = leftKeys.reduce((result, value) => {
@@ -1800,12 +1925,12 @@ export default {
 				return result
 			}, {})
 			return this.getWordLookupValues(...rightSources)
-				.map((value) => this.normalizePublishIdentityValue(value))
+				.map((value) => this.normalizeLookupIdentityValue(value))
 				.some((value) => value && leftSet[value])
 		},
 		findLocalWordIndexByIdentity(...sources) {
 			const lookupKeys = this.getWordLookupValues(...sources)
-				.map((value) => this.normalizePublishIdentityValue(value))
+				.map((value) => this.normalizeLookupIdentityValue(value))
 				.filter(Boolean)
 			if (!lookupKeys.length) return -1
 			const lookupSet = lookupKeys.reduce((result, value) => {
@@ -1813,7 +1938,7 @@ export default {
 				return result
 			}, {})
 			return this.words.findIndex((item) => this.getWordLookupValues(item)
-				.map((value) => this.normalizePublishIdentityValue(value))
+				.map((value) => this.normalizeLookupIdentityValue(value))
 				.some((value) => value && lookupSet[value]))
 		},
 		isPublishedServerWord(word) {
@@ -1840,14 +1965,14 @@ export default {
 				try {
 					const words = await searchPublicWordsFromServer(query)
 					const lookupKeys = this.getWordLookupValues(sourceWord, payload)
-						.map((value) => this.normalizePublishIdentityValue(value))
+						.map((value) => this.normalizeLookupIdentityValue(value))
 						.filter(Boolean)
 					const lookupSet = lookupKeys.reduce((result, value) => {
 						result[value] = true
 						return result
 					}, {})
 					const matched = words.find((item) => this.isPublishedServerWord(item) && this.getWordLookupValues(item)
-						.map((value) => this.normalizePublishIdentityValue(value))
+						.map((value) => this.normalizeLookupIdentityValue(value))
 						.some((value) => value && lookupSet[value]))
 					if (matched) {
 						return { found: true, word: matched }
@@ -2299,6 +2424,217 @@ export default {
 				this.serverSync.busy = false
 			}
 		},
+		getSelectedWordsForActiveBucket() {
+			const selected = this.currentBatchSelectedIds.reduce((result, id) => {
+				result[id] = true
+				return result
+			}, {})
+			return this.activeWords.filter((item) => item && selected[item.id])
+		},
+		refreshActiveListAfterBatchOperation() {
+			const list = this.activeWords
+			const current = list.find((item) => item.id === this.selectedId)
+			if (current) {
+				this.form = clone(current)
+				this.syncVideoUploadStateFromForm()
+				this.ensureLetterExpanded(this.getFirstLetter(current) || '#')
+				return
+			}
+
+			if (list[0]) {
+				this.selectedSource = this.activeBucket === 'pending' ? 'pending' : 'uploaded'
+				this.selectedId = list[0].id
+				this.form = clone(list[0])
+				this.syncVideoUploadStateFromForm()
+				this.ensureLetterExpanded(this.getFirstLetter(list[0]) || '#')
+				return
+			}
+
+			this.selectedId = ''
+			this.form = clone(seedWords[0])
+			this.syncVideoUploadStateFromForm()
+		},
+		confirmBatchAction(title, content, confirmText) {
+			return new Promise((resolve) => {
+				uni.showModal({
+					title,
+					content,
+					confirmText,
+					cancelText: '取消',
+					confirmColor: '#fe8500',
+					success: (result) => resolve(!!result.confirm),
+					fail: () => resolve(false)
+				})
+			})
+		},
+		async applyBatchOperation() {
+			if (this.serverSync.busy) return
+			const selectedWords = this.getSelectedWordsForActiveBucket()
+			if (!selectedWords.length) {
+				uni.showToast({ title: '请先选择词条', icon: 'none' })
+				return
+			}
+
+			if (this.activeBucket === 'uploaded') {
+				await this.batchMoveUploadedWordsToDraft(selectedWords)
+				return
+			}
+			if (this.activeBucket === 'draft') {
+				await this.batchArchiveDraftWords(selectedWords)
+				return
+			}
+			if (this.activeBucket === 'archived') {
+				await this.batchDeleteArchivedWords(selectedWords)
+			}
+		},
+		async batchMoveUploadedWordsToDraft(selectedWords) {
+			const confirmed = await this.confirmBatchAction(
+				'撤下所选词条到草稿',
+				`确定将已选 ${selectedWords.length} 个词条撤下到草稿吗？`,
+				'确认撤下'
+			)
+			if (!confirmed) return
+
+			const failed = []
+			let changed = 0
+			this.serverSync.busy = true
+			try {
+				for (let index = 0; index < selectedWords.length; index += 1) {
+					const item = selectedWords[index]
+					if (item.status === 'archived' || item.status === 'draft') {
+						failed.push(`${item.id || item.word || '未知词条'}：当前状态不可撤下`)
+						continue
+					}
+					const next = this.normalizeWord(Object.assign({}, item, { status: 'draft' }))
+					this.serverSync.message = `正在撤下 ${index + 1}/${selectedWords.length}：${item.word || item.id}`
+					try {
+						const result = await saveAdminWordToServer(this.buildServerWordPayload(next), {
+							adminApiToken: this.adminApiTokenDraft
+						})
+						const savedWord = this.normalizeWord((result && result.word) || next)
+						const localIndex = this.findLocalWordIndexByIdentity(item, savedWord)
+						if (localIndex >= 0) {
+							this.words.splice(localIndex, 1, savedWord)
+							changed += 1
+						} else {
+							failed.push(`${item.id || item.word || '未知词条'}：本地词条未找到`)
+						}
+					} catch (error) {
+						failed.push(`${item.id || item.word || '未知词条'}：${this.getErrorMessage(error)}`)
+						if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+							this.handleAdminUnauthorized()
+							break
+						}
+					}
+				}
+			} finally {
+				this.serverSync.busy = false
+			}
+			this.persistWordsToStorage()
+			this.clearBatchSelection('uploaded')
+			this.refreshActiveListAfterBatchOperation()
+			this.saveState = `已撤下 ${changed} 个词条到草稿`
+			const content = failed.length
+				? `已撤下 ${changed} 个。\n失败词条：\n${failed.join('\n')}`
+				: `已撤下 ${changed} 个词条到草稿。`
+			uni.showModal({
+				title: failed.length ? '批量撤下完成（有跳过）' : '批量撤下完成',
+				content,
+				showCancel: false
+			})
+		},
+		async batchArchiveDraftWords(selectedWords) {
+			const confirmed = await this.confirmBatchAction(
+				'归档所选草稿',
+				`确定将已选 ${selectedWords.length} 个草稿词条归档吗？`,
+				'确认归档'
+			)
+			if (!confirmed) return
+
+			const failed = []
+			let changed = 0
+			this.serverSync.busy = true
+			try {
+				for (let index = 0; index < selectedWords.length; index += 1) {
+					const item = selectedWords[index]
+					if (item.status !== 'draft') {
+						failed.push(`${item.id || item.word || '未知词条'}：不是草稿状态`)
+						continue
+					}
+					const next = this.normalizeWord(Object.assign({}, item, { status: 'archived' }))
+					this.serverSync.message = `正在归档 ${index + 1}/${selectedWords.length}：${item.word || item.id}`
+					try {
+						const result = await saveAdminWordToServer(this.buildServerWordPayload(next), {
+							adminApiToken: this.adminApiTokenDraft
+						})
+						const savedWord = this.normalizeWord((result && result.word) || next)
+						const localIndex = this.findLocalWordIndexByIdentity(item, savedWord)
+						if (localIndex >= 0) {
+							this.words.splice(localIndex, 1, savedWord)
+							changed += 1
+						} else {
+							failed.push(`${item.id || item.word || '未知词条'}：本地词条未找到`)
+						}
+					} catch (error) {
+						failed.push(`${item.id || item.word || '未知词条'}：${this.getErrorMessage(error)}`)
+						if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+							this.handleAdminUnauthorized()
+							break
+						}
+					}
+				}
+			} finally {
+				this.serverSync.busy = false
+			}
+			this.persistWordsToStorage()
+			this.clearBatchSelection('draft')
+			this.refreshActiveListAfterBatchOperation()
+			this.saveState = `已归档 ${changed} 个草稿词条`
+			const content = failed.length
+				? `已归档 ${changed} 个。\n失败词条：\n${failed.join('\n')}`
+				: `已归档 ${changed} 个草稿词条。`
+			uni.showModal({
+				title: failed.length ? '批量归档完成（有跳过）' : '批量归档完成',
+				content,
+				showCancel: false
+			})
+		},
+		async batchDeleteArchivedWords(selectedWords) {
+			const confirmed = await this.confirmBatchAction(
+				'永久删除归档词条',
+				`确定永久删除已选 ${selectedWords.length} 个归档词条吗？此操作不可恢复。`,
+				'确认删除'
+			)
+			if (!confirmed) return
+
+			const selected = selectedWords.reduce((result, item) => {
+				result[item.id] = true
+				return result
+			}, {})
+			const failed = []
+			let changed = 0
+			this.words = this.words.filter((item) => {
+				if (!selected[item.id]) return true
+				if (item.status !== 'archived') {
+					failed.push(item.id || item.word || '未知词条')
+					return true
+				}
+				changed += 1
+				return false
+			})
+			this.persistWordsToStorage()
+			this.clearBatchSelection('archived')
+			this.refreshActiveListAfterBatchOperation()
+			this.saveState = `已删除 ${changed} 个归档词条`
+			const content = failed.length
+				? `已删除 ${changed} 个。以下词条未处理：${failed.join('、')}`
+				: `已删除 ${changed} 个归档词条。`
+			uni.showModal({
+				title: failed.length ? '批量删除完成（有跳过）' : '批量删除完成',
+				content,
+				showCancel: false
+			})
+		},
 		confirmPublish(title, content, onConfirm) {
 			uni.showModal({
 				title,
@@ -2356,9 +2692,14 @@ export default {
 				return false
 			}
 			const targetList = this.selectedSource === 'pending' ? this.pendingWords : this.words
+			const idKey = this.normalizeLookupIdentityValue(id)
 			const duplicate = this.isHiddenAdminStatus(this.form.status)
 				? null
-				: targetList.find((item) => item.id === id && item.id !== this.selectedId && !this.isHiddenAdminStatus(item.status))
+				: targetList.find((item) =>
+					this.normalizeLookupIdentityValue(item.id) === idKey &&
+					this.normalizeLookupIdentityValue(item.id) !== this.normalizeLookupIdentityValue(this.selectedId) &&
+					!this.isHiddenAdminStatus(item.status)
+				)
 			if (duplicate) {
 				uni.showToast({ title: '单词 ID 已存在', icon: 'none' })
 				return false
@@ -2389,7 +2730,8 @@ export default {
 					uni.showToast({ title: '词条必须以英文字母开头', icon: 'none' })
 					return false
 				}
-				if (seen[id]) {
+				const idKey = this.normalizeLookupIdentityValue(id)
+				if (seen[idKey]) {
 					uni.showToast({ title: '存在重复单词 ID', icon: 'none' })
 					return false
 				}
@@ -2403,21 +2745,25 @@ export default {
 					uni.showToast({ title: videoResult.message, icon: 'none' })
 					return false
 				}
-				seen[id] = true
+				seen[idKey] = true
 			}
 			return true
 		},
 		resetDraft() {
 			uni.removeStorageSync(STORAGE_KEY)
 			uni.removeStorageSync(PENDING_STORAGE_KEY)
+			this.clearAllBatchSelections()
 			this.words = clone(seedWords)
 			this.pendingWords = []
-			this.activeBucket = 'uploaded'
+			const initialUploadedWords = this.words.filter((item) => item.status !== 'archived' && item.status !== 'draft')
+			const initialDraftWords = this.words.filter((item) => item.status === 'draft')
+			const initialWords = initialUploadedWords.length ? initialUploadedWords : initialDraftWords
+			this.activeBucket = initialUploadedWords.length ? 'uploaded' : 'draft'
 			this.selectedSource = 'uploaded'
-			this.selectedId = this.words[0].id
-			this.form = clone(this.words[0])
+			this.selectedId = initialWords[0] ? initialWords[0].id : ''
+			this.form = initialWords[0] ? clone(initialWords[0]) : clone(seedWords[0])
 			this.syncVideoUploadStateFromForm()
-			this.expandedLetters = this.defaultExpandedLetters(this.words)
+			this.expandedLetters = this.defaultExpandedLetters(initialWords)
 			this.saveState = '已恢复示例数据'
 		},
 		addPart() {
@@ -2448,6 +2794,7 @@ export default {
 			const normalizedKeyword = String(this.keywordDraft || '').trim()
 			this.keyword = normalizedKeyword
 			this.keywordDraft = normalizedKeyword
+			this.clearBatchSelection(this.activeBucket)
 			if (!normalizedKeyword) {
 				this.expandedLetters = this.defaultExpandedLetters(this.activeWords)
 				return
@@ -2460,6 +2807,7 @@ export default {
 		clearKeywordSearch() {
 			this.keywordDraft = ''
 			this.keyword = ''
+			this.clearBatchSelection(this.activeBucket)
 			this.expandedLetters = this.defaultExpandedLetters(this.activeWords)
 		},
 		matchesKeyword(item) {
@@ -4077,7 +4425,7 @@ export default {
 					this.applyImportedWords([draft], existed ? 0 : 1, existed ? 1 : 0, { silentToast: true })
 					this.pendingWords = this.pendingWords.filter((item) => item.id !== target.id)
 					this.persistPendingWords()
-					this.activeBucket = 'uploaded'
+					this.activeBucket = 'draft'
 					this.selectedSource = 'uploaded'
 					this.selectedId = draft.id
 					this.form = clone(draft)
@@ -4120,7 +4468,7 @@ export default {
 					this.applyImportedWords(drafts, newCount, updateCount, { silentToast: true })
 					this.pendingWords = []
 					this.persistPendingWords()
-					this.activeBucket = 'uploaded'
+					this.activeBucket = 'draft'
 					this.selectedSource = 'uploaded'
 					if (drafts[0]) {
 						this.selectedId = drafts[0].id
@@ -5456,7 +5804,7 @@ button::after {
 
 .bucket-tabs {
 	display: grid;
-	grid-template-columns: repeat(3, 1fr);
+	grid-template-columns: repeat(4, 1fr);
 	gap: 10px;
 	margin-top: 14px;
 }
@@ -5496,6 +5844,78 @@ button::after {
 	border-radius: 18px;
 	background: linear-gradient(135deg, #f5fbff, #e7f5fc);
 	border: 1px solid #d8e9f2;
+}
+
+.batch-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin-top: 10px;
+	padding: 10px 12px;
+	border-radius: 16px;
+	border: 1px solid #d8e9f2;
+	background: #f8fcff;
+}
+
+.select-all-control,
+.batch-action-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	min-height: 34px;
+	padding: 0 12px;
+	border-radius: 999px;
+	font-size: 12px;
+	font-weight: 800;
+}
+
+.select-all-control {
+	background: #fff;
+	color: #0e3a5c;
+	border: 1px solid #d8e9f2;
+}
+
+.select-all-control.checked {
+	border-color: #15a27e;
+	background: #edf9f5;
+	color: #13795b;
+}
+
+.select-box,
+.entry-checkbox {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	border: 2px solid #b9c9d4;
+	background: #fff;
+	color: #fff;
+	font-weight: 900;
+}
+
+.select-box {
+	width: 18px;
+	height: 18px;
+	border-radius: 5px;
+	font-size: 12px;
+}
+
+.select-all-control.checked .select-box,
+.entry-checkbox.checked {
+	border-color: #15a27e;
+	background: #15a27e;
+}
+
+.batch-action-button {
+	background: #0e3a5c;
+	color: #fff;
+}
+
+.batch-action-button[disabled],
+.select-all-control[disabled] {
+	opacity: 0.45;
 }
 
 .summary-kicker,
@@ -5604,6 +6024,19 @@ button::after {
 	border-radius: 16px;
 	background: #f8fcff;
 	border: 1px solid transparent;
+	cursor: pointer;
+}
+
+.accordion-word-row.selectable {
+	grid-template-columns: 24px 34px minmax(0, 1fr) auto 14px;
+}
+
+.entry-checkbox {
+	width: 22px;
+	height: 22px;
+	margin-top: 4px;
+	border-radius: 6px;
+	font-size: 13px;
 	cursor: pointer;
 }
 

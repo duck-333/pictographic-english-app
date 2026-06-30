@@ -40,6 +40,10 @@ function normalizeId(value) {
   return String(value || '').trim()
 }
 
+function normalizeLookupKey(value) {
+  return normalizeId(value).toLowerCase()
+}
+
 function normalizeIdList(values) {
   const result = []
   const used = new Set()
@@ -193,7 +197,9 @@ export function createWordStore(options = {}) {
     const targetId = String(id || '').trim()
     if (!targetId) return null
     const words = await listWords({ publishedOnly: options.publishedOnly, query: '' })
-    const word = words.find((item) => item.id === targetId)
+    const targetKey = normalizeLookupKey(targetId)
+    const word = words.find((item) => item.id === targetId) ||
+      words.find((item) => normalizeLookupKey(item.id) === targetKey)
     return word ? clone(word) : null
   }
 
@@ -210,7 +216,11 @@ export function createWordStore(options = {}) {
 
     const payload = await readPayload()
     const words = payload.words.map((word) => normalizeWordRecord(word))
-    const index = words.findIndex((word) => word.id === validation.value.id)
+    const targetKey = normalizeLookupKey(validation.value.id)
+    const exactIndex = words.findIndex((word) => word.id === validation.value.id)
+    const index = exactIndex >= 0
+      ? exactIndex
+      : words.findIndex((word) => normalizeLookupKey(word.id) === targetKey)
     if (index >= 0) {
       words.splice(index, 1, validation.value)
     } else {
