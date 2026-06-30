@@ -154,10 +154,22 @@ function getAllWordRecords() {
   return mergePreviewWords(WORD_RECORDS, REMOTE_WORD_RECORDS).map((item) => normalizeWordRecord(item))
 }
 
+function normalizeRemoteDisplayWord(word) {
+  const source = word && typeof word === 'object' && !Array.isArray(word) ? word : {}
+  const normalized = normalizeWordRecord(source)
+  const rawId = String(source.id || '').trim()
+  const rawWord = String(source.word || '').trim()
+  return {
+    ...normalized,
+    id: rawId || normalized.id,
+    word: rawWord || normalized.word
+  }
+}
+
 function normalizePublishedRemoteWords(words) {
   return (Array.isArray(words) ? words : [])
     .filter((item) => item && item.status === 'published')
-    .map((item) => normalizeWordRecord(item))
+    .map((item) => normalizeRemoteDisplayWord(item))
     .filter((item) => item.status === 'published')
 }
 
@@ -165,7 +177,7 @@ function cacheRemoteWords(words) {
   const publishedWords = normalizePublishedRemoteWords(words)
   if (!publishedWords.length) return []
   REMOTE_WORD_RECORDS = mergePreviewWords(REMOTE_WORD_RECORDS, publishedWords)
-    .map((item) => normalizeWordRecord(item))
+    .map((item) => normalizeRemoteDisplayWord(item))
     .filter((item) => item.status === 'published')
   return publishedWords.map((item) => cloneWord(item))
 }
@@ -347,7 +359,7 @@ export function fetchHomepageFeaturedWord() {
       }
       cacheRemoteWords([word])
       return {
-        word: cloneWord(normalizeWordRecord(word)),
+        word: cloneWord(normalizeRemoteDisplayWord(word)),
         source: String(result.source || 'dailyRotation')
       }
     })
@@ -361,7 +373,7 @@ export function fetchWordById(id) {
     .then((word) => {
       if (!word || word.status !== 'published') return null
       cacheRemoteWords([word])
-      return cloneWord(normalizeWordRecord(word))
+      return cloneWord(normalizeRemoteDisplayWord(word))
     })
     .catch((error) => {
       throw createRemoteFailure(error, getWordById(id) || getWordByWord(id))
