@@ -218,11 +218,7 @@ export function createWordStore(options = {}) {
 
     const payload = await readPayload()
     const words = payload.words.map((word) => normalizeWordRecord(word))
-    const targetKey = normalizeLookupKey(validation.value.id)
-    const exactIndex = words.findIndex((word) => word.id === validation.value.id)
-    const index = exactIndex >= 0
-      ? exactIndex
-      : words.findIndex((word) => normalizeLookupKey(word.id) === targetKey)
+    const index = words.findIndex((word) => word.id === validation.value.id)
     if (index >= 0) {
       words.splice(index, 1, validation.value)
     } else {

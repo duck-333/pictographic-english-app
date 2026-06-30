@@ -1605,7 +1605,9 @@ export default {
 			const id = target.id
 			this.editingClipIndex = -1
 			this.stopUserVideoPreview(false)
-			this.activeBucket = source === 'pending' ? 'pending' : (target.status === 'archived' ? 'archived' : 'uploaded')
+			this.activeBucket = source === 'pending'
+				? 'pending'
+				: (target.status === 'archived' ? 'archived' : (target.status === 'draft' ? 'draft' : 'uploaded'))
 			this.selectedSource = source
 			this.selectedId = id
 			this.form = source === 'pending' ? this.normalizePendingWord(target) : this.normalizeWord(target)
@@ -2692,12 +2694,11 @@ export default {
 				return false
 			}
 			const targetList = this.selectedSource === 'pending' ? this.pendingWords : this.words
-			const idKey = this.normalizeLookupIdentityValue(id)
 			const duplicate = this.isHiddenAdminStatus(this.form.status)
 				? null
 				: targetList.find((item) =>
-					this.normalizeLookupIdentityValue(item.id) === idKey &&
-					this.normalizeLookupIdentityValue(item.id) !== this.normalizeLookupIdentityValue(this.selectedId) &&
+					String(item.id || '').trim() === id &&
+					String(item.id || '').trim() !== String(this.selectedId || '').trim() &&
 					!this.isHiddenAdminStatus(item.status)
 				)
 			if (duplicate) {
@@ -2730,8 +2731,7 @@ export default {
 					uni.showToast({ title: '词条必须以英文字母开头', icon: 'none' })
 					return false
 				}
-				const idKey = this.normalizeLookupIdentityValue(id)
-				if (seen[idKey]) {
+				if (seen[id]) {
 					uni.showToast({ title: '存在重复单词 ID', icon: 'none' })
 					return false
 				}
@@ -2745,7 +2745,7 @@ export default {
 					uni.showToast({ title: videoResult.message, icon: 'none' })
 					return false
 				}
-				seen[idKey] = true
+				seen[id] = true
 			}
 			return true
 		},
