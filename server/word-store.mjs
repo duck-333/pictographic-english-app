@@ -199,7 +199,9 @@ export function createWordStore(options = {}) {
     const words = await listWords({ publishedOnly: options.publishedOnly, query: '' })
     const targetKey = normalizeLookupKey(targetId)
     const word = words.find((item) => item.id === targetId) ||
-      words.find((item) => normalizeLookupKey(item.id) === targetKey)
+      words.find((item) => item.word === targetId) ||
+      words.find((item) => normalizeLookupKey(item.id) === targetKey) ||
+      words.find((item) => normalizeLookupKey(item.word) === targetKey)
     return word ? clone(word) : null
   }
 
