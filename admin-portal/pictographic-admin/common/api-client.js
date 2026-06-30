@@ -117,6 +117,13 @@ function createAdminApiError(response, data) {
   return error
 }
 
+function createPublicApiError(response, data) {
+  const message = data.message || `Public API request failed (${response.status})`
+  const error = new Error(message)
+  error.statusCode = response.status
+  return error
+}
+
 function normalizePayloadText(value) {
   return typeof value === 'string' ? value.trim() : ''
 }
@@ -189,6 +196,48 @@ export function saveAdminWordToServer(word, options = {}) {
         throw createAdminApiError(response, data)
       }
       return data
+    })
+}
+
+export function getPublicWordFromServer(idOrWord, options = {}) {
+  if (typeof fetch !== 'function') {
+    return Promise.reject(new Error('Public API is not available in this runtime.'))
+  }
+
+  const value = String(idOrWord || '').trim()
+  if (!value) return Promise.resolve(null)
+
+  return fetch(buildAdminApiUrl(`/api/words/${encodeURIComponent(value)}`, options), {
+    method: 'GET'
+  })
+    .then((response) => response.json().catch(() => ({})).then((data) => ({ response, data })))
+    .then(({ response, data }) => {
+      if (response.status === 404) return null
+      if (!response.ok || data.ok === false) {
+        throw createPublicApiError(response, data)
+      }
+      return data.word || null
+    })
+}
+
+export function searchPublicWordsFromServer(query, options = {}) {
+  if (typeof fetch !== 'function') {
+    return Promise.reject(new Error('Public API is not available in this runtime.'))
+  }
+
+  const value = String(query || '').trim()
+  if (!value) return Promise.resolve([])
+
+  return fetch(buildAdminApiUrl(`/api/words?q=${encodeURIComponent(value)}`, options), {
+    method: 'GET'
+  })
+    .then((response) => response.json().catch(() => ({})).then((data) => ({ response, data })))
+    .then(({ response, data }) => {
+      if (response.status === 404) return []
+      if (!response.ok || data.ok === false) {
+        throw createPublicApiError(response, data)
+      }
+      return Array.isArray(data.words) ? data.words : []
     })
 }
 

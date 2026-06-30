@@ -45,6 +45,9 @@
 				</view>
 				<button v-if="activeAdminView === 'workbench'" class="ghost-button" @click="resetDraft">恢复示例数据</button>
 				<button v-if="activeAdminView === 'workbench'" class="outline-button" @click="saveDraft">保存全部本地草稿</button>
+				<button v-if="activeAdminView === 'workbench'" class="outline-button" :disabled="serverSync.busy" @click="syncPublishedStatusesFromServer">
+					{{ serverSync.busy ? '同步中...' : '同步服务器状态' }}
+				</button>
 				<button v-if="activeAdminView === 'workbench'" class="publish-all-button" :disabled="serverSync.busy" @click="publishAllDrafts">
 					{{ serverSync.busy ? '发布中...' : '发布全部本地草稿到服务器' }}
 				</button>
@@ -561,10 +564,7 @@
 					<text class="panel-note">推荐让 AI 按下方 JSON 格式生成词条；导入后先进入未上传列表，检查无误再加入草稿。</text>
 				</view>
 				<view class="editor-actions">
-					<label class="file-button">
-						选择 JSON 文件
-						<input type="file" accept=".json,application/json" @change="handleJsonFileChange" />
-					</label>
+					<button class="file-button" @click="chooseJsonFile">选择 JSON 文件</button>
 					<button class="secondary-button" @click="fillImportExample">填入示例</button>
 					<button class="secondary-button" @click="clearImportText">一键清除</button>
 					<button class="publish-button" @click="importWordsFromJson">校验并加入未上传</button>
@@ -798,9 +798,11 @@ import {
 	checkAdminAuth,
 	getAdminApiToken,
 	getAdminHomepageFeatured,
+	getPublicWordFromServer,
 	saveAdminApiToken,
 	saveAdminHomepageFeatured,
-	saveAdminWordToServer
+	saveAdminWordToServer,
+	searchPublicWordsFromServer
 } from '../../common/api-client.js'
 
 const STORAGE_KEY = 'pictographic-admin:words-draft'
@@ -1761,6 +1763,196 @@ export default {
 				this.serverSync.busy = false
 			}
 		},
+		normalizePublishIdentityValue(value) {
+			return String(value || '').trim().toLowerCase()
+		},
+		getWordLookupValues(...sources) {
+			const values = []
+			const used = {}
+			const pushValue = (value) => {
+				const raw = String(value || '').trim()
+				if (!raw) return
+				;[raw, raw.toLowerCase()].forEach((item) => {
+					if (!item || used[item]) return
+					used[item] = true
+					values.push(item)
+				})
+			}
+			sources.forEach((source) => {
+				if (!source) return
+				if (typeof source === 'string') {
+					pushValue(source)
+					return
+				}
+				if (typeof source !== 'object' || Array.isArray(source)) return
+				pushValue(source.id)
+				pushValue(source.word)
+			})
+			return values
+		},
+		hasWordIdentityOverlap(leftSources, rightSources) {
+			const leftKeys = this.getWordLookupValues(...leftSources)
+				.map((value) => this.normalizePublishIdentityValue(value))
+				.filter(Boolean)
+			if (!leftKeys.length) return false
+			const leftSet = leftKeys.reduce((result, value) => {
+				result[value] = true
+				return result
+			}, {})
+			return this.getWordLookupValues(...rightSources)
+				.map((value) => this.normalizePublishIdentityValue(value))
+				.some((value) => value && leftSet[value])
+		},
+		findLocalWordIndexByIdentity(...sources) {
+			const lookupKeys = this.getWordLookupValues(...sources)
+				.map((value) => this.normalizePublishIdentityValue(value))
+				.filter(Boolean)
+			if (!lookupKeys.length) return -1
+			const lookupSet = lookupKeys.reduce((result, value) => {
+				result[value] = true
+				return result
+			}, {})
+			return this.words.findIndex((item) => this.getWordLookupValues(item)
+				.map((value) => this.normalizePublishIdentityValue(value))
+				.some((value) => value && lookupSet[value]))
+		},
+		isPublishedServerWord(word) {
+			return !!word && String(word.status || '').trim() === 'published'
+		},
+		async findPublishedWordOnServer(sourceWord) {
+			const payload = this.buildServerWordPayload(sourceWord)
+			const lookupValues = this.getWordLookupValues(sourceWord, payload)
+			let lastError = null
+
+			for (const value of lookupValues) {
+				try {
+					const word = await getPublicWordFromServer(value)
+					if (this.isPublishedServerWord(word)) {
+						return { found: true, word }
+					}
+				} catch (error) {
+					lastError = error
+				}
+			}
+
+			const query = payload.word || payload.id
+			if (query) {
+				try {
+					const words = await searchPublicWordsFromServer(query)
+					const lookupKeys = this.getWordLookupValues(sourceWord, payload)
+						.map((value) => this.normalizePublishIdentityValue(value))
+						.filter(Boolean)
+					const lookupSet = lookupKeys.reduce((result, value) => {
+						result[value] = true
+						return result
+					}, {})
+					const matched = words.find((item) => this.isPublishedServerWord(item) && this.getWordLookupValues(item)
+						.map((value) => this.normalizePublishIdentityValue(value))
+						.some((value) => value && lookupSet[value]))
+					if (matched) {
+						return { found: true, word: matched }
+					}
+				} catch (error) {
+					lastError = error
+				}
+			}
+
+			return { found: false, word: null, error: lastError }
+		},
+		persistWordsToStorage() {
+			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
+		},
+		markLocalWordPublished(localWord, serverWord, options = {}) {
+			const payload = this.buildServerWordPayload(Object.assign({}, clone(localWord || {}), { status: 'published' }))
+			const index = this.findLocalWordIndexByIdentity(localWord, payload, serverWord)
+			if (index < 0) return false
+
+			const previousLocal = clone(this.words[index])
+			const selectedMatches = this.selectedSource !== 'pending' && this.hasWordIdentityOverlap(
+				[{ id: this.selectedId }, this.form],
+				[localWord, previousLocal, payload, serverWord]
+			)
+			const next = clone(previousLocal)
+			const canonicalId = this.normalizePublishIdentityValue(
+				(serverWord && serverWord.id) || payload.id || next.id
+			)
+			const canonicalWord = this.normalizePublishIdentityValue(
+				(serverWord && serverWord.word) || payload.word || next.word || canonicalId
+			)
+			next.id = canonicalId || next.id
+			next.word = canonicalWord || next.word || next.id
+			next.status = 'published'
+
+			const normalized = this.normalizeWord(next)
+			this.words.splice(index, 1, normalized)
+
+			if (selectedMatches) {
+				this.activeBucket = 'uploaded'
+				this.selectedSource = 'uploaded'
+				this.selectedId = normalized.id
+				this.form = clone(normalized)
+				this.syncVideoUploadStateFromForm()
+				this.ensureLetterExpanded(this.getFirstLetter(normalized) || '#')
+			}
+
+			if (options.persist !== false) {
+				this.persistWordsToStorage()
+			}
+			return true
+		},
+		syncSelectedWordFromLocalList() {
+			if (this.selectedSource === 'pending') return
+			const index = this.findLocalWordIndexByIdentity({ id: this.selectedId }, this.form)
+			if (index < 0) return
+			const current = this.words[index]
+			this.selectedId = current.id
+			this.form = clone(current)
+			this.syncVideoUploadStateFromForm()
+			if (this.activeBucket === 'archived' && current.status !== 'archived') {
+				this.activeBucket = 'uploaded'
+			}
+			this.ensureLetterExpanded(this.getFirstLetter(current) || '#')
+		},
+		getErrorMessage(error) {
+			return error && error.message ? error.message : 'Server API save failed'
+		},
+		async publishLocalWordWithServerVerification(localWord, options = {}) {
+			const payload = this.buildServerWordPayload(Object.assign({}, clone(localWord || {}), { status: 'published' }))
+			try {
+				const result = await saveAdminWordToServer(payload, {
+					adminApiToken: this.adminApiTokenDraft
+				})
+				this.markLocalWordPublished(localWord, (result && result.word) || payload, {
+					persist: options.persist
+				})
+				return {
+					status: 'success',
+					word: (result && result.word) || payload
+				}
+			} catch (error) {
+				if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+					throw error
+				}
+
+				const verification = await this.findPublishedWordOnServer(payload)
+				if (verification.found) {
+					this.markLocalWordPublished(localWord, verification.word, {
+						persist: options.persist
+					})
+					return {
+						status: 'synced',
+						word: verification.word,
+						error
+					}
+				}
+
+				return {
+					status: 'failed',
+					error,
+					verificationError: verification.error
+				}
+			}
+		},
 		publishCurrent() {
 			if (!this.validateCurrent()) return
 			if (this.selectedSource === 'pending') {
@@ -1859,6 +2051,7 @@ export default {
 			if (!this.validateCurrent()) return
 			if (this.selectedSource === 'pending') {
 				this.commitCurrentPendingToDraft()
+				return
 			}
 
 			const confirmed = await this.confirmServerAction(
@@ -1870,7 +2063,12 @@ export default {
 
 			const previousForm = clone(this.form)
 			const previousWords = clone(this.words)
-			this.form.status = 'published'
+			const publishedPayload = this.buildServerWordPayload(Object.assign({}, clone(this.form), { status: 'published' }))
+			this.form = this.normalizeWord(Object.assign({}, this.form, {
+				id: publishedPayload.id,
+				word: publishedPayload.word,
+				status: 'published'
+			}))
 			this.persistFormToList()
 			if (!this.validateAllWords()) {
 				this.form = previousForm
@@ -1878,15 +2076,52 @@ export default {
 				return
 			}
 
-			const word = this.buildServerWordPayload(this.form)
-			const result = await this.syncWordToServer(word, '当前词条已发布到服务器')
-			if (!result) {
+			this.serverSync.busy = true
+			this.serverSync.message = '正在发布当前词条到服务器...'
+			this.saveState = this.serverSync.message
+			try {
+				const result = await this.publishLocalWordWithServerVerification(this.form)
+				if (result.status === 'success') {
+					this.serverSync.message = '当前词条已发布到服务器'
+					this.saveState = '当前词条已发布到服务器'
+					uni.showToast({ title: '已发布到服务器', icon: 'success' })
+				} else if (result.status === 'synced') {
+					this.serverSync.message = '服务器已存在该词条，已同步为已发布'
+					this.saveState = '服务器已存在该词条，已同步为已发布'
+					uni.showToast({ title: '已同步为已发布', icon: 'success' })
+				} else {
+					this.form = previousForm
+					this.words = previousWords
+					const message = this.getErrorMessage(result.error || result.verificationError)
+					this.serverSync.message = message
+					this.saveState = '发布当前词条失败'
+					uni.showModal({
+						title: '发布失败',
+						content: message,
+						showCancel: false
+					})
+					return
+				}
+			} catch (error) {
 				this.form = previousForm
 				this.words = previousWords
+				if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+					this.handleAdminUnauthorized()
+				} else {
+					const message = this.getErrorMessage(error)
+					this.serverSync.message = message
+					this.saveState = '发布当前词条失败'
+					uni.showModal({
+						title: '发布失败',
+						content: message,
+						showCancel: false
+					})
+				}
 				return
+			} finally {
+				this.serverSync.busy = false
 			}
 
-			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
 			if (this.activeBucket === 'archived') {
 				this.activeBucket = 'uploaded'
 				this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
@@ -1940,54 +2175,126 @@ export default {
 			)
 			if (!confirmed) return
 
-			const previousForm = clone(this.form)
-			const previousWords = clone(this.words)
-			const publishedPayloads = draftWords.map((item) => this.buildServerWordPayload({
-				...clone(item),
-				status: 'published'
-			}))
+			const draftSnapshots = draftWords.map((item) => clone(item))
+			const summary = {
+				success: 0,
+				synced: 0,
+				failed: []
+			}
 
 			this.serverSync.busy = true
-			this.serverSync.message = `正在发布 ${publishedPayloads.length} 个本地草稿到服务器...`
+			this.serverSync.message = `正在发布 ${draftSnapshots.length} 个本地草稿到服务器...`
 			this.saveState = this.serverSync.message
 			try {
-				for (const word of publishedPayloads) {
-					await saveAdminWordToServer(word, {
-						adminApiToken: this.adminApiTokenDraft
-					})
+				for (let index = 0; index < draftSnapshots.length; index += 1) {
+					const word = draftSnapshots[index]
+					this.serverSync.message = `正在发布 ${index + 1}/${draftSnapshots.length}：${word.word || word.id}`
+					try {
+						const result = await this.publishLocalWordWithServerVerification(word, { persist: false })
+						if (result.status === 'success') {
+							summary.success += 1
+						} else if (result.status === 'synced') {
+							summary.synced += 1
+						} else {
+							summary.failed.push({
+								id: word.id || word.word || `第 ${index + 1} 条`,
+								reason: this.getErrorMessage(result.error || result.verificationError)
+							})
+						}
+					} catch (error) {
+						const reason = this.getErrorMessage(error)
+						summary.failed.push({
+							id: word.id || word.word || `第 ${index + 1} 条`,
+							reason
+						})
+						if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+							this.handleAdminUnauthorized()
+							break
+						}
+					}
 				}
 
-				this.words = this.words.map((item) => {
-					const next = clone(item)
-					if (next.status === 'draft') {
-						next.status = 'published'
-					}
-					return next
+				this.syncSelectedWordFromLocalList()
+				this.persistWordsToStorage()
+				const failedLines = summary.failed.map((item) => `${item.id}：${item.reason}`)
+				const content = [
+					`成功 ${summary.success} 个`,
+					`服务器已存在并同步 ${summary.synced} 个`,
+					`失败 ${summary.failed.length} 个`
+				].concat(failedLines.length ? ['失败词条：'].concat(failedLines) : []).join('\n')
+				this.serverSync.message = `批量发布完成：成功 ${summary.success}，同步 ${summary.synced}，失败 ${summary.failed.length}`
+				this.saveState = this.serverSync.message
+				uni.showModal({
+					title: summary.failed.length ? '批量发布完成（有失败）' : '批量发布完成',
+					content,
+					showCancel: false
 				})
-				const current = this.words.find((item) => item.id === this.selectedId)
-				if (current) {
-					this.form = clone(current)
-					this.syncVideoUploadStateFromForm()
+			} finally {
+				this.serverSync.busy = false
+			}
+		},
+		async syncPublishedStatusesFromServer() {
+			if (this.serverSync.busy) return
+			if (!this.validateCurrent()) return
+			this.persistFormToList()
+
+			const draftWords = this.words.filter((item) => item.status === 'draft').map((item) => clone(item))
+			if (!draftWords.length) {
+				uni.showToast({ title: '当前没有本地草稿需要同步', icon: 'none' })
+				return
+			}
+
+			this.serverSync.busy = true
+			this.serverSync.message = `正在校准 ${draftWords.length} 个本地草稿的服务器状态...`
+			this.saveState = this.serverSync.message
+			const summary = {
+				synced: 0,
+				unchanged: 0,
+				failed: []
+			}
+
+			try {
+				for (let index = 0; index < draftWords.length; index += 1) {
+					const word = draftWords[index]
+					this.serverSync.message = `正在校准 ${index + 1}/${draftWords.length}：${word.word || word.id}`
+					const result = await this.findPublishedWordOnServer(word)
+					if (result.found) {
+						this.markLocalWordPublished(word, result.word, { persist: false })
+						summary.synced += 1
+					} else if (result.error) {
+						summary.failed.push({
+							id: word.id || word.word || `第 ${index + 1} 条`,
+							reason: this.getErrorMessage(result.error)
+						})
+					} else {
+						summary.unchanged += 1
+					}
 				}
-				uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
-				this.serverSync.message = '全部草稿已发布到服务器'
-				this.saveState = '全部草稿已发布到服务器'
-				uni.showToast({ title: '全部草稿已发布到服务器', icon: 'success' })
+
+				this.syncSelectedWordFromLocalList()
+				this.persistWordsToStorage()
+				const failedLines = summary.failed.map((item) => `${item.id}：${item.reason}`)
+				const content = [
+					`已同步为已发布 ${summary.synced} 个`,
+					`服务器未发布或不存在 ${summary.unchanged} 个`,
+					`查询失败 ${summary.failed.length} 个`
+				].concat(failedLines.length ? ['查询失败词条：'].concat(failedLines) : []).join('\n')
+				this.serverSync.message = `服务器状态校准完成：同步 ${summary.synced}，未变 ${summary.unchanged}，失败 ${summary.failed.length}`
+				this.saveState = this.serverSync.message
+				uni.showModal({
+					title: '服务器状态同步完成',
+					content,
+					showCancel: false
+				})
 			} catch (error) {
-				this.form = previousForm
-				this.words = previousWords
-				if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
-					this.handleAdminUnauthorized()
-				} else {
-					const message = error && error.message ? error.message : 'Server API save failed'
-					this.serverSync.message = message
-					this.saveState = '发布全部草稿失败'
-					uni.showModal({
-						title: '发布失败',
-						content: message,
-						showCancel: false
-					})
-				}
+				const message = this.getErrorMessage(error)
+				this.serverSync.message = message
+				this.saveState = '服务器状态同步失败'
+				uni.showModal({
+					title: '服务器状态同步失败',
+					content: message,
+					showCancel: false
+				})
 			} finally {
 				this.serverSync.busy = false
 			}
@@ -3263,6 +3570,8 @@ export default {
 		},
 		buildServerWordPayload(sourceWord) {
 			const word = this.stripRuntimeVideoFields(this.normalizeWord(sourceWord || this.form))
+			word.id = this.normalizePublishIdentityValue(word.id || word.word)
+			word.word = this.normalizePublishIdentityValue(word.word || word.id)
 			const illustrationImage = this.normalizeIllustrationImage(
 				(word && (word.illustrationImage || word.illustration_image)) ||
 					(sourceWord && (sourceWord.illustrationImage || sourceWord.illustration_image)) ||
@@ -3429,8 +3738,54 @@ export default {
 			this.importText = ''
 			this.importResult = '已清空。可以重新选择 JSON 文件，或粘贴 AI 生成的 words JSON。'
 		},
+		chooseJsonFile() {
+			if (typeof document === 'undefined' || typeof FileReader === 'undefined') {
+				this.importResult = '当前环境不支持直接选择本地 JSON 文件，请改用复制粘贴。'
+				uni.showToast({ title: '当前环境不支持选择文件', icon: 'none' })
+				return
+			}
+
+			const input = document.createElement('input')
+			let cleaned = false
+			let focusHandler = null
+			const cleanup = () => {
+				if (cleaned) return
+				cleaned = true
+				input.removeEventListener('change', handleChange)
+				if (focusHandler && typeof window !== 'undefined') {
+					window.removeEventListener('focus', focusHandler)
+				}
+				if (input.parentNode) {
+					input.parentNode.removeChild(input)
+				}
+			}
+			const handleChange = (event) => {
+				this.handleJsonFileChange(event)
+				setTimeout(cleanup, 0)
+			}
+
+			input.type = 'file'
+			input.accept = '.json,application/json'
+			input.multiple = false
+			input.style.position = 'fixed'
+			input.style.left = '-9999px'
+			input.style.top = '-9999px'
+			input.addEventListener('change', handleChange)
+
+			if (typeof window !== 'undefined') {
+				focusHandler = () => {
+					setTimeout(() => {
+						if (!input.files || !input.files.length) cleanup()
+					}, 800)
+				}
+				window.addEventListener('focus', focusHandler)
+			}
+
+			document.body.appendChild(input)
+			input.click()
+		},
 		handleJsonFileChange(event) {
-			const input = event && event.target
+			const input = event && (event.target || event.currentTarget)
 			const file = input && input.files && input.files[0]
 			if (!file) return
 			if (!/\.json$/i.test(file.name || '')) {
@@ -3442,8 +3797,9 @@ export default {
 			const reader = new FileReader()
 			reader.onload = () => {
 				this.importText = String(reader.result || '')
-				this.importResult = `已读取文件：${file.name}。请点击“校验并加入未上传”。`
+				this.importResult = `已读取文件：${file.name}。正在校验并准备加入未上传列表。`
 				input.value = ''
+				this.importWordsFromJson()
 			}
 			reader.onerror = () => {
 				this.importResult = '文件读取失败，请重新选择或改用复制粘贴。'
