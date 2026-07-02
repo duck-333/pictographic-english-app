@@ -1,7 +1,7 @@
 import http from 'node:http'
 import { pathToFileURL } from 'node:url'
 
-import { requireAdminAuth } from './auth.mjs'
+import { createAdminSessionToken, requireAdminAuth, verifyAdminCredentials } from './auth.mjs'
 import { createWordStore } from './word-store.mjs'
 
 const DEFAULT_PORT = 3001
@@ -79,7 +79,11 @@ export function createApiHandler(options = {}) {
   const now = options.now || (() => new Date())
   const adminAuthOptions = {
     nodeEnv: options.nodeEnv,
-    adminApiToken: options.adminApiToken
+    adminUsername: options.adminUsername,
+    adminPassword: options.adminPassword,
+    jwtSecret: options.jwtSecret,
+    adminSessionTtlMs: options.adminSessionTtlMs,
+    now
   }
 
   return async function handleApiRequest(req, res) {
@@ -144,6 +148,27 @@ export function createApiHandler(options = {}) {
         sendJson(res, 200, {
           ok: true,
           word
+        })
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/admin/login') {
+        const body = await readJsonBody(req)
+        const authResult = verifyAdminCredentials(body.username, body.password, adminAuthOptions)
+        if (!authResult.ok) {
+          sendJson(res, authResult.statusCode, {
+            ok: false,
+            message: authResult.message
+          })
+          return
+        }
+
+        const session = createAdminSessionToken(authResult.username, adminAuthOptions)
+        sendJson(res, 200, {
+          ok: true,
+          token: session.token,
+          tokenType: 'Bearer',
+          expiresAt: session.expiresAt
         })
         return
       }

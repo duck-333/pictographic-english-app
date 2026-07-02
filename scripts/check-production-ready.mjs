@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 
-import { DEFAULT_DEV_ADMIN_API_TOKEN, getAdminApiToken } from '../server/auth.mjs'
+import { getAdminCredentials } from '../server/auth.mjs'
 import {
   PRODUCTION_WORD_API_BASE_URL,
   getWordApiBaseUrl
@@ -264,35 +264,48 @@ function checkApiBaseGuards(errors) {
 }
 
 function checkAdminAuthGuards(errors) {
-  const productionMissingToken = getAdminApiToken({ nodeEnv: 'production', adminApiToken: '' })
-  const productionDefaultToken = getAdminApiToken({
+  const productionMissingCredentials = getAdminCredentials({
     nodeEnv: 'production',
-    adminApiToken: DEFAULT_DEV_ADMIN_API_TOKEN
+    adminUsername: '',
+    adminPassword: ''
   })
-  const productionConfiguredToken = getAdminApiToken({
+  const productionPartialCredentials = getAdminCredentials({
     nodeEnv: 'production',
-    adminApiToken: 'real-production-admin-token'
+    adminUsername: 'admin',
+    adminPassword: ''
   })
-  const developmentDefaultToken = getAdminApiToken({ nodeEnv: 'development', adminApiToken: '' })
+  const productionConfiguredCredentials = getAdminCredentials({
+    nodeEnv: 'production',
+    adminUsername: 'admin',
+    adminPassword: 'real-production-password'
+  })
+  const developmentMissingCredentials = getAdminCredentials({
+    nodeEnv: 'development',
+    adminUsername: '',
+    adminPassword: ''
+  })
 
-  if (productionMissingToken) {
-    addError(errors, 'production admin API auth must fail closed when ADMIN_API_TOKEN is missing.')
+  if (productionMissingCredentials.configured) {
+    addError(errors, 'production admin login must fail closed when ADMIN_USERNAME and ADMIN_PASSWORD are missing.')
   }
-  if (productionDefaultToken) {
-    addError(errors, 'production admin API auth must not allow the default dev-admin-token.')
+  if (productionPartialCredentials.configured) {
+    addError(errors, 'production admin login must require both ADMIN_USERNAME and ADMIN_PASSWORD.')
   }
-  if (productionConfiguredToken !== 'real-production-admin-token') {
-    addError(errors, 'production admin API auth must use a configured non-default ADMIN_API_TOKEN.')
+  if (!productionConfiguredCredentials.configured) {
+    addError(errors, 'production admin login must allow explicitly configured credentials.')
   }
-  if (developmentDefaultToken !== DEFAULT_DEV_ADMIN_API_TOKEN) {
-    addError(errors, 'development admin API auth should allow the explicit dev-admin-token fallback.')
+  if (productionConfiguredCredentials.username !== 'admin' || productionConfiguredCredentials.password !== 'real-production-password') {
+    addError(errors, 'production admin login must read the configured ADMIN_USERNAME and ADMIN_PASSWORD values.')
+  }
+  if (developmentMissingCredentials.configured) {
+    addError(errors, 'development admin login must not create default credentials.')
   }
 }
 
 function checkWordDetailUsesMediaGuard(errors) {
   const sourceText = fs.readFileSync(new URL(`../${WORD_DETAIL_PATH}`, import.meta.url), 'utf8')
-  if (!/const\s+ENABLE_VIDEO_MODULE\s*=\s*false/.test(sourceText)) {
-    addError(errors, `${WORD_DETAIL_PATH}: second-release text-only build must keep the video module disabled.`)
+  if (!/const\s+ENABLE_VIDEO_MODULE\s*=\s*true/.test(sourceText)) {
+    addError(errors, `${WORD_DETAIL_PATH}: remote media test build must keep the video module enabled.`)
   }
   if (!/hasPlayableVideo\(\)\s*\{[\s\S]*?return\s+isPlayableMediaUrl\(this\.activeVideoUrl\)\s*&&\s*this\.activeClipHasValidRange[\s\S]*?\}/.test(sourceText)) {
     addError(errors, `${WORD_DETAIL_PATH}: hasPlayableVideo must use the shared production media guard for activeVideoUrl.`)
@@ -360,8 +373,9 @@ function main() {
   console.log('- published words do not contain blocked preview URLs')
   console.log('- production media guard blocks local/mock/blob/data/example URLs')
   console.log('- illustration images allow production HTTPS URLs only')
+  console.log('- word detail video module is enabled behind the shared media guard')
   console.log(`- production runtime uses ${PRODUCTION_WORD_API_BASE_URL}`)
-  console.log('- production admin API auth rejects empty/default tokens')
+  console.log('- production admin login requires configured credentials')
   console.log('- homepage featured word uses the public API with published filtering')
 }
 

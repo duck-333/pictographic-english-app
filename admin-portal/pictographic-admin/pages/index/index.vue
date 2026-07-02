@@ -5,29 +5,38 @@
 				<view class="admin-review-kicker">公开审核说明</view>
 				<text class="admin-review-title">巴小塔（杭州巴别塔文化有限责任公司）——象形英语内容工作台</text>
 				<text class="admin-review-copy">本网站用于维护“象形英语”英语单词查询、词义讲解、视频讲解等学习内容。</text>
-				<text class="admin-review-copy">后台管理功能仅限管理员使用，需通过 Admin API Token 登录。</text>
+				<text class="admin-review-copy">后台管理功能仅限管理员使用，需通过管理员账号密码登录。</text>
 				<text class="admin-review-copy">普通用户使用的小程序前台用于英语单词查询和学习内容浏览。</text>
 			</view>
 			<view class="admin-login-card">
 				<view class="admin-login-badge">管理员入口</view>
 				<text class="admin-login-title">管理员登录</text>
-				<text class="admin-login-desc">请输入 Admin API Token 以进入巴小塔象形英语内容工作台</text>
+				<text class="admin-login-desc">请输入管理员账号和密码以进入巴小塔象形英语内容工作台</text>
 				<label class="admin-login-field">
-					<text>Admin API Token</text>
+					<text>管理员账号</text>
 					<input
-						v-model="adminApiTokenDraft"
+						v-model="adminUsernameDraft"
+						class="admin-login-input"
+						placeholder="请输入管理员账号"
+						confirm-type="next"
+					/>
+				</label>
+				<label class="admin-login-field">
+					<text>管理员密码</text>
+					<input
+						v-model="adminPasswordDraft"
 						class="admin-login-input"
 						password
-						placeholder="本地开发可输入 dev-admin-token"
+						placeholder="请输入管理员密码"
 						confirm-type="done"
 						@confirm="unlockAdmin"
 					/>
 				</label>
 				<button class="admin-login-button" :disabled="adminAuthChecking" @click="unlockAdmin">
-					{{ adminAuthChecking ? '校验中...' : '进入后台' }}
+					{{ adminAuthChecking ? '登录中...' : '进入后台' }}
 				</button>
 				<text class="admin-login-error" v-if="adminTokenStatus">{{ adminTokenStatus }}</text>
-				<text class="admin-login-tip">本地开发默认可用 dev-admin-token，生产环境必须使用服务器配置的 ADMIN_API_TOKEN。</text>
+				<text class="admin-login-tip">账号密码由服务器环境变量 ADMIN_USERNAME / ADMIN_PASSWORD 配置，前端不会填充默认凭据。</text>
 			</view>
 		</view>
 
@@ -255,6 +264,17 @@
 						<text>大小：{{ audioUpload.fileSizeLabel || '未选择' }}</text>
 						<text>类型：{{ audioUpload.mimeType || '未知' }}</text>
 					</view>
+					<label class="field audio-url-field">
+						<text>音频 URL</text>
+						<input
+							:value="pronunciationAudioFormUrl"
+							placeholder="https://cdn.example.com/audio/word.mp3"
+							@input="handlePronunciationAudioUrlInput"
+						/>
+					</label>
+					<text :class="['illustration-url-tip', pronunciationAudioUrlLooksSafe ? 'valid' : 'warning']">
+						{{ pronunciationAudioUrlTip }}
+					</text>
 					<audio
 						v-if="audioPreviewUrl"
 						class="admin-audio-preview"
@@ -349,15 +369,15 @@
 						<text>类型：{{ videoUpload.mimeType || '未知' }}</text>
 					</view>
 					<video
-						v-if="videoUpload.previewUrl"
+						v-if="adminVideoPreviewUrl"
 						ref="adminVideoPreview"
 						class="admin-video-preview"
-						:src="videoUpload.previewUrl"
+						:src="adminVideoPreviewUrl"
 						controls
 						@loadedmetadata="handleVideoLoadedMetadata"
 						@timeupdate="handleVideoTimeUpdate"
 					></video>
-					<view v-if="videoUpload.previewUrl" class="video-preview-tools">
+					<view v-if="adminVideoPreviewUrl" class="video-preview-tools">
 						<view class="video-time-row">
 							<text>当前：{{ formattedVideoCurrentTime }}</text>
 							<text>总长：{{ formattedVideoDuration }}</text>
@@ -380,9 +400,18 @@
 				</view>
 				<view class="form-grid">
 					<label class="field">
-						<text>当前片段播放地址</text>
-						<input v-model="form.video.url" placeholder="真实上线后这里是 HTTPS 或云存储临时链接" />
+						<text>视频 URL</text>
+						<input v-model="form.video.url" placeholder="https://xxx.vod2.myqcloud.com/xxx.mp4" />
 					</label>
+					<label class="field">
+						<text>VOD FileId / Asset ID</text>
+						<input v-model="form.video.assetId" placeholder="5145403727215241845" />
+					</label>
+					<view class="field span-2">
+						<text :class="['illustration-url-tip', videoUrlLooksSafe ? 'valid' : 'warning']">
+							{{ videoUrlTip }}
+						</text>
+					</view>
 					<label class="field">
 						<text>当前片段标题</text>
 						<input v-model="form.video.title" placeholder="例：第 1 段：c 的象形来源" />
@@ -815,10 +844,11 @@
 <script>
 import {
 	checkAdminAuth,
-	getAdminApiToken,
+	getAdminSessionToken,
 	getAdminHomepageFeatured,
 	getPublicWordFromServer,
-	saveAdminApiToken,
+	loginAdmin,
+	saveAdminSessionToken,
 	saveAdminHomepageFeatured,
 	saveAdminWordToServer,
 	searchPublicWordsFromServer
@@ -1018,8 +1048,10 @@ export default {
 			},
 			adminUnlocked: false,
 			adminAuthChecking: false,
+			adminUsernameDraft: '',
+			adminPasswordDraft: '',
 			adminApiTokenDraft: '',
-			adminTokenStatus: '未保存 Admin API Token，本地开发可填写 dev-admin-token。',
+			adminTokenStatus: '',
 			statusOptions: [
 				{ label: '草稿', value: 'draft' },
 				{ label: '已发布', value: 'published' },
@@ -1124,6 +1156,20 @@ export default {
 		currentJson() {
 			return JSON.stringify(this.buildServerWordPayload(this.form), null, 2)
 		},
+		pronunciationAudioFormUrl() {
+			const audio = this.form && this.form.pronunciationAudio ? this.form.pronunciationAudio : {}
+			return String(audio.url || audio.audioUrl || (this.form && this.form.audioUrl) || '').trim()
+		},
+		pronunciationAudioUrlLooksSafe() {
+			const url = this.pronunciationAudioFormUrl
+			return !url || this.isProductionIllustrationImageUrl(url)
+		},
+		pronunciationAudioUrlTip() {
+			const url = this.pronunciationAudioFormUrl
+			if (!url) return '未填写音频地址时，小程序不会显示发音小喇叭。'
+			if (this.isProductionIllustrationImageUrl(url)) return '音频地址有效，可用于正式小程序。'
+			return '建议使用可公开访问的 https:// 音频地址；本地、临时和示例地址只适合开发检查。'
+		},
 		hasIllustrationImagePayload() {
 			const image = this.form && this.form.illustrationImage ? this.form.illustrationImage : {}
 			return this.hasIllustrationImageFields(image)
@@ -1147,6 +1193,25 @@ export default {
 		},
 		videoClipCount() {
 			return Array.isArray(this.form.videoClips) ? this.form.videoClips.length : 0
+		},
+		adminVideoPreviewUrl() {
+			const uploadUrl = String(this.videoUpload && this.videoUpload.previewUrl ? this.videoUpload.previewUrl : '').trim()
+			if (this.isPlayableAdminMediaUrl(uploadUrl)) return uploadUrl
+			const video = this.form && this.form.video ? this.form.video : {}
+			const previewUrl = String(video.localPreviewUrl || video.url || video.videoUrl || '').trim()
+			return this.isPlayableAdminMediaUrl(previewUrl) ? previewUrl : ''
+		},
+		videoUrlLooksSafe() {
+			const video = this.form && this.form.video ? this.form.video : {}
+			const url = String(video.url || video.videoUrl || '').trim()
+			return !url || this.isProductionIllustrationImageUrl(url)
+		},
+		videoUrlTip() {
+			const video = this.form && this.form.video ? this.form.video : {}
+			const url = String(video.url || video.videoUrl || '').trim()
+			if (!url) return '可以先只填 VOD FileId；没有视频 URL 时，小程序会显示待接入状态而不会播放。'
+			if (this.isProductionIllustrationImageUrl(url)) return '视频地址有效，可用于正式小程序播放。'
+			return '建议使用腾讯云 VOD 控制台复制出的 https:// 播放地址；本地、临时和示例地址不能用于正式发布。'
 		},
 		currentClipActionText() {
 			return this.editingClipIndex > -1 ? '保存片段修改' : '保存为片段'
@@ -1703,24 +1768,6 @@ export default {
 			this.saveState = '当前词条已保存为草稿'
 			uni.showToast({ title: '已保存为草稿', icon: 'success' })
 		},
-		loadAdminApiToken() {
-			const token = getAdminApiToken()
-			this.adminApiTokenDraft = token
-			this.adminTokenStatus = token
-				? '已加载本地保存的 Admin API Token。'
-				: '未保存 Admin API Token，本地开发可填写 dev-admin-token。'
-		},
-		saveAdminApiTokenDraft() {
-			const token = saveAdminApiToken(this.adminApiTokenDraft)
-			this.adminApiTokenDraft = token
-			this.adminTokenStatus = token
-				? 'Admin API Token 已保存到本机 localStorage。'
-				: 'Admin API Token 已清除；服务器同步会鉴权失败。'
-			uni.showToast({
-				title: token ? 'Token 已保存' : 'Token 已清除',
-				icon: 'none'
-			})
-		},
 		async saveCurrentToServerApi() {
 			if (this.serverSync.busy) return
 			if (!this.validateCurrent()) return
@@ -1740,11 +1787,11 @@ export default {
 			} catch (error) {
 				const message = error && error.message ? error.message : 'Server API save failed'
 				const isAuthError = !!(error && error.isAuthError)
-				this.serverSync.message = isAuthError ? '管理员鉴权失败，请检查 Admin API Token' : message
-				this.saveState = isAuthError ? 'Admin API token check failed' : 'Server API save failed'
+				this.serverSync.message = isAuthError ? '管理员登录已失效，请重新登录' : message
+				this.saveState = isAuthError ? '管理员登录已失效' : 'Server API save failed'
 				let content = message
 				if (isAuthError) {
-					content = '管理员鉴权失败，请检查 Admin API Token。'
+					content = '管理员登录已失效，请重新登录。'
 				}
 				if (message.includes('not available')) {
 					content = 'Please run npm.cmd run dev:api from the project root, then try saving again.'
@@ -1759,10 +1806,10 @@ export default {
 			}
 		},
 		async loadAdminApiToken() {
-			const token = getAdminApiToken()
+			const token = getAdminSessionToken()
 			this.adminApiTokenDraft = token
 			this.adminUnlocked = false
-			this.adminTokenStatus = token ? '正在校验已保存的 Admin API Token...' : ''
+			this.adminTokenStatus = token ? '正在校验已保存的管理员登录状态...' : ''
 			if (!token) return
 
 			try {
@@ -1774,25 +1821,27 @@ export default {
 					await this.loadHomepageFeaturedConfig()
 				}
 			} catch (error) {
-				saveAdminApiToken('')
+				saveAdminSessionToken('')
 				this.adminApiTokenDraft = ''
 				this.adminUnlocked = false
-				this.adminTokenStatus = '管理员鉴权失败，请检查 Admin API Token。'
+				this.adminTokenStatus = '管理员登录已失效，请重新登录。'
 			}
 		},
 		async unlockAdmin() {
 			if (this.adminAuthChecking) return
-			const token = String(this.adminApiTokenDraft || '').trim()
-			if (!token) {
-				this.adminTokenStatus = '请输入 Admin API Token。'
+			const username = String(this.adminUsernameDraft || '').trim()
+			const password = String(this.adminPasswordDraft || '')
+			if (!username || !password) {
+				this.adminTokenStatus = '请输入管理员账号和密码。'
 				return
 			}
 
 			this.adminAuthChecking = true
-			this.adminTokenStatus = '正在校验 Admin API Token...'
+			this.adminTokenStatus = '正在登录...'
 			try {
-				await checkAdminAuth(token)
-				this.adminApiTokenDraft = saveAdminApiToken(token)
+				const result = await loginAdmin({ username, password })
+				this.adminApiTokenDraft = saveAdminSessionToken(result.token)
+				this.adminPasswordDraft = ''
 				this.adminUnlocked = true
 				this.adminTokenStatus = ''
 				this.serverSync.message = '管理员已解锁'
@@ -1801,12 +1850,14 @@ export default {
 				}
 				uni.showToast({ title: '已进入后台', icon: 'success' })
 			} catch (error) {
-				saveAdminApiToken('')
+				saveAdminSessionToken('')
+				this.adminApiTokenDraft = ''
 				this.adminUnlocked = false
-				this.adminTokenStatus = '管理员鉴权失败，请检查 Admin API Token。'
+				const message = error && error.message ? error.message : '管理员登录失败，请检查账号密码。'
+				this.adminTokenStatus = message
 				uni.showModal({
-					title: '管理员鉴权失败',
-					content: '管理员鉴权失败，请检查 Admin API Token。',
+					title: '管理员登录失败',
+					content: message,
 					showCancel: false
 				})
 			} finally {
@@ -1814,8 +1865,9 @@ export default {
 			}
 		},
 		lockAdmin() {
-			saveAdminApiToken('')
+			saveAdminSessionToken('')
 			this.adminApiTokenDraft = ''
+			this.adminPasswordDraft = ''
 			this.adminUnlocked = false
 			this.adminTokenStatus = ''
 			this.serverSync.message = '管理员已锁定'
@@ -1825,15 +1877,16 @@ export default {
 			uni.showToast({ title: '已锁定后台', icon: 'none' })
 		},
 		handleAdminUnauthorized() {
-			saveAdminApiToken('')
+			saveAdminSessionToken('')
 			this.adminApiTokenDraft = ''
+			this.adminPasswordDraft = ''
 			this.adminUnlocked = false
-			this.adminTokenStatus = '管理员鉴权失败，请重新登录。'
-			this.serverSync.message = '管理员鉴权失败，请重新登录'
-			this.saveState = '管理员鉴权失败，请重新登录'
+			this.adminTokenStatus = '管理员登录已失效，请重新登录。'
+			this.serverSync.message = '管理员登录已失效，请重新登录'
+			this.saveState = '管理员登录已失效，请重新登录'
 			uni.showModal({
-				title: '管理员鉴权失败',
-				content: '管理员鉴权失败，请重新登录。',
+				title: '管理员登录已失效',
+				content: '管理员登录已失效，请重新登录。',
 				showCancel: false
 			})
 		},
@@ -2859,7 +2912,7 @@ export default {
 			}
 		},
 		hasVideoClipPayload(video) {
-			return !!(video && (video.url || video.assetId || video.storagePath || video.localPreviewUrl))
+			return !!(video && (video.url || video.videoUrl || video.assetId || video.videoFileId || video.fileId || video.storagePath || video.localPreviewUrl))
 		},
 		getDefaultClipTitle(video) {
 			const word = String(this.form.word || this.form.id || '当前词条').trim()
@@ -3620,6 +3673,7 @@ export default {
 				endSec: '',
 				provider: '',
 				assetId: '',
+				poster: '',
 				storagePath: '',
 				fileName: '',
 				mimeType: '',
@@ -3754,9 +3808,12 @@ export default {
 			const normalized = String(fileName || 'pronunciation.mp3').trim().toLowerCase()
 			return normalized.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'pronunciation.mp3'
 		},
-		isPlayableAdminAudioUrl(url) {
+		isPlayableAdminMediaUrl(url) {
 			const value = String(url || '').trim()
 			return /^(blob:|data:|https?:\/\/)/i.test(value)
+		},
+		isPlayableAdminAudioUrl(url) {
+			return this.isPlayableAdminMediaUrl(url)
 		},
 		emptyPronunciationAudioObject() {
 			return {
@@ -3781,6 +3838,23 @@ export default {
 			if (!Object.prototype.hasOwnProperty.call(this.form, 'audioUrl')) {
 				this.$set(this.form, 'audioUrl', '')
 			}
+		},
+		getInputEventValue(event) {
+			if (event && event.detail && Object.prototype.hasOwnProperty.call(event.detail, 'value')) {
+				return event.detail.value
+			}
+			if (event && event.target && Object.prototype.hasOwnProperty.call(event.target, 'value')) {
+				return event.target.value
+			}
+			return ''
+		},
+		handlePronunciationAudioUrlInput(event) {
+			this.ensurePronunciationAudioObject()
+			const url = String(this.getInputEventValue(event) || '').trim()
+			this.$set(this.form.pronunciationAudio, 'url', url)
+			this.$set(this.form.pronunciationAudio, 'audioUrl', url)
+			this.$set(this.form, 'audioUrl', url)
+			this.syncAudioUploadStateFromForm()
 		},
 		isPreviewUrlUsedByAudio(url) {
 			if (!url) return false
@@ -3824,8 +3898,11 @@ export default {
 		},
 		normalizeVideoClip(raw, index) {
 			const source = raw || {}
-			const startSec = Number(source.startSec !== undefined ? source.startSec : source.start_sec)
-			const endSec = Number(source.endSec !== undefined ? source.endSec : source.end_sec)
+			const firstDefined = (...values) => values.find((value) => value !== undefined)
+			const startSource = firstDefined(source.startSec, source.start_sec, source.startTime, source.start_time)
+			const endSource = firstDefined(source.endSec, source.end_sec, source.endTime, source.end_time)
+			const startSec = Number(startSource)
+			const endSec = Number(endSource)
 			const videoSize = Number(source.size)
 			return {
 				clipId: String(source.clipId || source.clip_id || source.id || `clip-${(index || 0) + 1}`).trim(),
@@ -3837,12 +3914,13 @@ export default {
 				localPreviewUrl: /^(blob:|data:|https?:\/\/)/i.test(String(source.localPreviewUrl || source.local_preview_url || ''))
 					? String(source.localPreviewUrl || source.local_preview_url).trim()
 					: '',
-				startSec: source.startSec === '' || source.start_sec === '' || (source.startSec === undefined && source.start_sec === undefined) || Number.isNaN(startSec) ? '' : startSec,
-				endSec: source.endSec === '' || source.end_sec === '' || (source.endSec === undefined && source.end_sec === undefined) || Number.isNaN(endSec) ? '' : endSec,
+				startSec: startSource === '' || startSource === undefined || Number.isNaN(startSec) ? '' : startSec,
+				endSec: endSource === '' || endSource === undefined || Number.isNaN(endSec) ? '' : endSec,
 				provider: String(source.provider || '').trim(),
-				assetId: String(source.assetId || source.asset_id || source.videoId || source.video_id || '').trim(),
+				assetId: String(source.assetId || source.asset_id || source.videoFileId || source.video_file_id || source.fileId || source.file_id || source.videoId || source.video_id || '').trim(),
 				wordId: String(source.wordId || source.word_id || '').trim(),
 				segmentTitle: String(source.segmentTitle || source.segment_title || source.title || '').trim(),
+				poster: String(source.poster || source.videoPoster || source.video_poster || '').trim(),
 				storagePath: String(source.storagePath || source.storage_path || '').trim(),
 				fileName: String(source.fileName || source.file_name || '').trim(),
 				mimeType: String(source.mimeType || source.mime_type || '').trim(),

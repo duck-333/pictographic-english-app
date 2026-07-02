@@ -1,5 +1,7 @@
 const ADMIN_API_BASE_STORAGE_KEY = 'pictographic:adminApiBaseUrl'
-export const ADMIN_API_TOKEN_STORAGE_KEY = 'pictographic:adminApiToken'
+const LEGACY_ADMIN_API_TOKEN_STORAGE_KEY = 'pictographic:adminApiToken'
+export const ADMIN_SESSION_TOKEN_STORAGE_KEY = 'pictographic:adminSessionToken'
+export const ADMIN_API_TOKEN_STORAGE_KEY = ADMIN_SESSION_TOKEN_STORAGE_KEY
 
 function getDefaultDevelopmentAdminApiBaseUrl() {
   const schemeSeparator = String.fromCharCode(58, 47, 47)
@@ -14,7 +16,7 @@ function normalizeApiBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '')
 }
 
-function normalizeAdminApiToken(value) {
+function normalizeAdminSessionToken(value) {
   return String(value || '').trim()
 }
 
@@ -32,11 +34,6 @@ function getEnvApiBaseUrl() {
   return process.env.VUE_APP_ADMIN_API_BASE_URL || process.env.ADMIN_API_BASE_URL || ''
 }
 
-function getEnvAdminApiToken() {
-  if (typeof process === 'undefined' || !process || !process.env) return ''
-  return process.env.VUE_APP_ADMIN_API_TOKEN || process.env.ADMIN_API_TOKEN || ''
-}
-
 function getStoredApiBaseUrl() {
   if (typeof localStorage === 'undefined') return ''
   try {
@@ -46,10 +43,10 @@ function getStoredApiBaseUrl() {
   }
 }
 
-function getStoredAdminApiToken() {
+function getStoredAdminSessionToken() {
   if (typeof localStorage === 'undefined') return ''
   try {
-    return localStorage.getItem(ADMIN_API_TOKEN_STORAGE_KEY) || ''
+    return localStorage.getItem(ADMIN_SESSION_TOKEN_STORAGE_KEY) || ''
   } catch (error) {
     return ''
   }
@@ -72,25 +69,43 @@ function buildAdminApiUrl(path, options = {}) {
   return baseUrl ? `${baseUrl}${normalizedPath}` : normalizedPath
 }
 
-export function getAdminApiToken(options = {}) {
-  return normalizeAdminApiToken(options.adminApiToken || getEnvAdminApiToken() || getStoredAdminApiToken())
+function clearLegacyAdminApiToken() {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.removeItem(LEGACY_ADMIN_API_TOKEN_STORAGE_KEY)
+  } catch (error) {
+    // Ignore storage cleanup failures in preview runtimes.
+  }
 }
 
-export function saveAdminApiToken(token) {
-  const normalized = normalizeAdminApiToken(token)
+export function getAdminSessionToken(options = {}) {
+  return normalizeAdminSessionToken(options.adminSessionToken || options.adminApiToken || getStoredAdminSessionToken())
+}
+
+export function getAdminApiToken(options = {}) {
+  return getAdminSessionToken(options)
+}
+
+export function saveAdminSessionToken(token) {
+  const normalized = normalizeAdminSessionToken(token)
   if (typeof localStorage === 'undefined') return normalized
 
   try {
     if (normalized) {
-      localStorage.setItem(ADMIN_API_TOKEN_STORAGE_KEY, normalized)
+      localStorage.setItem(ADMIN_SESSION_TOKEN_STORAGE_KEY, normalized)
     } else {
-      localStorage.removeItem(ADMIN_API_TOKEN_STORAGE_KEY)
+      localStorage.removeItem(ADMIN_SESSION_TOKEN_STORAGE_KEY)
     }
+    clearLegacyAdminApiToken()
   } catch (error) {
-    // Storage can fail in locked-down preview runtimes. Keep the token in memory only.
+    // Storage can fail in locked-down preview runtimes. Keep the session in memory only.
   }
 
   return normalized
+}
+
+export function saveAdminApiToken(token) {
+  return saveAdminSessionToken(token)
 }
 
 function buildAdminHeaders(options = {}) {
@@ -106,8 +121,22 @@ function createAdminApiError(response, data) {
   const isAuthError = response.status === 401 || response.status === 403
   const detail = Array.isArray(data.errors) && data.errors.length ? `: ${data.errors.join('; ')}` : ''
   const message = isAuthError
-    ? '管理员鉴权失败，请检查 Admin API Token'
+    ? '管理员登录已失效，请重新登录'
     : (data.message || 'Admin API save failed') + detail
+  const error = new Error(message)
+  error.statusCode = response.status
+  error.isAuthError = isAuthError
+  if (isAuthError) {
+    error.code = 'UNAUTHORIZED'
+  }
+  return error
+}
+
+function createAdminLoginError(response, data) {
+  const isAuthError = response.status === 401 || response.status === 403
+  const message = isAuthError
+    ? '管理员账号或密码错误'
+    : (data.message || 'Admin login failed')
   const error = new Error(message)
   error.statusCode = response.status
   error.isAuthError = isAuthError
@@ -172,6 +201,28 @@ export function checkAdminAuth(token, options = {}) {
     .then(({ response, data }) => {
       if (!response.ok || data.ok === false) {
         throw createAdminApiError(response, data)
+      }
+      return data
+    })
+}
+
+export function loginAdmin(credentials, options = {}) {
+  if (typeof fetch !== 'function') {
+    return Promise.reject(new Error('Admin API is not available in this runtime.'))
+  }
+
+  return fetch(buildAdminApiUrl('/api/admin/login', options), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: credentials && credentials.username ? String(credentials.username) : '',
+      password: credentials && credentials.password ? String(credentials.password) : ''
+    })
+  })
+    .then((response) => response.json().catch(() => ({})).then((data) => ({ response, data })))
+    .then(({ response, data }) => {
+      if (!response.ok || data.ok === false || !data.token) {
+        throw createAdminLoginError(response, data)
       }
       return data
     })

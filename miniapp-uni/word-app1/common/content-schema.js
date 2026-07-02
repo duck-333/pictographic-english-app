@@ -116,19 +116,23 @@ export function normalizeIllustrationImage(image) {
 export function normalizeVideoSegment(segment) {
   const source = segment || {}
   const segmentTitle = source.segmentTitle || source.segment_title || source.title || ''
+  const firstDefined = (...values) => values.find((value) => value !== undefined)
+  const startValue = firstDefined(source.startSec, source.start_sec, source.startTime, source.start_time)
+  const endValue = firstDefined(source.endSec, source.end_sec, source.endTime, source.end_time)
   return {
     ...source,
     clipId: source.clipId || source.clip_id || source.id || '',
     videoUrl: source.videoUrl || source.video_url || source.url || '',
-    startSec: Number(source.startSec || source.start_sec || 0),
-    endSec: Number(source.endSec || source.end_sec || 0),
+    startSec: Number(startValue || 0),
+    endSec: Number(endValue || 0),
     segmentTitle,
     title: source.title || segmentTitle,
     focus: source.focus || '',
     targetPart: source.targetPart || source.target_part || '',
     note: source.note || '',
     provider: source.provider || '',
-    assetId: source.assetId || source.asset_id || '',
+    assetId: source.assetId || source.asset_id || source.videoFileId || source.video_file_id || source.fileId || source.file_id || '',
+    poster: source.poster || source.videoPoster || source.video_poster || '',
     storagePath: source.storagePath || source.storage_path || '',
     fileName: source.fileName || source.file_name || '',
     mimeType: source.mimeType || source.mime_type || '',

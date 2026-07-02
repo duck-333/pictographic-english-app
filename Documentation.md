@@ -1,5 +1,26 @@
 # Documentation
 
+### 2026-07-01: VOD manual playback URL test path
+
+Decision:
+- Run the minimum remote media path before adding any Tencent Cloud VOD upload API, playback signature, COS integration, membership gate, or batch upload flow.
+- The admin editor now keeps using the existing word schema: `pronunciationAudio.url` / `audioUrl` for pronunciation audio, `illustrationImage.url/title/alt` for illustrations, and `videoClips[]` / `video` with `url`, `assetId`, `startSec`, and `endSec` for lesson video clips.
+- The admin UI labels `assetId` as "VOD FileId / Asset ID" so a Tencent Cloud VOD FileId can be recorded without adding a conflicting field. Imported or pasted `videoFileId`, `fileId`, `startTime`, and `endTime` values are normalized back to the existing `assetId`, `startSec`, and `endSec` shape.
+- The mini program detail page enables the existing video module for published words that contain playable `https://` or allowed cloud video URLs and valid `startSec/endSec` ranges. Playback still uses `uni.createVideoContext('lessonVideo', this)`, seeks to `startSec`, and then plays.
+
+Manual VOD test flow:
+- Upload the source video manually in the Tencent Cloud VOD console.
+- Copy the VOD FileId and paste it into the admin video's "VOD FileId / Asset ID" field.
+- Copy the playable HTTPS URL from the VOD console source file/original file address and paste it into the admin video's "Video URL" field.
+- Enter `startSec/endSec`, for example `0/20`, save the clip or publish the word, then open the word detail page in the mini program.
+- Change the range to `10/30` and verify that tapping the clip starts around the 10 second mark.
+
+Safety:
+- Do not write Tencent Cloud `SecretId`, `SecretKey`, or temporary tokens into the frontend, mini program, repository, or config files.
+- Production media URLs must be public `https://` addresses and their domains must be configured in the WeChat mini program legal domain settings.
+- `blob:`, `data:`, `localhost`, `127.0.0.1`, `mock-cloud://`, and example-domain media are development-only and must not be used for release content.
+- `dev-preview-bridge` remains development-only and is not required for this manual VOD URL path.
+
 ### 2026-06-23: explicit public illustration projection
 
 Decision:

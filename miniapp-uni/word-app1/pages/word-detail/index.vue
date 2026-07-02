@@ -181,6 +181,7 @@
             :key="activeVideoKey"
             class="lesson-video"
             :src="activeVideoUrl"
+            :poster="activeVideoPoster"
             :initial-time="activeVideoStart"
             :controls="false"
             :show-center-play-btn="false"
@@ -296,7 +297,7 @@ import {
 } from '../../common/part-visual-style.js'
 import { addRecentWord, getPendingWordId, isFavorite, savePendingWordId, toggleFavorite } from '../../common/user-store.js'
 
-const ENABLE_VIDEO_MODULE = false
+const ENABLE_VIDEO_MODULE = true
 
 function normalizeDisplayText(value) {
   return typeof value === 'string' ? value.trim() : ''
@@ -490,7 +491,11 @@ export default {
     },
     activeVideoUrl() {
       const video = this.activeVideo || {}
-      return video.videoUrl || video.url || ''
+      return String(video.videoUrl || video.url || '').trim()
+    },
+    activeVideoPoster() {
+      const video = this.activeVideo || {}
+      return String(video.poster || video.videoPoster || video.video_poster || '').trim()
     },
     activeVideoTitle() {
       if (!this.hasVideoData) {
