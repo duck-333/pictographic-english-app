@@ -29,13 +29,14 @@ export function isDevelopmentApiBaseUrl(value) {
 
 export function getWordApiBaseUrl(options = {}) {
   const nodeEnv = getNodeEnv(options)
-  if (nodeEnv !== 'development') {
-    return PRODUCTION_WORD_API_BASE_URL
-  }
-
   const configured = Object.prototype.hasOwnProperty.call(options, 'apiBaseUrl')
     ? options.apiBaseUrl
     : getEnvApiBaseUrl()
   const candidate = normalizeApiBaseUrl(configured)
-  return isDevelopmentApiBaseUrl(candidate) ? candidate : ''
+
+  if (nodeEnv === 'development' && isDevelopmentApiBaseUrl(candidate)) {
+    return candidate
+  }
+
+  return PRODUCTION_WORD_API_BASE_URL
 }

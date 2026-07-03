@@ -1,5 +1,54 @@
 # Documentation
 
+### 2026-07-02 小程序远程搜索与 VOD 片段联调记录
+
+背景：
+- 线上 aviate 已保存为 published，并包含 `videoClips` 与腾讯云 VOD HTTPS 播放地址，但小程序首页输入 aviate 后点击搜索没有触发远程 API，请求面板看不到 `/api/words?q=aviate`。
+
+原因：
+- 小程序开发运行时未配置 API base 时，首页搜索会落到本地词库路径；本地无 aviate 时直接显示暂未收录，没有继续请求线上 `/api/words?q=<keyword>`。
+
+修复：
+- 搜索时默认使用正式 HTTPS 词库 API，并通过 `/api/words?q=<keyword>` 拉取线上已发布词条。
+- 远程搜索结果优先展示，同时保留本地已发布词条作为远程空结果或失败后的备用结果。
+- 详情页继续优先通过 `/api/words/:id` 获取精确线上词条；远程失败时才显示本地已发布备用内容。
+- 保留详情页现有 `videoClips` / `video` / `videoSegment` 兼容逻辑。
+
+验收方式：
+- HBuilderX 重新运行到微信开发者工具后，首页搜索 aviate，Network 应能看到 `https://baxiaota.com/api/words?q=aviate`。
+- 点击 aviate 进入详情页，Network 应能看到 `https://baxiaota.com/api/words/aviate`，并显示视频片段区域。
+
+### 2026-07-02 小程序 VOD 片段播放判定修复记录
+
+背景：
+- aviate 详情页已经拿到 `activeVideoUrl`，且视频片段区域、标题与 `2s - 60s` 时间范围已经显示，但 `hasPlayableVideo=false`，播放区显示暂不可播放。
+
+原因：
+- 播放可用性依赖共享媒体 URL 判断；微信小程序运行时可能没有标准 `URL` 构造器，导致合法 HTTPS VOD 地址未被识别为可播放。
+
+修复：
+- 为媒体 URL 判断增加无 `URL` 构造器时的最小解析兜底，使合法 `https://` VOD 地址可播放。
+- 详情页 `hasPlayableVideo` 显式要求视频模块开启、存在片段数据、`activeVideoUrl` 可播放且片段时间范围有效。
+- 继续拦截 `localhost`、`127.0.0.1`、`blob:`、`data:` 等不安全或临时地址进入生产播放。
+
+验收：
+- aviate 详情页 `hasVideoData=true`、`activeVideoUrl` 为腾讯云 VOD HTTPS mp4 地址时，`hasPlayableVideo=true`，点击片段播放按钮后 video 组件尝试播放该 VOD mp4。
+
+### 2026-07-02 小程序完整视频播放入口联调记录
+
+背景：
+- 词条详情页已经支持 `videoClips` 片段播放，但用户只能观看当前片段，缺少在当前片段上下文中继续观看完整视频的入口。
+
+修复：
+- 将视频模块里原“暂无更多讲解内容”提示框改为完整播放按钮区，不额外增加标题。
+- 完整播放 URL 优先使用 `word.fullVideoUrl` / `word.fullVideo.url`，否则使用当前选中片段的 `activeVideoUrl`。
+- 完整播放切换为独立播放模式，从 0 秒开始播放，并跳过片段 `startSec/endSec` 边界截停。
+- 片段选择和片段播放仍回到原有片段模式，继续按 `startSec/endSec` 控制。
+- 完整播放继续使用现有媒体安全守卫，只允许合法 HTTPS 等生产可播放地址，继续拦截 `localhost`、`127.0.0.1`、`blob:`、`data:`。
+
+验收：
+- aviate 详情页先点击下方片段，片段仍按配置时间播放；点击“看完整讲解”后，当前片段所属视频从开头播放，不受片段结束时间限制。
+
 ### 2026-07-01: VOD manual playback URL test path
 
 Decision:

@@ -210,7 +210,6 @@ import BottomNav from '../../components/BottomNav.vue'
 import {
   fetchWordById,
   fetchHomepageFeaturedWord,
-  fetchWordByWord,
   fetchWords,
   normalizeWordQuery
 } from '../../common/word-repository.js'
@@ -425,9 +424,12 @@ export default {
         this.results = remoteResults
       } catch (error) {
         if (this.normalizedQuery !== requestWord) return
-        this.results = []
-        this.searchErrorMessage = '线上词库暂时无法连接，请检查网络后重试。'
-        this.missingDescription = this.searchErrorMessage
+        const fallbackResults = error && Array.isArray(error.fallback) ? error.fallback : []
+        this.results = fallbackResults
+        this.searchErrorMessage = fallbackResults.length
+          ? '线上词库暂时无法连接，当前显示本地备用结果。'
+          : '线上词库暂时无法连接，请检查网络后重试。'
+        this.missingDescription = fallbackResults.length ? '' : this.searchErrorMessage
       }
     },
     handleQueryInput(event) {
@@ -489,21 +491,6 @@ export default {
 
       this.searching = true
       try {
-        let remoteExact = null
-        try {
-          remoteExact = await fetchWordByWord(word)
-        } catch (error) {
-          this.results = []
-          this.searchErrorMessage = '线上词库暂时无法连接，请检查网络后重试。'
-          this.missingDescription = this.searchErrorMessage
-          this.searchPanelOpen = true
-          return
-        }
-        if (remoteExact) {
-          this.openDetail(remoteExact.id, true, { trustedWord: remoteExact })
-          return
-        }
-
         await this.updateSuggestionState(word)
         this.searchPanelOpen = true
       } finally {

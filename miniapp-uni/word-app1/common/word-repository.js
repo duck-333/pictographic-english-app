@@ -62,11 +62,32 @@ function normalizeMediaUrl(url) {
 
 function parseMediaUrl(url) {
   const value = normalizeMediaUrl(url)
-  if (!value || typeof URL === 'undefined') return null
-  try {
-    return new URL(value)
-  } catch (error) {
+  if (!value || /\s/.test(value)) return null
+  if (typeof URL !== 'undefined') {
+    try {
+      return new URL(value)
+    } catch (error) {
+      return null
+    }
+  }
+
+  const match = value.match(/^([a-z][a-z0-9+.-]*:)(?:\/\/([^\s/?#]*))?/i)
+  if (!match) return null
+
+  const protocol = match[1].toLowerCase()
+  const authority = String(match[2] || '').replace(/^[^@]*@/, '')
+  const bracketEndIndex = authority.charAt(0) === '[' ? authority.indexOf(']') : -1
+  const hostname = bracketEndIndex > 0
+    ? authority.slice(1, bracketEndIndex)
+    : authority.split(':')[0]
+
+  if ((protocol === 'http:' || protocol === 'https:' || protocol === 'cloud:') && !hostname) {
     return null
+  }
+
+  return {
+    protocol,
+    hostname
   }
 }
 
@@ -180,6 +201,17 @@ function cacheRemoteWords(words) {
     .map((item) => normalizeRemoteDisplayWord(item))
     .filter((item) => item.status === 'published')
   return publishedWords.map((item) => cloneWord(item))
+}
+
+function mergePublishedWordResults(primaryWords, fallbackWords) {
+  return mergePreviewWords(primaryWords || [], fallbackWords || [])
+    .map((item) => normalizeRemoteDisplayWord(item))
+    .filter((item) => item.status === 'published')
+    .map((item) => cloneWord(item))
+}
+
+function getLocalPublishedWordFallback(value) {
+  return getWordById(value) || getWordByWord(value)
 }
 
 function createRemoteFailure(error, fallback) {
@@ -331,13 +363,15 @@ export function getRelatedWords(word) {
 }
 
 export function fetchWords(query) {
+  const localResults = searchWords(query)
   if (!getWordApiBaseUrl()) {
-    return Promise.resolve(searchWords(query))
+    return Promise.resolve(localResults)
   }
   return fetchServerWords(query)
     .then((words) => cacheRemoteWords(words))
+    .then((remoteWords) => mergePublishedWordResults(remoteWords, localResults))
     .catch((error) => {
-      throw createRemoteFailure(error, searchWords(query))
+      throw createRemoteFailure(error, localResults)
     })
 }
 
@@ -366,31 +400,33 @@ export function fetchHomepageFeaturedWord() {
 }
 
 export function fetchWordById(id) {
+  const localFallback = getLocalPublishedWordFallback(id)
   if (!getWordApiBaseUrl()) {
-    return Promise.resolve(getWordById(id))
+    return Promise.resolve(localFallback)
   }
   return fetchServerWordById(id)
     .then((word) => {
-      if (!word || word.status !== 'published') return null
+      if (!word || word.status !== 'published') return localFallback
       cacheRemoteWords([word])
       return cloneWord(normalizeRemoteDisplayWord(word))
     })
     .catch((error) => {
-      throw createRemoteFailure(error, getWordById(id) || getWordByWord(id))
+      throw createRemoteFailure(error, localFallback)
     })
 }
 
 export function fetchWordByWord(word) {
+  const localFallback = getWordByWord(word)
   if (!getWordApiBaseUrl()) {
-    return Promise.resolve(getWordByWord(word))
+    return Promise.resolve(localFallback)
   }
   return fetchServerWords(word)
     .then((words) => {
       const remoteWords = cacheRemoteWords(words)
       const keyword = normalizeWordQuery(word)
-      return remoteWords.find((item) => item.word.toLowerCase() === keyword) || null
+      return remoteWords.find((item) => item.word.toLowerCase() === keyword) || localFallback
     })
     .catch((error) => {
-      throw createRemoteFailure(error, getWordByWord(word))
+      throw createRemoteFailure(error, localFallback)
     })
 }

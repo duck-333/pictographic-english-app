@@ -180,20 +180,20 @@
             id="lessonVideo"
             :key="activeVideoKey"
             class="lesson-video"
-            :src="activeVideoUrl"
+            :src="currentVideoUrl"
             :poster="activeVideoPoster"
-            :initial-time="activeVideoStart"
-            :controls="false"
-            :show-center-play-btn="false"
-            :show-play-btn="false"
-            :show-progress="false"
-            :show-fullscreen-btn="false"
+            :initial-time="currentVideoInitialTime"
+            :controls="isFullVideoMode"
+            :show-center-play-btn="isFullVideoMode"
+            :show-play-btn="isFullVideoMode"
+            :show-progress="isFullVideoMode"
+            :show-fullscreen-btn="isFullVideoMode"
             :show-mute-btn="false"
-            :enable-progress-gesture="false"
-            :enable-play-gesture="false"
-            :vslide-gesture="false"
-            :vslide-gesture-in-fullscreen="false"
-            @tap="toggleActiveClipPlayback"
+            :enable-progress-gesture="isFullVideoMode"
+            :enable-play-gesture="isFullVideoMode"
+            :vslide-gesture="isFullVideoMode"
+            :vslide-gesture-in-fullscreen="isFullVideoMode"
+            @tap="toggleVideoPlayback"
             @loadedmetadata="handleVideoLoadedMetadata"
             @canplay="handleVideoCanPlay"
             @error="handleVideoError"
@@ -202,7 +202,7 @@
             @timeupdate="handleVideoTimeUpdate"
             @ended="handleVideoEnded"
           ></video>
-          <view class="segment-control-panel">
+          <view v-if="!isFullVideoMode" class="segment-control-panel">
             <button class="segment-play-button" hover-class="button-pressed" @tap.stop="toggleActiveClipPlayback">
               <view v-if="clipIsPlaying" class="pause-bars">
                 <view class="pause-bar"></view>
@@ -234,8 +234,15 @@
             </view>
           </view>
           <view class="full-video-lock">
-            <text class="lock-title">暂无更多讲解内容</text>
-            <text class="lock-text">当前讲解片段时长 {{ clipDurationText }}。</text>
+            <button
+              v-if="hasPlayableFullVideo"
+              class="full-video-button"
+              hover-class="button-pressed"
+              @tap.stop="toggleFullVideoPlayback"
+            >
+              {{ fullVideoButtonText }}
+            </button>
+            <text class="lock-text">{{ fullVideoHintText }}</text>
           </view>
         </view>
         <view v-else class="video-placeholder" @tap="showVideoTip">
@@ -351,8 +358,10 @@ export default {
       activePartMeaning: '',
       showFullDesc: true,
       activeClipIndex: 0,
+      videoPlaybackMode: 'clip',
       clipCurrentTime: 0,
       clipIsPlaying: false,
+      fullVideoIsPlaying: false,
       enforcingClipBoundary: false,
       pausedAtClipEnd: false,
       clipPlaybackToken: 0,
@@ -434,7 +443,7 @@ export default {
           index,
           active: index === this.activeClipIndex,
           clipId: clip.clipId || `clip-${index + 1}`,
-          displayTitle: clip.segmentTitle || clip.title || `片段 ${index + 1}`,
+          displayTitle: this.getVideoClipTitle(clip, index),
           focus: clip.focus || '讲解焦点待补充',
           targetPart: clip.targetPart || '整体',
           note: clip.note || '这个片段暂时没有补充说明。',
@@ -487,11 +496,27 @@ export default {
       return this.videoClips[this.activeClipIndex] || this.videoClips[0] || {}
     },
     activeVideoKey() {
-      return this.activeVideoUrl || 'no-video'
+      return `${this.videoPlaybackMode}-${this.currentVideoUrl || 'no-video'}`
     },
     activeVideoUrl() {
       const video = this.activeVideo || {}
       return String(video.videoUrl || video.url || '').trim()
+    },
+    isFullVideoMode() {
+      return this.videoPlaybackMode === 'full'
+    },
+    fullVideoUrl() {
+      const word = this.word || {}
+      const fullVideo = word.fullVideo && typeof word.fullVideo === 'object' && !Array.isArray(word.fullVideo)
+        ? word.fullVideo
+        : {}
+      return String(word.fullVideoUrl || fullVideo.videoUrl || fullVideo.url || this.activeVideoUrl || '').trim()
+    },
+    currentVideoUrl() {
+      return this.isFullVideoMode ? this.fullVideoUrl : this.activeVideoUrl
+    },
+    currentVideoInitialTime() {
+      return this.isFullVideoMode ? 0 : this.activeVideoStart
     },
     activeVideoPoster() {
       const video = this.activeVideo || {}
@@ -501,8 +526,9 @@ export default {
       if (!this.hasVideoData) {
         return '暂无视频讲解'
       }
-      return this.word && (this.activeVideo.segmentTitle || this.activeVideo.title || this.word.videoTitle)
-        ? (this.activeVideo.segmentTitle || this.activeVideo.title || this.word.videoTitle)
+      const clipTitle = this.getVideoClipTitle(this.activeVideo, this.activeClipIndex)
+      return this.word && (clipTitle || this.word.videoTitle)
+        ? (clipTitle || this.word.videoTitle)
         : '讲解视频'
     },
     activeVideoStart() {
@@ -561,10 +587,25 @@ export default {
       return range
     },
     hasPlayableVideo() {
+      if (!ENABLE_VIDEO_MODULE || !this.hasVideoData) return false
       return isPlayableMediaUrl(this.activeVideoUrl) && this.activeClipHasValidRange
+    },
+    hasPlayableFullVideo() {
+      return ENABLE_VIDEO_MODULE && this.hasVideoData && isPlayableMediaUrl(this.fullVideoUrl)
+    },
+    fullVideoButtonText() {
+      if (!this.isFullVideoMode) return '看完整讲解'
+      return this.fullVideoIsPlaying ? '暂停完整讲解' : '继续完整讲解'
+    },
+    fullVideoHintText() {
+      if (!this.hasPlayableFullVideo) return `当前讲解片段时长 ${this.clipDurationText}。`
+      return this.isFullVideoMode
+        ? '正在播放完整视频，可使用视频控件查看进度。'
+        : '从头播放当前片段所属视频。'
     },
     videoStatusText() {
       if (!this.hasVideoData) return '暂无视频'
+      if (this.isFullVideoMode) return '完整讲解'
       if (!this.activeClipHasValidRange) return '片段待配置'
       return this.hasPlayableVideo ? '讲解片段' : '暂不可播放'
     },
@@ -620,6 +661,15 @@ export default {
           }
         }
       } catch (error) {
+        const fallback = error && error.fallback && error.fallback.status === 'published'
+          ? error.fallback
+          : null
+        if (fallback) {
+          this.applyLoadedWord(fallback)
+          this.loadErrorMessage = '线上词库暂时无法连接，当前显示本地备用内容。'
+          this.loading = false
+          return
+        }
         this.notFoundTitle = '暂时无法加载词条'
         this.notFoundDescription = '线上词库连接失败，请检查网络后重试。'
         this.loading = false
@@ -653,8 +703,10 @@ export default {
       this.activePartMeaning = ''
       this.showFullDesc = true
       this.activeClipIndex = 0
+      this.videoPlaybackMode = 'clip'
       this.clipCurrentTime = 0
       this.clipIsPlaying = false
+      this.fullVideoIsPlaying = false
       this.enforcingClipBoundary = false
       this.pausedAtClipEnd = false
       this.pendingClipAutoplay = false
@@ -738,6 +790,10 @@ export default {
           Number(source.endSec || 0) > 0
       )
     },
+    getVideoClipTitle(clip, index = 0) {
+      const source = clip || {}
+      return String(source.title || source.segmentTitle || source.segment_title || `片段 ${index + 1}`).trim()
+    },
     formatClipRange(clip) {
       const source = clip || {}
       const start = Number(source.startSec || 0)
@@ -780,8 +836,10 @@ export default {
 
       const previousUrl = this.activeVideoUrl
       this.activeClipIndex = index
+      this.videoPlaybackMode = 'clip'
       this.clipCurrentTime = 0
       this.clipIsPlaying = false
+      this.fullVideoIsPlaying = false
       this.enforcingClipBoundary = false
       this.pausedAtClipEnd = false
       this.pendingClipAutoplay = false
@@ -806,6 +864,8 @@ export default {
       })
     },
     playActiveClipFromStart() {
+      this.videoPlaybackMode = 'clip'
+      this.fullVideoIsPlaying = false
       const context = this.getVideoContext()
       if (!context || !this.hasPlayableVideo) return
       this.clipIsSeeking = false
@@ -813,18 +873,26 @@ export default {
       this.pausedAtClipEnd = false
       this.enforcingClipBoundary = true
       this.clipCurrentTime = this.activeVideoStart
+      this.clipIsPlaying = true
       context.seek(this.activeVideoStart)
       this.scheduleClipPlayback(120, () => {
         this.enforcingClipBoundary = false
         context.play()
       })
     },
+    toggleVideoPlayback() {
+      if (this.isFullVideoMode) {
+        this.toggleFullVideoPlayback()
+        return
+      }
+      this.toggleActiveClipPlayback()
+    },
     toggleActiveClipPlayback() {
       if (!this.hasPlayableVideo) {
         this.showVideoTip()
         return
       }
-      if (this.clipIsPlaying) {
+      if (this.clipIsPlaying || this.clipPlaybackTimer) {
         this.pauseActiveClip()
         return
       }
@@ -839,7 +907,52 @@ export default {
       }
       this.resumeActiveClip()
     },
+    playFullVideoFromStart() {
+      if (!this.hasPlayableFullVideo) {
+        this.showVideoTip()
+        return
+      }
+      this.clearClipPlaybackTimer()
+      this.videoPlaybackMode = 'full'
+      this.clipIsPlaying = false
+      this.fullVideoIsPlaying = false
+      this.pendingClipAutoplay = false
+      this.clipIsSeeking = false
+      this.resumeAfterSeeking = false
+      this.pausedAtClipEnd = false
+      this.enforcingClipBoundary = false
+
+      this.$nextTick(() => {
+        const context = this.getVideoContext()
+        if (!context) return
+        context.seek(0)
+        setTimeout(() => {
+          if (!this.isFullVideoMode) return
+          context.play()
+        }, 120)
+      })
+    },
+    toggleFullVideoPlayback() {
+      if (!this.hasPlayableFullVideo) {
+        this.showVideoTip()
+        return
+      }
+      if (!this.isFullVideoMode) {
+        this.playFullVideoFromStart()
+        return
+      }
+      const context = this.getVideoContext()
+      if (!context) return
+      if (this.fullVideoIsPlaying) {
+        this.fullVideoIsPlaying = false
+        context.pause()
+        return
+      }
+      context.play()
+    },
     resumeActiveClip() {
+      this.videoPlaybackMode = 'clip'
+      this.fullVideoIsPlaying = false
       const context = this.getVideoContext()
       if (!context || !this.hasPlayableVideo) return
       const targetTime = this.getClampedClipTime(this.clipCurrentTime || this.activeVideoStart)
@@ -848,6 +961,7 @@ export default {
       this.pausedAtClipEnd = false
       this.enforcingClipBoundary = true
       this.clipCurrentTime = targetTime
+      this.clipIsPlaying = true
       context.seek(targetTime)
       this.scheduleClipPlayback(120, () => {
         this.enforcingClipBoundary = false
@@ -908,10 +1022,18 @@ export default {
       })
     },
     getVideoContext() {
-      if (!this.hasPlayableVideo) return null
+      if (!this.hasPlayableVideo && !this.hasPlayableFullVideo) return null
       return uni.createVideoContext('lessonVideo', this)
     },
     pauseActiveClip() {
+      if (this.isFullVideoMode) {
+        this.fullVideoIsPlaying = false
+        const context = this.getVideoContext()
+        if (context) {
+          context.pause()
+        }
+        return
+      }
       this.pendingClipAutoplay = false
       this.clipIsSeeking = false
       this.resumeAfterSeeking = false
@@ -1006,6 +1128,11 @@ export default {
     handleVideoLoadedMetadata() {
       const context = this.getVideoContext()
       if (!context) return
+      if (this.isFullVideoMode) {
+        this.enforcingClipBoundary = false
+        this.clipIsPlaying = false
+        return
+      }
       this.clipCurrentTime = this.activeVideoStart
       this.clipIsPlaying = false
       this.enforcingClipBoundary = true
@@ -1017,11 +1144,13 @@ export default {
       }, 180)
     },
     handleVideoCanPlay() {
+      if (this.isFullVideoMode) return
       if (!this.pendingClipAutoplay) return
       this.pendingClipAutoplay = false
       this.playActiveClipFromStart()
     },
     handleVideoTimeUpdate(event) {
+      if (this.isFullVideoMode) return
       if (!this.hasPlayableVideo) return
       const detail = event && event.detail ? event.detail : {}
       const currentTime = Number(detail.currentTime || 0)
@@ -1064,6 +1193,11 @@ export default {
       }
     },
     handleVideoPlay() {
+      if (this.isFullVideoMode) {
+        this.fullVideoIsPlaying = true
+        this.clipIsPlaying = false
+        return
+      }
       if (this.pausedAtClipEnd || this.clipCurrentTime < this.activeVideoStart - 0.4) {
         this.playActiveClipFromStart()
         return
@@ -1072,13 +1206,23 @@ export default {
       this.pausedAtClipEnd = false
     },
     handleVideoPause() {
+      if (this.isFullVideoMode) {
+        this.fullVideoIsPlaying = false
+        return
+      }
       this.clipIsPlaying = false
     },
     handleVideoEnded() {
+      if (this.isFullVideoMode) {
+        this.fullVideoIsPlaying = false
+        return
+      }
       this.clipIsPlaying = false
       this.pausedAtClipEnd = true
     },
     handleVideoError() {
+      this.clipIsPlaying = false
+      this.fullVideoIsPlaying = false
       uni.showToast({
         title: '视频暂时无法播放，请检查视频地址或小程序合法域名配置',
         icon: 'none'
@@ -1796,6 +1940,25 @@ export default {
   color: #ffeba2;
   font-size: 23rpx;
   font-weight: 800;
+}
+
+.full-video-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 64rpx;
+  margin: 0;
+  padding: 0 24rpx;
+  border-radius: 18rpx;
+  background: #ffeba2;
+  color: #0e3a5c;
+  font-size: 24rpx;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.full-video-button::after {
+  border: 0;
 }
 
 .lock-text {
