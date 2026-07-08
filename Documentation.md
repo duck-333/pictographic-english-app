@@ -1,5 +1,19 @@
 # Documentation
 
+### 2026-07-05: 最小微信登录接入
+
+Decision:
+- Add the first mini program WeChat login path: `uni.login` -> `POST /api/auth/wechat-login` -> WeChat `jscode2session` -> `wechat_user_bindings.openid` -> internal `users.id` -> server-signed token.
+- Use `wechat_user_bindings.openid` as the only WeChat identity lookup source. Existing `users.openid`, if present in MySQL, is not used as the login identity source.
+- Return only the project-owned token and internal user id to the mini program. Do not return `openid`, `unionid`, `session_key`, database password, or WeChat secret.
+- Add a thin MySQL user store for `users` and `wechat_user_bindings`; do not touch the existing word store, VOD/media logic, dashboard placeholders, favorites sync, or historical local learning data.
+- The mini program "我的" page can log in and log out, but local favorites/recent words/search counts remain device-local and are not auto-synced in this stage.
+
+Required production follow-up:
+- Configure server-only environment variables for MySQL, WeChat AppID/AppSecret, and `JWT_SECRET`.
+- Add daily `mysqldump` backup with 7-day retention before relying on the database for production user accounts.
+- Configure the WeChat mini program request legal domain for `https://baxiaota.com`.
+
 ### 2026-07-02 小程序远程搜索与 VOD 片段联调记录
 
 背景：

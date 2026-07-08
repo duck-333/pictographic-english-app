@@ -3,8 +3,37 @@
     <view class="profile-card">
       <view class="avatar-fallback">象</view>
       <view class="profile-main">
-        <text class="profile-title">本机学习记录</text>
-        <text class="profile-subtitle">收藏、最近查看和学习次数仅保存在当前设备</text>
+        <text class="profile-title">{{ authLoggedIn ? '微信登录已启用' : '本机学习记录' }}</text>
+        <text class="profile-subtitle">{{ authSubtitle }}</text>
+      </view>
+    </view>
+
+    <view class="section auth-card">
+      <view class="auth-copy">
+        <text class="setting-title">{{ authLoggedIn ? '已登录微信账号' : '微信登录' }}</text>
+        <text class="setting-desc">
+          {{ authLoggedIn ? '已建立账号身份。本机收藏和最近查看暂不自动同步。' : '登录后用于后续账号同步和学习数据扩展，不采集头像、昵称或手机号。' }}
+        </text>
+      </view>
+      <view class="auth-actions">
+        <button
+          v-if="!authLoggedIn"
+          class="login-button"
+          :class="{ disabled: authLoading }"
+          hover-class="button-pressed"
+          :disabled="authLoading"
+          @tap="handleWechatLogin"
+        >
+          {{ authLoading ? '登录中' : '微信登录' }}
+        </button>
+        <button
+          v-else
+          class="logout-button"
+          hover-class="button-pressed"
+          @tap="handleLogout"
+        >
+          退出登录
+        </button>
       </view>
     </view>
 
@@ -87,9 +116,9 @@
       <view class="setting-row">
         <view>
           <text class="setting-title">数据同步状态</text>
-          <text class="setting-desc">当前版本不登录、不采集头像昵称，学习数据仅保存在当前设备。</text>
+          <text class="setting-desc">{{ authLoggedIn ? '已完成微信身份登录。本机学习数据暂未自动同步到账号。' : '当前未登录，不采集头像昵称，学习数据仅保存在当前设备。' }}</text>
         </view>
-        <text class="sync-badge">本机</text>
+        <text class="sync-badge">{{ authLoggedIn ? '已登录' : '本机' }}</text>
       </view>
       <view class="setting-row">
         <view>
@@ -106,6 +135,8 @@
 
 <script>
 import BottomNav from '../../components/BottomNav.vue'
+import { loginWithWechat } from '../../common/auth-api-client.js'
+import { clearAuthSession, getAuthSession } from '../../common/auth-store.js'
 import {
   clearUserData,
   getFavoriteWords,
@@ -122,7 +153,19 @@ export default {
     return {
       state: getUserState(),
       recentWords: [],
-      favoriteWords: []
+      favoriteWords: [],
+      authSession: getAuthSession(),
+      authLoading: false
+    }
+  },
+  computed: {
+    authLoggedIn() {
+      return Boolean(this.authSession && this.authSession.token && this.authSession.user && this.authSession.user.id)
+    },
+    authSubtitle() {
+      return this.authLoggedIn
+        ? '已建立账号身份，本机学习记录仍保留在当前设备'
+        : '收藏、最近查看和学习次数仅保存在当前设备'
     }
   },
   onShow() {
@@ -133,6 +176,42 @@ export default {
       this.state = getUserState()
       this.recentWords = getRecentWords()
       this.favoriteWords = getFavoriteWords()
+      this.authSession = getAuthSession()
+    },
+    async handleWechatLogin() {
+      if (this.authLoading) return
+      this.authLoading = true
+      try {
+        this.authSession = await loginWithWechat()
+        uni.showToast({
+          title: '登录成功',
+          icon: 'none'
+        })
+      } catch (error) {
+        uni.showToast({
+          title: this.getLoginErrorMessage(error),
+          icon: 'none'
+        })
+      } finally {
+        this.authLoading = false
+      }
+    },
+    handleLogout() {
+      clearAuthSession()
+      this.authSession = null
+      uni.showToast({
+        title: '已退出登录',
+        icon: 'none'
+      })
+    },
+    getLoginErrorMessage(error) {
+      const code = error && error.code ? String(error.code) : ''
+      if (code === 'WECHAT_CODE_INVALID' || code === 'WECHAT_CODE_MISSING') return '登录状态已过期，请重试'
+      if (code === 'WECHAT_RATE_LIMITED') return '登录太频繁，请稍后再试'
+      if (code === 'WECHAT_LOGIN_BLOCKED') return '当前微信账号暂无法登录'
+      if (code === 'WECHAT_CONFIG_MISSING' || code === 'USER_DB_CONFIG_MISSING') return '登录服务暂未配置'
+      if (code === 'AUTH_API_TIMEOUT' || code === 'AUTH_API_NETWORK_ERROR') return '登录服务连接失败'
+      return '登录暂不可用，请稍后重试'
     },
     openDetailFromEvent(event) {
       const dataset = event && event.currentTarget ? event.currentTarget.dataset : {}
@@ -329,6 +408,28 @@ export default {
   box-shadow: 0 6rpx 18rpx rgba(14, 58, 92, 0.06);
 }
 
+.auth-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24rpx;
+  padding: 30rpx;
+  border: 2rpx solid #dbeeff;
+  border-radius: 30rpx;
+  background: #ffffff;
+  box-shadow: 0 6rpx 18rpx rgba(14, 58, 92, 0.06);
+}
+
+.auth-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.auth-actions {
+  flex-shrink: 0;
+  width: 176rpx;
+}
+
 .clear-button {
   width: 100%;
   height: 84rpx;
@@ -376,6 +477,31 @@ export default {
 .clear-button {
   background: #fff1f2;
   color: #dc2626;
+}
+
+.login-button,
+.logout-button {
+  width: 176rpx;
+  height: 76rpx;
+  padding: 0;
+  border-radius: 999rpx;
+  font-size: 26rpx;
+  font-weight: 900;
+  line-height: 76rpx;
+}
+
+.login-button {
+  background: #0e3a5c;
+  color: #ffffff;
+}
+
+.login-button.disabled {
+  opacity: 0.6;
+}
+
+.logout-button {
+  background: #ebf8ff;
+  color: #0e3a5c;
 }
 
 .button-pressed,

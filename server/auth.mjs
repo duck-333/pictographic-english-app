@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 
 export const DEFAULT_DEV_ADMIN_API_TOKEN = ''
 const DEFAULT_ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000
+const DEFAULT_USER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const PROCESS_SESSION_SECRET = crypto.randomBytes(32).toString('hex')
 
 export function isProductionNodeEnv(nodeEnv = process.env.NODE_ENV) {
@@ -54,6 +55,11 @@ function safeTokenEquals(received, expected) {
 function getAdminSessionTtlMs(options = {}) {
   const value = Number(options.adminSessionTtlMs || process.env.ADMIN_SESSION_TTL_MS || DEFAULT_ADMIN_SESSION_TTL_MS)
   return Number.isFinite(value) && value > 0 ? value : DEFAULT_ADMIN_SESSION_TTL_MS
+}
+
+function getUserSessionTtlMs(options = {}) {
+  const value = Number(options.userSessionTtlMs || process.env.USER_SESSION_TTL_MS || DEFAULT_USER_SESSION_TTL_MS)
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_USER_SESSION_TTL_MS
 }
 
 function getJwtSecret(options = {}) {
@@ -134,6 +140,32 @@ export function createAdminSessionToken(username, options = {}) {
   const payload = {
     sub: String(username || '').trim(),
     role: 'admin',
+    iat: Math.floor(nowMs / 1000),
+    exp: Math.floor(expiresAtMs / 1000)
+  }
+  const body = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(payload))}`
+  const token = `${body}.${signTokenBody(body, getJwtSecret(options))}`
+  return {
+    token,
+    expiresAt: new Date(expiresAtMs).toISOString()
+  }
+}
+
+export function createUserSessionToken(userId, options = {}) {
+  const normalizedUserId = String(userId || '').trim()
+  if (!normalizedUserId) {
+    throw new Error('User id is required.')
+  }
+
+  const nowMs = getNowMs(options)
+  const expiresAtMs = nowMs + getUserSessionTtlMs(options)
+  const header = {
+    alg: 'HS256',
+    typ: 'JWT'
+  }
+  const payload = {
+    sub: normalizedUserId,
+    role: 'user',
     iat: Math.floor(nowMs / 1000),
     exp: Math.floor(expiresAtMs / 1000)
   }

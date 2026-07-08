@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { DEFAULT_DEV_ADMIN_API_TOKEN } from '../server/auth.mjs'
+import { createAdminSessionToken } from '../server/auth.mjs'
 import { createApiHandler } from '../server/index.mjs'
 import { createWordStore } from '../server/word-store.mjs'
 import { getWordApiBaseUrl } from '../miniapp-uni/word-app1/common/api-config.js'
@@ -29,8 +29,12 @@ async function startTestServer(options = {}) {
   await store.replaceWords([])
   const server = http.createServer(createApiHandler({
     store,
+    userStore: options.userStore,
+    wechatLoginClient: options.wechatLoginClient,
+    jwtSecret: options.jwtSecret,
     nodeEnv: options.nodeEnv,
-    adminApiToken: options.adminApiToken,
+    adminUsername: options.adminUsername,
+    adminPassword: options.adminPassword,
     now: options.now
   }))
   server.listen(0, '127.0.0.1')
@@ -276,11 +280,62 @@ async function main() {
   await testAdminWordClientPreservesIllustrationPayload()
 
   const fixedNow = () => new Date('2026-06-23T08:00:00.000Z')
-  const { server, store, baseUrl } = await startTestServer({ now: fixedNow })
+  const adminAuthOptions = {
+    adminUsername: 'admin-test',
+    adminPassword: 'admin-password',
+    jwtSecret: 'test-session-secret',
+    now: fixedNow
+  }
+  const adminToken = createAdminSessionToken(adminAuthOptions.adminUsername, adminAuthOptions).token
+  const authTestUserStore = {
+    async findOrCreateWechatUser(identity) {
+      assert(identity.openid === 'openid-test', 'wechat login should pass openid to the user store')
+      assert(identity.unionid === 'unionid-test', 'wechat login should pass unionid to the user store')
+      return {
+        id: '42',
+        isNew: true
+      }
+    }
+  }
+  const authTestWechatLoginClient = {
+    async code2Session(code) {
+      assert(code === 'test-login-code', 'wechat login endpoint should pass code to code2Session')
+      return {
+        openid: 'openid-test',
+        unionid: 'unionid-test'
+      }
+    }
+  }
+  const { server, store, baseUrl } = await startTestServer({
+    now: fixedNow,
+    userStore: authTestUserStore,
+    wechatLoginClient: authTestWechatLoginClient,
+    adminUsername: adminAuthOptions.adminUsername,
+    adminPassword: adminAuthOptions.adminPassword,
+    jwtSecret: adminAuthOptions.jwtSecret
+  })
   try {
     const health = await readJson(await fetch(`${baseUrl}/api/health`))
     assert(health.status === 200, 'GET /api/health should return 200')
     assert(health.body.ok === true, 'GET /api/health should return ok=true')
+
+    const authLogin = await readJson(await fetch(`${baseUrl}/api/auth/wechat-login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        code: 'test-login-code'
+      })
+    }))
+    assert(authLogin.status === 200, 'POST /api/auth/wechat-login should return 200')
+    assert(authLogin.body.ok === true, 'POST /api/auth/wechat-login should return ok=true')
+    assert(authLogin.body.tokenType === 'Bearer', 'wechat login should return a bearer token')
+    assert(typeof authLogin.body.token === 'string' && authLogin.body.token.length > 20, 'wechat login should return a signed token')
+    assert(authLogin.body.user.id === '42', 'wechat login should return the internal user id')
+    assert(authLogin.body.user.hasWechatBinding === true, 'wechat login should report a WeChat binding')
+    assert(!Object.prototype.hasOwnProperty.call(authLogin.body.user, 'openid'), 'wechat login must not return openid')
+    assert(!Object.prototype.hasOwnProperty.call(authLogin.body, 'session_key'), 'wechat login must not return session_key')
 
     const word = {
       id: 'word-servertest',
@@ -315,11 +370,11 @@ async function main() {
 
     const validAuthCheckToken = await readJson(await fetch(`${baseUrl}/api/admin/auth/check`, {
       headers: {
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: `Bearer ${adminToken}`
       }
     }))
-    assert(validAuthCheckToken.status === 200, 'GET /api/admin/auth/check with dev token should return 200')
-    assert(validAuthCheckToken.body.ok === true, 'GET /api/admin/auth/check with dev token should return ok=true')
+    assert(validAuthCheckToken.status === 200, 'GET /api/admin/auth/check with session token should return 200')
+    assert(validAuthCheckToken.body.ok === true, 'GET /api/admin/auth/check with session token should return ok=true')
 
     const missingToken = await readJson(await fetch(`${baseUrl}/api/admin/words`, {
       method: 'POST',
@@ -364,7 +419,7 @@ async function main() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: `Bearer ${adminToken}`
       },
       body: JSON.stringify({ word })
     }))
@@ -383,7 +438,7 @@ async function main() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: `Bearer ${adminToken}`
       },
       body: JSON.stringify({
         word: {
@@ -517,7 +572,7 @@ async function main() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: `Bearer ${adminToken}`
       },
       body: JSON.stringify({
         featuredWordIds: ['word-hidden-draft'],
@@ -531,7 +586,7 @@ async function main() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: `Bearer ${adminToken}`
       },
       body: JSON.stringify({
         featuredWordIds: ['tud'],
@@ -551,7 +606,7 @@ async function main() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: `Bearer ${adminToken}`
       },
       body: JSON.stringify({
         featuredWordIds: ['tud', 'cool'],
@@ -578,7 +633,7 @@ async function main() {
 
     const featuredAdminGet = await readJson(await fetch(`${baseUrl}/api/admin/homepage-featured`, {
       headers: {
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: `Bearer ${adminToken}`
       }
     }))
     assert(featuredAdminGet.status === 200, 'GET /api/admin/homepage-featured with token should return 200')
@@ -588,7 +643,7 @@ async function main() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: `Bearer ${adminToken}`
       },
       body: JSON.stringify({
         featuredWordIds: ['tud', 'cool'],
@@ -607,7 +662,7 @@ async function main() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: `Bearer ${adminToken}`
       },
       body: JSON.stringify({
         word: {
@@ -630,7 +685,7 @@ async function main() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: `Bearer ${adminToken}`
       },
       body: JSON.stringify({
         featuredWordIds: [],
@@ -662,15 +717,14 @@ async function main() {
   }
 
   const productionServer = await startTestServer({
-    nodeEnv: 'production',
-    adminApiToken: ''
+    nodeEnv: 'production'
   })
   try {
-    const productionDefaultToken = await readJson(await fetch(`${productionServer.baseUrl}/api/admin/words`, {
+    const productionMissingCredentials = await readJson(await fetch(`${productionServer.baseUrl}/api/admin/words`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: 'Bearer wrong-admin-token'
       },
       body: JSON.stringify({
         word: {
@@ -681,54 +735,56 @@ async function main() {
         }
       })
     }))
-    assert(productionDefaultToken.status === 401, 'production POST with default dev token and missing ADMIN_API_TOKEN should return 401')
-    assert(productionDefaultToken.body.message === 'Unauthorized', 'production POST with default dev token should return Unauthorized')
+    assert(productionMissingCredentials.status === 401, 'production POST without configured admin credentials should return 401')
+    assert(productionMissingCredentials.body.message === 'Unauthorized', 'production POST without configured admin credentials should return Unauthorized')
 
     const productionAuthCheckMissingToken = await readJson(await fetch(`${productionServer.baseUrl}/api/admin/auth/check`, {
       headers: {
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
+        Authorization: 'Bearer wrong-admin-token'
       }
     }))
-    assert(productionAuthCheckMissingToken.status === 401, 'production auth check with missing ADMIN_API_TOKEN should return 401')
-    assert(productionAuthCheckMissingToken.body.message === 'Unauthorized', 'production auth check with missing ADMIN_API_TOKEN should return Unauthorized')
+    assert(productionAuthCheckMissingToken.status === 401, 'production auth check without configured admin credentials should return 401')
+    assert(productionAuthCheckMissingToken.body.message === 'Unauthorized', 'production auth check without configured admin credentials should return Unauthorized')
   } finally {
     await new Promise((resolve) => productionServer.server.close(resolve))
   }
 
-  const productionDevTokenServer = await startTestServer({
-    nodeEnv: 'production',
-    adminApiToken: DEFAULT_DEV_ADMIN_API_TOKEN
-  })
-  try {
-    const productionConfiguredDefaultToken = await readJson(await fetch(`${productionDevTokenServer.baseUrl}/api/admin/auth/check`, {
-      headers: {
-        Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}`
-      }
-    }))
-    assert(productionConfiguredDefaultToken.status === 401, 'production auth check should reject configured default dev token')
-    assert(productionConfiguredDefaultToken.body.message === 'Unauthorized', 'production auth check with configured default dev token should return Unauthorized')
-  } finally {
-    await new Promise((resolve) => productionDevTokenServer.server.close(resolve))
+  const productionAuthOptions = {
+    adminUsername: 'production-admin',
+    adminPassword: 'production-password',
+    jwtSecret: 'production-test-session-secret',
+    now: fixedNow
   }
-
-  const productionCustomTokenServer = await startTestServer({
+  const productionAdminToken = createAdminSessionToken(productionAuthOptions.adminUsername, productionAuthOptions).token
+  const productionSessionServer = await startTestServer({
     nodeEnv: 'production',
-    adminApiToken: 'production-private-token'
+    adminUsername: productionAuthOptions.adminUsername,
+    adminPassword: productionAuthOptions.adminPassword,
+    jwtSecret: productionAuthOptions.jwtSecret,
+    now: productionAuthOptions.now
   })
   try {
-    const productionCustomAuthCheck = await readJson(await fetch(`${productionCustomTokenServer.baseUrl}/api/admin/auth/check`, {
+    const productionWrongToken = await readJson(await fetch(`${productionSessionServer.baseUrl}/api/admin/auth/check`, {
       headers: {
-        Authorization: 'Bearer production-private-token'
+        Authorization: 'Bearer wrong-admin-token'
       }
     }))
-    assert(productionCustomAuthCheck.status === 200, 'production auth check should allow configured custom token')
-    assert(productionCustomAuthCheck.body.ok === true, 'production auth check with custom token should return ok=true')
+    assert(productionWrongToken.status === 403, 'production auth check should reject invalid session tokens')
+    assert(productionWrongToken.body.message === 'Unauthorized', 'production auth check with invalid session token should return Unauthorized')
 
-    const productionCustomPost = await readJson(await fetch(`${productionCustomTokenServer.baseUrl}/api/admin/words`, {
+    const productionCustomAuthCheck = await readJson(await fetch(`${productionSessionServer.baseUrl}/api/admin/auth/check`, {
+      headers: {
+        Authorization: `Bearer ${productionAdminToken}`
+      }
+    }))
+    assert(productionCustomAuthCheck.status === 200, 'production auth check should allow a configured admin session')
+    assert(productionCustomAuthCheck.body.ok === true, 'production auth check with a configured admin session should return ok=true')
+
+    const productionCustomPost = await readJson(await fetch(`${productionSessionServer.baseUrl}/api/admin/words`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: 'Bearer production-private-token'
+        Authorization: `Bearer ${productionAdminToken}`
       },
       body: JSON.stringify({
         word: {
@@ -739,10 +795,10 @@ async function main() {
         }
       })
     }))
-    assert(productionCustomPost.status === 200, 'production POST should allow configured custom token')
-    assert(productionCustomPost.body.ok === true, 'production POST with custom token should return ok=true')
+    assert(productionCustomPost.status === 200, 'production POST should allow a configured admin session')
+    assert(productionCustomPost.body.ok === true, 'production POST with configured admin session should return ok=true')
   } finally {
-    await new Promise((resolve) => productionCustomTokenServer.server.close(resolve))
+    await new Promise((resolve) => productionSessionServer.server.close(resolve))
   }
 
   await testMiniappPublishedGuards()

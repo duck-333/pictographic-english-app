@@ -72,6 +72,57 @@ This file is ignored by Git. It is test data, not production content.
 
 Returns API status and word count.
 
+### POST /api/auth/wechat-login
+
+Creates or refreshes a mini program user session from a WeChat `wx.login` / `uni.login` code.
+
+Request body:
+
+```json
+{
+  "code": "one-time-wechat-login-code"
+}
+```
+
+Server behavior:
+
+- Calls WeChat `jscode2session` from the server only.
+- Uses `wechat_user_bindings.openid` as the only WeChat identity lookup source.
+- Creates a row in `users` when the WeChat binding does not exist.
+- Returns a project-owned token. It never returns `openid`, `session_key`, or `WECHAT_MINIAPP_SECRET`.
+- Existing `users.openid`, if present in the database, is not used as the login identity source.
+
+Success response:
+
+```json
+{
+  "ok": true,
+  "token": "server-signed-session-token",
+  "tokenType": "Bearer",
+  "expiresAt": "2026-07-06T00:00:00.000Z",
+  "user": {
+    "id": "1",
+    "hasWechatBinding": true,
+    "isNew": true
+  }
+}
+```
+
+Required server environment:
+
+```text
+WECHAT_MINIAPP_APPID=
+WECHAT_MINIAPP_SECRET=
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_NAME=baxiaota
+DB_USER=app_user
+DB_PASSWORD=
+JWT_SECRET=
+```
+
+Do not commit real `.env` files, database passwords, WeChat secrets, or token signing secrets.
+
 ### GET /api/words
 
 Returns published words only.

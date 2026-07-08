@@ -1,7 +1,9 @@
 import http from 'node:http'
 import { pathToFileURL } from 'node:url'
 
-import { createAdminSessionToken, requireAdminAuth, verifyAdminCredentials } from './auth.mjs'
+import { createAdminSessionToken, createUserSessionToken, requireAdminAuth, verifyAdminCredentials } from './auth.mjs'
+import { createUserStore } from './user-store.mjs'
+import { createWechatLoginClient } from './wechat-login.mjs'
 import { createWordStore } from './word-store.mjs'
 
 const DEFAULT_PORT = 3001
@@ -76,6 +78,8 @@ function summarizePublishedWords(words) {
 
 export function createApiHandler(options = {}) {
   const store = options.store || createWordStore()
+  const userStore = options.userStore || createUserStore(options)
+  const wechatLoginClient = options.wechatLoginClient || createWechatLoginClient(options)
   const now = options.now || (() => new Date())
   const adminAuthOptions = {
     nodeEnv: options.nodeEnv,
@@ -83,6 +87,11 @@ export function createApiHandler(options = {}) {
     adminPassword: options.adminPassword,
     jwtSecret: options.jwtSecret,
     adminSessionTtlMs: options.adminSessionTtlMs,
+    now
+  }
+  const userAuthOptions = {
+    jwtSecret: options.jwtSecret,
+    userSessionTtlMs: options.userSessionTtlMs,
     now
   }
 
@@ -149,6 +158,37 @@ export function createApiHandler(options = {}) {
           ok: true,
           word
         })
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/auth/wechat-login') {
+        try {
+          const body = await readJsonBody(req)
+          const wechatIdentity = await wechatLoginClient.code2Session(body.code)
+          const user = await userStore.findOrCreateWechatUser(wechatIdentity)
+          const session = createUserSessionToken(user.id, userAuthOptions)
+
+          sendJson(res, 200, {
+            ok: true,
+            token: session.token,
+            tokenType: 'Bearer',
+            expiresAt: session.expiresAt,
+            user: {
+              id: user.id,
+              hasWechatBinding: true,
+              isNew: Boolean(user.isNew)
+            }
+          })
+        } catch (error) {
+          const statusCode = Number(error && error.statusCode) || 500
+          sendJson(res, statusCode, {
+            ok: false,
+            code: error && error.code ? error.code : 'INTERNAL_SERVER_ERROR',
+            message: statusCode >= 500
+              ? 'Internal server error.'
+              : (error && error.message ? error.message : 'Request failed.')
+          })
+        }
         return
       }
 
