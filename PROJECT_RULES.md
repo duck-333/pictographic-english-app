@@ -16,6 +16,7 @@ Before any AI development task, read these files in order:
 4. `DEVELOPMENT_LOG.md`
 5. `ADR/*`
 6. `AGENTS.md`
+7. `docs/modules/*`
 
 If the task touches a specific area, also read the relevant local docs before proposing changes:
 
@@ -50,6 +51,106 @@ Rules for this flow:
 - If a durable decision changed, add or update an ADR.
 - Start an independent code review step after feature development. If a separate review agent is unavailable, the main agent must perform a review pass and document findings.
 - Git commit is part of completion only when the user has requested or confirmed committing. Never commit unrelated work.
+
+## Module Development Lifecycle
+
+All new features must follow the module lifecycle below:
+
+1. Requirement analysis.
+2. Architecture impact assessment.
+3. ADR design or ADR update when the task affects architecture, database, identity, permissions, quota, membership, payment, media access, or production safety.
+4. Module design documentation update when module principles, boundaries, data flow, API contracts, or storage ownership change.
+5. Single-module development.
+6. Module review.
+7. Test verification.
+8. Relevant `IMPLEMENTATION.md` update.
+9. `DEVELOPMENT_LOG.md` update.
+10. Git commit after user confirmation.
+
+Rules:
+
+- Do not skip architecture impact assessment for any feature that touches user identity, permission, quota, entitlement, membership, payment, media access, database structure, or production deployment.
+- Do not treat an ADR as implementation approval. Implementation still requires explicit user confirmation.
+- Do not mark a module complete until code, tests, documentation, and review are all handled for the confirmed scope.
+- If implementation reveals the ADR or module design is wrong, stop and revise the design before continuing.
+
+## Single-Module Development Principle
+
+Develop one module at a time.
+
+Forbidden:
+
+- Modifying multiple business modules in one development block without explicit approval.
+- Generating large amounts of code in one pass.
+- Moving to the next feature before verifying the current module.
+- Expanding the scope because nearby code looks convenient to change.
+- Refactoring unrelated code during feature implementation.
+
+Module completion standard:
+
+- The confirmed feature scope is complete.
+- Relevant automated checks and required manual checks have passed or are explicitly documented as not run.
+- Relevant module documentation is synchronized.
+- Architecture remains consistent with accepted ADRs.
+- `DEVELOPMENT_LOG.md` is updated.
+- Git commit is created only after the user confirms committing.
+
+## AI Development Rules
+
+Before any AI development task, AI must read:
+
+```text
+PROJECT_RULES.md
+PROJECT_OVERVIEW.md
+ARCHITECTURE.md
+DEVELOPMENT_LOG.md
+ADR/*
+docs/modules/*
+AGENTS.md
+```
+
+AI must not:
+
+- Modify code before reading the required project documents.
+- Modify architecture without creating or updating an ADR.
+- Delete historical design records.
+- Perform broad refactors without explicit approval.
+- Develop multiple modules at the same time without explicit approval.
+- Treat generated build output as source code.
+- Continue coding when documents and code conflict, unless the user explicitly asks to resolve that conflict.
+
+## Module Review Mechanism
+
+Every module development block must be reviewed after implementation and before the work is considered complete.
+
+Code review must check:
+
+- Whether duplicate logic was introduced.
+- Whether dead code was introduced.
+- Whether existing behavior or public API behavior was broken.
+- Whether the change stays inside the confirmed module boundary.
+
+Architecture review must check:
+
+- Whether the implementation follows accepted ADRs.
+- Whether module boundaries remain clear.
+- Whether other modules are affected unexpectedly.
+- Whether database, API, entitlement, or content access assumptions changed.
+
+Security review must check:
+
+- Authentication and authorization.
+- Sensitive data exposure.
+- Input validation.
+- Server-side enforcement for permission, quota, entitlement, and media access.
+- Secret handling.
+
+Documentation review must check:
+
+- Relevant `IMPLEMENTATION.md` files are updated.
+- `DEVELOPMENT_LOG.md` is updated.
+- `ARCHITECTURE.md` is updated when module boundaries, data flow, APIs, or infrastructure changed.
+- ADRs are added or updated when durable architecture decisions changed.
 
 ## Hard Prohibitions
 
@@ -172,4 +273,3 @@ For server/database changes, verify:
 - Long tasks should be split into small blocks.
 - After 3-5 substantial blocks, update documentation and consider starting a fresh context.
 - If documents and code disagree, stop and report the discrepancy before coding unless the user explicitly asks to resolve it.
-

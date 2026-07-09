@@ -1,6 +1,6 @@
 # Architecture v1
 
-Date: 2026-07-08
+Date: 2026-07-09
 
 This document records the current architecture and the confirmed direction. It is intentionally v1. Do not try to make it perfect in one pass. Update it after major architecture changes.
 
@@ -134,15 +134,31 @@ user_quota_accounts
 user_quota_logs
 ```
 
+Reserved next direction:
+
+```text
+user_entitlements
+```
+
 Later:
 
 ```text
 learning_records
-user_entitlements
 memberships
 orders
 book_activations
 payment_records
+```
+
+Confirmed identity direction:
+
+```text
+users.id
+  -> wechat_user_bindings.openid / unionid
+  -> user_phone_bindings.phone_hash / phone_masked
+  -> user_quota_accounts
+  -> user_quota_logs
+  -> future user_entitlements
 ```
 
 ## Module Map
@@ -162,8 +178,25 @@ Cross-module rules:
 - Public mini program content must still be filtered by `status === "published"` on the server.
 - Admin functionality remains outside the user mini program.
 - `users.id` remains the core user identity.
+- Phone quick login and identity binding are one user identity system upgrade, not two disconnected features.
+- Phone numbers must be searched by backend HMAC lookup and displayed only as masked values.
+- Quota and entitlement are separate concepts:
+  - Quota is consumable, such as `word_lookup`.
+  - Entitlement is qualification-based, such as future member video/course access.
+- Public word detail and full paid/entitled word detail must be separated by the content access layer.
 - Video clipping remains a playback experience, not an entitlement boundary.
 - Production database changes still require ADR, migration plan, rollback plan, and backup verification.
+
+## Confirmed Next-Phase Module Map
+
+The next development phase is architectural design first. These modules are confirmed direction, not implemented code yet.
+
+| Module | ADR | Main responsibility | Implementation status |
+| --- | --- | --- | --- |
+| User identity system upgrade | `ADR/ADR-0010-user-identity-system-upgrade.md`, `ADR/ADR-0011-identity-binding-conflict-rules.md` | Phone quick login, WeChat binding, phone binding, conflict rules, `users.id` ownership | Not implemented |
+| User entitlement model | `ADR/ADR-0012-user-entitlement-model.md` | Separate consumable quota from qualification entitlement; define `word_lookup` quota | Not implemented |
+| Content access layer | `ADR/ADR-0014-content-access-layer-model.md` | Define `public_basic`, `user_full`, and future `member_media` content projections | Not implemented |
+| Admin user entitlement query | `ADR/ADR-0013-admin-user-entitlement-query.md` | Minimal admin user list/detail, masked identity display, quota balance and ledger lookup | Not implemented |
 
 ## Current Data Flows
 
@@ -229,7 +262,7 @@ Rules:
 
 ## Planned Entitlement Data Flow
 
-Phone quick login and quota are not implemented yet. The intended flow is:
+Phone quick login, quota, entitlement, and content access enforcement are not implemented yet. The confirmed intended identity flow is:
 
 ```text
 user taps phone quick login button
@@ -239,7 +272,8 @@ user taps phone quick login button
   -> backend exchanges phone code for phone number
   -> backend creates/finds user_id
   -> backend binds openid and phone
-  -> backend grants register quota once
+  -> backend applies identity conflict rules
+  -> backend can grant register quota once after identity is resolved
   -> backend returns token + user + quota summary
 ```
 
@@ -254,11 +288,28 @@ user enters full word detail
   -> backend returns full detail and new balance
 ```
 
+Content access intended flow:
+
+```text
+GET /api/words/:id
+  -> published filter
+  -> public_basic projection
+  -> no quota deduction
+
+POST /api/words/:id/view
+  -> user authentication
+  -> quota / entitlement check
+  -> word_lookup deduction when required
+  -> user_full projection
+  -> quota summary
+```
+
 Product rule:
 
 - Each entry into a full word detail view costs one lookup.
 - Re-entering the same word later costs again.
 - Duplicate retries for the same request must be idempotent and must not double charge.
+- Video/member media remains a future `member_media` access layer and cannot rely on client-side clipping as access control.
 
 ## API Surface
 
@@ -289,9 +340,16 @@ Expected future APIs:
 - `POST /api/words/:id/view`
 - `GET /api/admin/users`
 - `GET /api/admin/users/:id`
+- `GET /api/admin/users/:id/quota-logs`
 - `POST /api/admin/users/:id/quota-adjustments`
 
 Future APIs require ADR and schema design before implementation.
+
+Confirmed future API semantics:
+
+- `GET /api/words/:id` remains a read-only public/basic detail endpoint.
+- `POST /api/words/:id/view` is the side-effecting full-detail view endpoint that may deduct `word_lookup` quota.
+- Admin user APIs must require admin session auth and must not return phone plaintext, raw `session_key`, or full sensitive identity values.
 
 ## Security Architecture
 
@@ -302,8 +360,10 @@ Future APIs require ADR and schema design before implementation.
 - WeChat legal domains must include the production API/media domains.
 - Public content APIs must filter published status at the server.
 - The mini program may apply client-side filters too, but server filtering is mandatory.
-- Phone numbers must not be treated as ordinary display text. Store masked and hashed values; add encryption only when key management is real.
+- Phone numbers must not be treated as ordinary display text. Store masked values and backend-queryable HMAC hashes; add encryption only when key management is real.
+- Backend phone search must normalize input and query `phone_hash`; documentation, logs, and admin UI must not expose phone plaintext.
 - Quota adjustments must be auditable.
+- Full content and future video/course access must be decided server-side by a content access policy.
 
 ## Architecture Decision Records
 
@@ -318,6 +378,11 @@ Current ADR set:
 - `ADR/ADR-0007-database-change-standard.md`
 - `ADR/ADR-0008-ai-collaboration-standard.md`
 - `ADR/ADR-0009-production-safety-standard.md`
+- `ADR/ADR-0010-user-identity-system-upgrade.md`
+- `ADR/ADR-0011-identity-binding-conflict-rules.md`
+- `ADR/ADR-0012-user-entitlement-model.md`
+- `ADR/ADR-0013-admin-user-entitlement-query.md`
+- `ADR/ADR-0014-content-access-layer-model.md`
 
 ## Known Architecture Gaps
 
@@ -325,6 +390,8 @@ Current ADR set:
 - User login currently has no phone binding.
 - Learning records remain local on device.
 - Quota is not implemented.
+- Entitlement is only reserved in architecture and not implemented.
+- Content access layering is confirmed in ADR but not implemented.
 - Admin user management is not implemented.
 - Database migration process is not yet encoded in scripts.
 - The admin portal page is large and should be split carefully when a clear module boundary appears.
