@@ -23,6 +23,50 @@ Risks / Follow-up:
 - ...
 ```
 
+## 2026-07-09: Module Documentation Map
+
+Scope:
+
+- Created module-level documentation under `docs/modules/`.
+- Documented current real implementation for word content, user auth, video/VOD, admin portal, and data storage.
+- Captured the project phase transition from fast MVP development to long-term maintenance.
+- Updated `ARCHITECTURE.md` with a module map.
+- Updated `PROJECT_OVERVIEW.md` with the long-term maintenance development flow.
+- No business code, database structure, API behavior, or project directory structure was changed.
+
+Changed:
+
+- Added `docs/modules/word-content/PRINCIPLE.md`.
+- Added `docs/modules/word-content/IMPLEMENTATION.md`.
+- Added `docs/modules/user-auth/PRINCIPLE.md`.
+- Added `docs/modules/user-auth/IMPLEMENTATION.md`.
+- Added `docs/modules/video-vod/PRINCIPLE.md`.
+- Added `docs/modules/video-vod/IMPLEMENTATION.md`.
+- Added `docs/modules/admin-portal/PRINCIPLE.md`.
+- Added `docs/modules/admin-portal/IMPLEMENTATION.md`.
+- Added `docs/modules/data-storage/PRINCIPLE.md`.
+- Added `docs/modules/data-storage/IMPLEMENTATION.md`.
+- Added `docs/modules/README.md`.
+- Updated `ARCHITECTURE.md`.
+- Updated `PROJECT_OVERVIEW.md`.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Verified:
+
+- Read `PROJECT_RULES.md`, `PROJECT_OVERVIEW.md`, `ARCHITECTURE.md`, `DEVELOPMENT_LOG.md`, `ADR/*`, `AGENTS.md`, and relevant local docs before editing.
+- Inspected the current mini program, server, admin portal, content seed, and validation scripts.
+- This was a documentation-only pass, so HBuilderX/WeChat manual validation and code behavior tests were not run.
+
+Docs:
+
+- This log entry records the module documentation phase.
+
+Risks / Follow-up:
+
+- The admin portal main page remains large and contains duplicate method names that should only be addressed in a confirmed refactor task.
+- Phone quick login, quota, membership, payment, cloud learning records, and real VOD permission enforcement remain unimplemented.
+- Keep `docs/modules/` synchronized when APIs, storage, routes, or module ownership change.
+
 ## 2026-07-08: Long-term Maintenance Documentation v1
 
 Scope:
@@ -75,4 +119,3 @@ This summary was derived from the read-only audit completed on 2026-07-08:
 - Admin username/password session login exists in code.
 - WeChat identity login exists in code.
 - User phone binding, quota account, quota ledger, membership, order, payment, and book activation do not exist yet.
-

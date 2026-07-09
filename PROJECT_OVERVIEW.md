@@ -36,6 +36,34 @@ The current mini program source is `miniapp-uni/word-app1`, not the outer `minia
 
 The admin portal is an independent backend/web project. It must not be exposed as a mini program page.
 
+## Current Development Phase
+
+The project has completed the fast MVP delivery stage for the first usable product path:
+
+- Mini program word search.
+- Word detail display.
+- Pictographic explanation display.
+- Pronunciation audio playback.
+- VOD/video viewing path.
+- Admin content management.
+- Admin login.
+- WeChat login first version.
+- Basic MySQL user tables.
+
+The project is now entering the long-term maintenance stage. Future feature work should follow:
+
+```text
+requirement analysis
+-> architecture design
+-> module development
+-> module review
+-> testing
+-> documentation update
+-> Git commit
+```
+
+This phase change does not rewrite the existing MVP code. It means future work should use module documentation, ADRs where needed, and explicit file boundaries before implementation.
+
 ## Current Mainline
 
 Current implemented mainline:
@@ -152,4 +180,3 @@ Before coding phone login or quota:
 3. Design quota account and ledger schema.
 4. Add backend user management scope.
 5. Implement in small blocks with ADR and `DEVELOPMENT_LOG.md` updates.
-

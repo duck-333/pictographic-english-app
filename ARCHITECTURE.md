@@ -145,6 +145,26 @@ book_activations
 payment_records
 ```
 
+## Module Map
+
+The module docs under `docs/modules/` document the current implementation as it exists today. They are an index for future development, not a redesign or refactor plan.
+
+| Module | Module docs | Primary source areas | Main API/storage boundaries |
+| --- | --- | --- | --- |
+| Word content | `docs/modules/word-content/PRINCIPLE.md`, `docs/modules/word-content/IMPLEMENTATION.md` | `miniapp-uni/word-app1/common/word-repository.js`, `miniapp-uni/word-app1/common/content-schema.js`, `miniapp-uni/word-app1/pages/index/index.vue`, `miniapp-uni/word-app1/pages/word-detail/index.vue`, `server/word-store.mjs` | `GET /api/words`, `GET /api/words/:id`, `GET /api/homepage/featured-word`, `POST /api/admin/words`, `server/local-data/words.json` |
+| User auth | `docs/modules/user-auth/PRINCIPLE.md`, `docs/modules/user-auth/IMPLEMENTATION.md` | `miniapp-uni/word-app1/common/auth-api-client.js`, `miniapp-uni/word-app1/common/auth-store.js`, `miniapp-uni/word-app1/pages/mine/index.vue`, `server/auth.mjs`, `server/wechat-login.mjs`, `server/user-store.mjs` | `POST /api/auth/wechat-login`, `POST /api/admin/login`, `GET /api/admin/auth/check`, MySQL `users`, MySQL `wechat_user_bindings` |
+| Video/VOD | `docs/modules/video-vod/PRINCIPLE.md`, `docs/modules/video-vod/IMPLEMENTATION.md` | `miniapp-uni/word-app1/pages/word-detail/index.vue`, `miniapp-uni/word-app1/common/content-schema.js`, `admin-portal/pictographic-admin/pages/index/index.vue`, `scripts/dev-preview-bridge.mjs`, `scripts/check-production-ready.mjs` | Media fields inside word records, `POST /api/admin/words`, public word APIs, local preview bridge `127.0.0.1:8787` for development only |
+| Admin portal | `docs/modules/admin-portal/PRINCIPLE.md`, `docs/modules/admin-portal/IMPLEMENTATION.md` | `admin-portal/pictographic-admin/pages/index/index.vue`, `admin-portal/pictographic-admin/common/api-client.js`, `server/index.mjs`, `server/auth.mjs`, `server/word-store.mjs` | Admin session token, `POST /api/admin/login`, `POST /api/admin/words`, `GET/POST /api/admin/homepage-featured`, browser localStorage drafts |
+| Data storage | `docs/modules/data-storage/PRINCIPLE.md`, `docs/modules/data-storage/IMPLEMENTATION.md` | `server/word-store.mjs`, `server/user-store.mjs`, `miniapp-uni/word-app1/common/user-store.js`, `miniapp-uni/word-app1/common/auth-store.js`, `content-seed`, `scripts/validate-content.mjs` | Service JSON word store, MySQL user tables, mini program storage, admin localStorage, seed JSON, dev preview generated files |
+
+Cross-module rules:
+
+- Public mini program content must still be filtered by `status === "published"` on the server.
+- Admin functionality remains outside the user mini program.
+- `users.id` remains the core user identity.
+- Video clipping remains a playback experience, not an entitlement boundary.
+- Production database changes still require ADR, migration plan, rollback plan, and backup verification.
+
 ## Current Data Flows
 
 ### Public Word Search
@@ -308,4 +328,4 @@ Current ADR set:
 - Admin user management is not implemented.
 - Database migration process is not yet encoded in scripts.
 - The admin portal page is large and should be split carefully when a clear module boundary appears.
-
+- Module documentation now exists under `docs/modules/`, but it must be kept in sync when APIs, storage, or file ownership changes.
