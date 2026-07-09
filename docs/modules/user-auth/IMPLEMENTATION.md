@@ -132,4 +132,54 @@ admin portal login form
 - 手机号绑定、配额账户和配额流水尚未实现。
 - 小程序本地学习数据尚未绑定账号同步。
 - 管理员只有单一 username/password session，没有完整角色权限系统。
+## Module 1.1 Implementation Update
 
+Status:
+
+- Implemented identity storage boundary only.
+- No API route was added.
+- No mini program UI was changed.
+- No WeChat phone API exchange was implemented.
+- No token, quota, permission, membership, or VOD logic was added.
+
+New server file:
+
+- `server/identity-store.mjs`
+
+Core responsibilities:
+
+- Normalize phone input before storage lookup.
+- Hash normalized phone with HMAC-SHA256.
+- Produce masked phone display values.
+- Find WeChat and phone identity bindings.
+- Resolve identity binding conflicts according to ADR-0011.
+- Create or update `user_phone_bindings` rows through the storage boundary.
+- Provide a future API-layer entry point, `createIdentityStore().resolveWechatPhoneIdentity()`, that accepts already-exchanged WeChat identity and phone data.
+
+Core functions:
+
+- `normalizePhone(value, options)`
+- `hashPhone(phone, options)`
+- `maskPhone(phone, options)`
+- `findIdentityBinding(connection, identity)`
+- `resolveIdentityConflict(input)`
+- `createOrUpdatePhoneBinding(connection, userId, phoneIdentity, options)`
+- `createIdentityStore(options)`
+- `resolveWechatPhoneIdentity(identity)`
+
+Boundary rules:
+
+- `identity-store.mjs` does not generate user tokens.
+- `identity-store.mjs` does not call WeChat APIs.
+- `identity-store.mjs` does not implement quota, entitlement, content access, or permission logic.
+- Existing `server/user-store.mjs` and `POST /api/auth/wechat-login` remain unchanged.
+
+Planned future integration:
+
+```text
+future POST /api/auth/wechat-phone-login
+  -> exchange loginCode outside identity-store.mjs
+  -> exchange phoneCode outside identity-store.mjs
+  -> identity-store.resolveWechatPhoneIdentity()
+  -> auth.mjs creates project user session token outside identity-store.mjs
+```

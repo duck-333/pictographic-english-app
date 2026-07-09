@@ -23,6 +23,90 @@ Risks / Follow-up:
 - ...
 ```
 
+## 2026-07-09: Module 1.1 Identity Storage Boundary
+
+Scope:
+
+- Implemented Module 1.1 for the user identity system upgrade.
+- Added identity data access and binding-rule storage boundary for future phone quick login.
+- Added a reviewable MySQL migration file for `user_phone_bindings`.
+- Added offline tests for phone normalization, HMAC hash stability, masking, and conflict decisions.
+- Did not add an API route.
+- Did not modify the mini program.
+- Did not call WeChat phone APIs.
+- Did not add token generation, quota, permission, membership, VOD, admin user management, or content access logic.
+- Did not execute any database migration.
+
+Changed:
+
+- Added `server/identity-store.mjs`.
+- Added `database/migrations/001_create_user_phone_bindings.sql`.
+- Added `scripts/test-identity-store.mjs`.
+- Updated `docs/modules/user-auth/IMPLEMENTATION.md`.
+- Updated `docs/modules/data-storage/IMPLEMENTATION.md`.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Verified:
+
+- Ran `node --check server/identity-store.mjs`.
+- Ran `node --check scripts/test-identity-store.mjs`.
+- Ran `node scripts/test-identity-store.mjs`.
+- Ran `git diff --check`; it passed with LF/CRLF warnings for edited Markdown files.
+- Ran `npm.cmd run check:server`; syntax checks passed, but the existing `scripts/test-server-word-api-link.mjs` assertion failed with `remote empty search results must not silently fall back to bundled words`. This failure is outside Module 1.1 and no word-content code was changed.
+
+Docs:
+
+- User auth implementation docs now record `identity-store.mjs` responsibilities, core functions, and boundaries.
+- Data storage implementation docs now record the migration file, schema fields, index plan, no-FK decision, and phone privacy rules.
+- No new ADR was required because this implementation follows ADR-0010 and ADR-0011 without changing durable architecture decisions.
+
+Risks / Follow-up:
+
+- `database/migrations/001_create_user_phone_bindings.sql` has not been executed and still requires human review, backup verification, rollback approval, and target database confirmation before use.
+- The migration does not declare a foreign key because the project has no unified foreign key policy and the production `users.id` column type is not captured in repository schema files.
+- `server/identity-store.mjs` is not connected to any API yet. Module 1.2 must be confirmed separately before API integration.
+- Work stops here for human review and must not continue into Module 1.2 automatically.
+
+## 2026-07-09: Module 1 Implementation Preparation
+
+Scope:
+
+- Recorded "Module 1进入实施阶段准备" after Module 1 implementation design review.
+- Defined Module 1.1 as the first implementation block for identity storage and the phone binding database boundary.
+- Kept the work documentation-only.
+- No business code was modified.
+- No database was created or changed.
+- No API was implemented.
+
+Changed:
+
+- Updated `DEVELOPMENT_LOG.md`.
+
+Verified:
+
+- Read `PROJECT_RULES.md`, `PROJECT_OVERVIEW.md`, `ARCHITECTURE.md`, `DEVELOPMENT_LOG.md`, relevant ADRs, and relevant module/database docs before editing.
+- Confirmed ADR-0003, ADR-0007, ADR-0010, and ADR-0011 already cover the current Module 1.1 architecture decisions.
+- Implementation tests were not run because no code changed.
+
+Docs:
+
+- No new ADR is required for Module 1.1 if the scope stays within the accepted user identity, phone binding, conflict handling, and database change rules.
+- Confirmed Module 1.1 implementation constraints:
+  - `identity-store.mjs` may only handle identity data access and binding rules.
+  - `identity-store.mjs` must not include token generation, WeChat API calls, quota logic, or permission logic.
+  - `user-store.mjs` must remain compatible with the current WeChat login flow and must not be refactored broadly.
+  - Database work may only create a migration file; it must not execute database changes.
+  - The migration file must include up plan, rollback plan, field descriptions, and index descriptions.
+  - Phone handling must follow input phone -> normalize -> HMAC-SHA256 -> store hash and masked phone.
+  - Phone plaintext must not be stored or printed in logs.
+  - After Module 1.1 is completed, work must stop for human review and must not continue into Module 1.2 automatically.
+
+Risks / Follow-up:
+
+- Module 1.1 still requires explicit human confirmation before coding.
+- Production database execution still requires migration script review, rollback plan, backup confirmation, and human approval under ADR-0007.
+- If implementation scope expands to account merge, phone unbinding, quota grants, admin user management, or content access enforcement, a new ADR or ADR update is required before coding.
+
 ## 2026-07-09: Environment and Server Documentation Consistency
 
 Scope:

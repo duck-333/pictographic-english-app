@@ -183,4 +183,60 @@ admin sync button
 - 数据库迁移脚本尚未形成正式流程。
 - 小程序本地学习数据还没有云端同步或跨设备合并策略。
 - 开发预览生成文件和素材需要避免误入生产路径。
+## Module 1.1 Implementation Update
 
+Status:
+
+- Added the phone identity storage boundary for future phone quick login.
+- Added a migration review file for `user_phone_bindings`.
+- The migration was not executed.
+- No quota, entitlement, admin user management, or content access tables were created.
+
+New storage files:
+
+- `server/identity-store.mjs`
+- `database/migrations/001_create_user_phone_bindings.sql`
+
+Migration file responsibilities:
+
+- Defines the planned `user_phone_bindings` table.
+- Uses `ENGINE=InnoDB`.
+- Uses `DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`.
+- Uses `CREATE TABLE IF NOT EXISTS` for the up plan.
+- Keeps rollback as a commented `DROP TABLE IF EXISTS` plan for manual approval.
+- Does not declare a foreign key because the project has no unified foreign key policy and the production `users.id` column type is not captured in repository schema files.
+
+Planned `user_phone_bindings` fields:
+
+- `id`
+- `user_id`
+- `phone_hash`
+- `phone_masked`
+- `hash_version`
+- `country_code`
+- `status`
+- `bound_at`
+- `unbound_at`
+- `verified_at`
+- `last_verified_at`
+- `created_at`
+- `updated_at`
+
+Planned indexes and constraints:
+
+- Primary key: `id`
+- Unique key: `phone_hash`
+- Index: `user_id`
+- Index: `status`
+
+Data handling rules:
+
+- Phone input must be normalized before lookup or storage.
+- `phone_hash` is generated with HMAC-SHA256.
+- `phone_masked` is the only display value.
+- Phone plaintext must not be stored or logged.
+- `user_id` continues to reference `users.id` as the project-owned identity.
+
+Verification:
+
+- `scripts/test-identity-store.mjs` verifies phone normalization, HMAC hash stability, mask output, and identity conflict decisions without using a production database.
