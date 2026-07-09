@@ -22,39 +22,38 @@ Default endpoint:
 http://127.0.0.1:3001
 ```
 
-Development admin token:
-
-```text
-dev-admin-token
-```
-
 To test from another device or a server, expose port `3001` and use:
 
 ```text
 http://SERVER_IP:3001
 ```
 
-To use a custom admin token during development, set `ADMIN_API_TOKEN` before starting the API:
+Admin login is configured with server-side environment variables:
 
 ```text
-$env:ADMIN_API_TOKEN="replace-with-a-private-token"
+ADMIN_USERNAME=
+ADMIN_PASSWORD=
+JWT_SECRET=
 npm.cmd run dev:api
 ```
 
-Production must set a private `ADMIN_API_TOKEN`. If `NODE_ENV=production` and `ADMIN_API_TOKEN` is missing, empty, or `dev-admin-token`, admin write APIs fail closed.
+Production must set private values for `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `JWT_SECRET`. Do not commit real credentials or real `.env` files.
 
 ## Admin Unlock Flow
 
-The admin portal is protected by the same minimal Bearer token guard:
+The admin portal uses server-side username/password login and a server-signed session token:
 
 1. Open `admin-portal/pictographic-admin`.
-2. Enter the Admin API Token on the admin login card.
-3. The portal calls `GET /api/admin/auth/check`.
-4. Only a valid token unlocks the content workbench.
-5. The token is stored locally in `localStorage` as `pictographic:adminApiToken` for development convenience.
-6. Click `锁定/退出` to clear the local token and return to the login card.
+2. Enter the configured admin username and password.
+3. The portal calls `POST /api/admin/login`.
+4. The server verifies `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
+5. The server returns a signed session token.
+6. The portal stores the session token locally as `pictographic:adminSessionToken`.
+7. Admin APIs use `Authorization: Bearer <admin-session-token>`.
+8. The portal can call `GET /api/admin/auth/check` to verify the session.
+9. Click `锁定/退出` to clear the local session token and return to the login card.
 
-This is still not a complete user/account system. It is a minimum management password layer for the current admin API.
+This is still not a complete role-based admin system. It is the current minimum administrator login layer for the content management API.
 
 ## Data
 
@@ -111,6 +110,8 @@ Success response:
 Required server environment:
 
 ```text
+ADMIN_USERNAME=
+ADMIN_PASSWORD=
 WECHAT_MINIAPP_APPID=
 WECHAT_MINIAPP_SECRET=
 DB_HOST=127.0.0.1
@@ -119,9 +120,12 @@ DB_NAME=baxiaota
 DB_USER=app_user
 DB_PASSWORD=
 JWT_SECRET=
+PHONE_HASH_SECRET=
 ```
 
-Do not commit real `.env` files, database passwords, WeChat secrets, or token signing secrets.
+`PHONE_HASH_SECRET` is used by the planned phone identity system to create HMAC-SHA256 phone hashes. It must remain server-side and must not be exposed to the mini program.
+
+Do not commit real `.env` files, admin passwords, database passwords, WeChat secrets, phone hash secrets, or token signing secrets.
 
 ### GET /api/words
 
@@ -169,12 +173,12 @@ When `word` is present, it uses the same `normalizePublicWord()` projection as p
 
 ### GET /api/admin/auth/check
 
-Checks whether the provided admin token can access management APIs.
+Checks whether the provided admin session token can access management APIs.
 
 Requires:
 
 ```text
-Authorization: Bearer <ADMIN_API_TOKEN>
+Authorization: Bearer <admin-session-token>
 ```
 
 Responses:
@@ -202,13 +206,7 @@ Saves or updates one admin-managed word. The admin portal uses this endpoint dir
 Requires:
 
 ```text
-Authorization: Bearer <ADMIN_API_TOKEN>
-```
-
-For local development, use:
-
-```text
-Authorization: Bearer dev-admin-token
+Authorization: Bearer <admin-session-token>
 ```
 
 Request body:
@@ -252,7 +250,7 @@ Returns the saved homepage recommendation configuration, the currently resolved 
 Requires:
 
 ```text
-Authorization: Bearer <ADMIN_API_TOKEN>
+Authorization: Bearer <admin-session-token>
 ```
 
 ### POST /api/admin/homepage-featured
@@ -288,12 +286,11 @@ Only published word IDs can be saved. Daily rotation uses the Asia/Shanghai cale
 - `illustrationImage.url` is normalized through the shared content schema. Public mini program rendering accepts production HTTPS images only.
 - The public homepage recommendation API applies the same strict published filtering at response time, so later unpublish/archive actions take effect without rewriting the recommendation configuration.
 - `GET /api/words` returns at most 20 matching records per request.
-- Admin write APIs require a Bearer token. This is the minimum guard for development and deployment testing, not a complete admin login system.
-- `GET /api/admin/auth/check` uses the same token guard so the admin portal can verify a token before showing the workbench.
-- The frontend may store a local development token in `localStorage` under `pictographic:adminApiToken`. Do not treat it as a real account session.
-- Do not commit real `.env` files or real `ADMIN_API_TOKEN` values.
-- Production must set `ADMIN_API_TOKEN` to a private, non-default value.
+- Admin write APIs require a Bearer admin session token from `POST /api/admin/login`.
+- `GET /api/admin/auth/check` verifies the current admin session token before showing the workbench.
+- The frontend stores the admin session token in local browser storage. Do not treat browser storage as a high-security secret store.
+- Do not commit real `.env` files, admin passwords, WeChat secrets, database passwords, phone hash secrets, or `JWT_SECRET` values.
+- Production must set private `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `JWT_SECRET`, and, before phone login is enabled, `PHONE_HASH_SECRET`.
 - Development may use `http://127.0.0.1:3001` or `http://SERVER_IP:3001`.
 - Production must use a filed HTTPS domain configured in the WeChat mini program allowed request domains.
 - `npm.cmd run check:production` blocks local HTTP API bases in production or unknown runtime.
-- `npm.cmd run check:production` also verifies that production admin auth rejects empty/default tokens.

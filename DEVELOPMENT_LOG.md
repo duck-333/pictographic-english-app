@@ -23,6 +23,37 @@ Risks / Follow-up:
 - ...
 ```
 
+## 2026-07-09: Environment and Server Documentation Consistency
+
+Scope:
+
+- Fixed environment variable and server deployment documentation consistency.
+- Kept the work documentation-only.
+- No business code was modified.
+- No database was created or changed.
+- No API was implemented.
+
+Changed:
+
+- Updated `.env.example` from the old admin API token example to admin username/password, session, JWT, and phone hash secret placeholders.
+- Updated `server/README.md` to describe the current admin username/password login and Bearer session token flow.
+- Added `PHONE_HASH_SECRET=` documentation for HMAC-SHA256 phone identity hashing.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Verified:
+
+- Read `PROJECT_RULES.md`, `.env.example`, `server/README.md`, `DEVELOPMENT_LOG.md`, and current server auth code before editing.
+- Ran `git diff --check`.
+
+Docs:
+
+- This entry records the environment variable and server README consistency fix.
+
+Risks / Follow-up:
+
+- `PHONE_HASH_SECRET` is documented for the planned phone identity system, but phone login is still not implemented.
+- No actual server environment variables were changed by this documentation update.
+
 ## 2026-07-09: Project Rules Module Lifecycle Update
 
 Scope:
