@@ -23,6 +23,113 @@ Risks / Follow-up:
 - ...
 ```
 
+## 2026-07-10: Module 1.2 WeChat Phone Login API
+
+Scope:
+
+- Implemented Module 1.2 only.
+- Added server-side `POST /api/auth/wechat-phone-login`.
+- Kept the existing `POST /api/auth/wechat-login` behavior unchanged.
+- Did not modify the mini program.
+- Did not add phone authorization UI.
+- Did not implement quota, membership, VOD permission, admin user management, or content access logic.
+- Did not execute any database migration.
+
+Changed:
+
+- Updated `server/index.mjs` with the new phone login route orchestration.
+- Updated `server/wechat-login.mjs` with WeChat access token retrieval, single-process in-memory cache, and phone code exchange.
+- Added `scripts/test-wechat-phone-login-api.mjs`.
+- Updated `package.json` so `check:server` runs the Module 1.2 API test.
+- Updated `docs/modules/user-auth/IMPLEMENTATION.md`.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Verified:
+
+- Ran `node --check server/wechat-login.mjs`.
+- Ran `node --check server/index.mjs`.
+- Ran `node --check server/identity-store.mjs`.
+- Ran `node --check scripts/test-wechat-phone-login-api.mjs`.
+- Ran `node scripts/test-identity-store.mjs`.
+- Ran `node scripts/test-wechat-phone-login-api.mjs`.
+- Ran `git diff --check`; it passed with LF/CRLF warnings only.
+- Ran `npm.cmd run check:server`; Module 1.2 syntax checks and tests passed, then the existing `scripts/test-server-word-api-link.mjs` assertion failed with `remote empty search results must not silently fall back to bundled words`.
+
+Docs:
+
+- User auth implementation docs now record the new phone login API, data flow, file responsibilities, security rules, and test coverage.
+- No ADR update was required because implementation follows ADR-0010 and ADR-0011 without changing durable architecture decisions.
+
+Risks / Follow-up:
+
+- `user_phone_bindings` must exist in the target database before the real API can complete phone binding. The migration file still has not been executed.
+- The mini program still has no phone authorization UI, so the new API is not yet reachable from the user client.
+- Real WeChat phone code exchange still requires production WeChat configuration and manual integration validation.
+- `npm.cmd run check:server` still has the pre-existing word API guard failure outside Module 1.2.
+- Work stops here for human review and must not continue into Module 1.3 automatically.
+
+## 2026-07-10: Module 1.2 Implementation Plan Constraints
+
+Scope:
+
+- Added Module 1.2 implementation plan constraints for the planned WeChat phone quick login API.
+- Kept the work documentation-only.
+- Did not modify business code.
+- Did not create or execute any database migration.
+- Did not implement any API route.
+
+Changed:
+
+- Added `docs/modules/user-auth/MODULE_1_2_IMPLEMENTATION_PLAN.md`.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Verified:
+
+- Read `PROJECT_RULES.md`, `DEVELOPMENT_LOG.md`, and `docs/modules/user-auth/IMPLEMENTATION.md` before editing.
+- Reviewed current ADR file list before deciding no ADR update is required.
+
+Docs:
+
+- The Module 1.2 plan records requestId tracing-only rules, WeChat access token cache constraints, user session token compatibility, and safe API error response format.
+- No ADR update is required because the constraints stay within ADR-0010 and ADR-0011 and do not change durable architecture decisions.
+
+Risks / Follow-up:
+
+- Module 1.2 implementation still requires explicit human confirmation before coding.
+- Future coding must keep `POST /api/auth/wechat-login` compatible and must not add token verification or permission expansion in Module 1.2.
+
+## 2026-07-10: Module 1.1 Review Fixes
+
+Scope:
+
+- Fixed Module 1.1 review findings only.
+- Did not enter Module 1.2.
+- Did not add an API route.
+- Did not modify the mini program.
+- Did not execute any database migration.
+
+Changed:
+
+- Updated `server/identity-store.mjs` so `resolveWechatPhoneIdentity()` handles MySQL duplicate-key races by rolling back, re-querying bindings, and returning a stable identity result or sanitized identity conflict.
+- Updated `package.json` so `npm.cmd run check:server` includes `server/identity-store.mjs` syntax check and `scripts/test-identity-store.mjs`.
+- Updated `docs/modules/user-auth/IMPLEMENTATION.md`.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Verified:
+
+- Ran `node --check server/identity-store.mjs`.
+- Ran `node scripts/test-identity-store.mjs`.
+- Ran `npm.cmd run check:server`; identity-store syntax checks and offline tests passed, then the existing `scripts/test-server-word-api-link.mjs` assertion failed with `remote empty search results must not silently fall back to bundled words`.
+
+Docs:
+
+- User auth implementation docs now mention duplicate-key race handling inside the identity storage boundary.
+
+Risks / Follow-up:
+
+- If `npm.cmd run check:server` still fails in `scripts/test-server-word-api-link.mjs`, treat it as the existing word-content guard failure unless the failure moves into `identity-store`.
+- Module 1.2 still requires separate confirmation.
+
 ## 2026-07-09: Module 1.1 Identity Storage Boundary
 
 Scope:

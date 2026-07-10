@@ -21,6 +21,23 @@ function createIdentityStoreError(message, options = {}) {
   return error
 }
 
+function isDuplicateEntryError(error) {
+  return Boolean(error && error.code === 'ER_DUP_ENTRY')
+}
+
+function createIdentityConflictError() {
+  return createIdentityStoreError('Identity binding conflict.', {
+    code: 'IDENTITY_CONFLICT',
+    statusCode: 409
+  })
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds)
+  })
+}
+
 function getDbConfig(options = {}) {
   const host = normalizeString(options.dbHost === undefined ? process.env.DB_HOST : options.dbHost) || DEFAULT_DB_HOST
   const port = Number(options.dbPort === undefined ? process.env.DB_PORT : options.dbPort) || DEFAULT_DB_PORT
@@ -484,39 +501,108 @@ export function createIdentityStore(options = {}) {
     const timestamp = now()
     try {
       await connection.beginTransaction()
-
-      const bindings = await findIdentityBinding(connection, {
+      const result = await resolveIdentityInTransaction(connection, {
         openid,
-        phoneHash: phoneIdentity.phoneHash
+        unionid,
+        phoneIdentity,
+        timestamp,
+        allowCreateUser: true
       })
-      const resolution = resolveIdentityConflict(bindings)
-      if (resolution.conflict) {
-        throw createIdentityStoreError('Identity binding conflict.', {
-          code: resolution.code,
-          statusCode: resolution.statusCode
-        })
-      }
-
-      const isNew = resolution.action === 'create_user'
-      const userId = isNew ? await createUser(connection, openid, timestamp) : resolution.userId
-      await updateUserLogin(connection, userId, timestamp)
-      await createOrUpdateWechatBinding(connection, userId, { openid, unionid }, timestamp)
-      await createOrUpdatePhoneBinding(connection, userId, phoneIdentity, { timestamp })
-
       await connection.commit()
-      return {
-        id: String(userId),
-        isNew,
-        hasWechatBinding: true,
-        hasPhoneBinding: true,
-        phoneMasked: phoneIdentity.phoneMasked
-      }
+      return result
     } catch (error) {
       await connection.rollback()
+      if (isDuplicateEntryError(error)) {
+        return resolveDuplicateIdentity({
+          openid,
+          unionid,
+          phoneIdentity,
+          timestamp
+        })
+      }
       throw error
     } finally {
       connection.release()
     }
+  }
+
+  async function resolveIdentityInTransaction(connection, options = {}) {
+    const bindings = await findIdentityBinding(connection, {
+      openid: options.openid,
+      phoneHash: options.phoneIdentity.phoneHash
+    })
+    const resolution = resolveIdentityConflict(bindings)
+    if (resolution.conflict) {
+      throw createIdentityConflictError()
+    }
+
+    if (resolution.action === 'create_user' && !options.allowCreateUser) {
+      throw createIdentityStoreError('Identity binding was not ready after duplicate entry.', {
+        code: 'IDENTITY_DUPLICATE_RETRY_PENDING',
+        statusCode: 409
+      })
+    }
+
+    const isNew = resolution.action === 'create_user'
+    const userId = isNew ? await createUser(connection, options.openid, options.timestamp) : resolution.userId
+    await updateUserLogin(connection, userId, options.timestamp)
+    await createOrUpdateWechatBinding(connection, userId, {
+      openid: options.openid,
+      unionid: options.unionid
+    }, options.timestamp)
+    await createOrUpdatePhoneBinding(connection, userId, options.phoneIdentity, {
+      timestamp: options.timestamp
+    })
+
+    return {
+      id: String(userId),
+      isNew,
+      hasWechatBinding: true,
+      hasPhoneBinding: true,
+      phoneMasked: options.phoneIdentity.phoneMasked
+    }
+  }
+
+  async function resolveDuplicateIdentity(options = {}) {
+    const maxAttempts = 3
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (attempt > 0) await wait(25)
+      const retryConnection = await getPool().getConnection()
+      try {
+        await retryConnection.beginTransaction()
+        const result = await resolveIdentityInTransaction(retryConnection, {
+          openid: options.openid,
+          unionid: options.unionid,
+          phoneIdentity: options.phoneIdentity,
+          timestamp: options.timestamp,
+          allowCreateUser: false
+        })
+        await retryConnection.commit()
+        return {
+          ...result,
+          isNew: false
+        }
+      } catch (error) {
+        await retryConnection.rollback()
+        const shouldRetry =
+          error.code === 'IDENTITY_DUPLICATE_RETRY_PENDING' ||
+          isDuplicateEntryError(error)
+        if (shouldRetry && attempt < maxAttempts - 1) {
+          continue
+        }
+        if (isDuplicateEntryError(error)) {
+          throw createIdentityConflictError()
+        }
+        throw error
+      } finally {
+        retryConnection.release()
+      }
+    }
+
+    throw createIdentityStoreError('Identity binding was not resolved after duplicate entry.', {
+      code: 'IDENTITY_DUPLICATE_RETRY_FAILED',
+      statusCode: 409
+    })
   }
 
   return {

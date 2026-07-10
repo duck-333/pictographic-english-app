@@ -153,6 +153,7 @@ Core responsibilities:
 - Produce masked phone display values.
 - Find WeChat and phone identity bindings.
 - Resolve identity binding conflicts according to ADR-0011.
+- Handle duplicate-key races by rolling back, re-querying identity bindings, and returning a stable identity result or sanitized conflict.
 - Create or update `user_phone_bindings` rows through the storage boundary.
 - Provide a future API-layer entry point, `createIdentityStore().resolveWechatPhoneIdentity()`, that accepts already-exchanged WeChat identity and phone data.
 
@@ -183,3 +184,93 @@ future POST /api/auth/wechat-phone-login
   -> identity-store.resolveWechatPhoneIdentity()
   -> auth.mjs creates project user session token outside identity-store.mjs
 ```
+
+## Module 1.2 Implementation Update
+
+Status:
+
+- Implemented server-side `POST /api/auth/wechat-phone-login`.
+- No mini program UI or phone authorization button was added.
+- No quota, membership, VOD permission, admin user management, or content access logic was added.
+- No database migration was executed.
+- Existing `POST /api/auth/wechat-login` remains on the original `user-store.findOrCreateWechatUser()` path.
+
+Changed server files:
+
+- `server/index.mjs`
+- `server/wechat-login.mjs`
+- `scripts/test-wechat-phone-login-api.mjs`
+- `package.json`
+
+New API:
+
+- `POST /api/auth/wechat-phone-login`
+
+Request body:
+
+```json
+{
+  "loginCode": "uni.login returned code",
+  "phoneCode": "getPhoneNumber returned code",
+  "requestId": "client trace id"
+}
+```
+
+Success response:
+
+```json
+{
+  "ok": true,
+  "token": "project user session token",
+  "tokenType": "Bearer",
+  "expiresAt": "ISO timestamp",
+  "user": {
+    "id": "users.id",
+    "hasWechatBinding": true,
+    "hasPhoneBinding": true,
+    "phoneMasked": "138****8000",
+    "isNew": false
+  }
+}
+```
+
+Error response:
+
+```json
+{
+  "ok": false,
+  "code": "ERROR_CODE",
+  "message": "safe message"
+}
+```
+
+Data flow:
+
+```text
+POST /api/auth/wechat-phone-login
+  -> read loginCode / phoneCode / requestId
+  -> wechat-login.code2Session(loginCode)
+  -> wechat-login.phoneCode2Number(phoneCode)
+  -> identity-store.resolveWechatPhoneIdentity()
+  -> auth.createUserSessionToken(users.id)
+  -> return project token + safe user summary
+```
+
+Core responsibilities:
+
+- `server/index.mjs`: route orchestration only. It does not call WeChat HTTP directly, hash phone numbers, or implement identity conflict rules.
+- `server/wechat-login.mjs`: WeChat communication only. It handles `code2Session`, server-side access token retrieval, single-process in-memory access token cache, and phone code exchange.
+- `server/identity-store.mjs`: remains responsible for phone normalization, HMAC hashing, masked phone generation, binding lookup, and ADR-0011 conflict rules.
+- `server/auth.mjs`: remains the single user session token generation boundary through `createUserSessionToken()`.
+
+Security rules implemented:
+
+- WeChat `access_token` is server-only and cached only in process memory.
+- `requestId` is only normalized for tracing/logging and is not used as database idempotency.
+- The new API does not return MySQL raw errors, WeChat secrets, WeChat `access_token`, `session_key`, phone plaintext, or `openid`.
+- Phone plaintext exists only transiently between the WeChat phone response and `identity-store`.
+
+Tests:
+
+- `scripts/test-wechat-phone-login-api.mjs` verifies the new API with fake WeChat and fake identity store.
+- The test does not call real WeChat and does not connect to a production database.

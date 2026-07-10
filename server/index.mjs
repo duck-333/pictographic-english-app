@@ -2,6 +2,7 @@ import http from 'node:http'
 import { pathToFileURL } from 'node:url'
 
 import { createAdminSessionToken, createUserSessionToken, requireAdminAuth, verifyAdminCredentials } from './auth.mjs'
+import { createIdentityStore } from './identity-store.mjs'
 import { createUserStore } from './user-store.mjs'
 import { createWechatLoginClient } from './wechat-login.mjs'
 import { createWordStore } from './word-store.mjs'
@@ -67,6 +68,55 @@ function normalizePathname(pathname) {
   return pathname.replace(/\/+$/, '') || '/'
 }
 
+function normalizeRequestId(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^\w:.-]/g, '')
+    .slice(0, 80)
+}
+
+const SAFE_PHONE_LOGIN_ERROR_MESSAGES = {
+  WECHAT_CODE_REQUIRED: 'Login code is required.',
+  WECHAT_PHONE_CODE_REQUIRED: 'Phone code is required.',
+  WECHAT_CODE_INVALID: 'Login code is invalid.',
+  WECHAT_PHONE_CODE_INVALID: 'Phone code is invalid.',
+  WECHAT_CONFIG_MISSING: 'Wechat login is not configured.',
+  WECHAT_LOGIN_BLOCKED: 'Wechat login is blocked.',
+  WECHAT_RATE_LIMITED: 'Wechat login is rate limited.',
+  WECHAT_SYSTEM_BUSY: 'Wechat service is busy.',
+  WECHAT_LOGIN_FAILED: 'Wechat login failed.',
+  WECHAT_NETWORK_ERROR: 'Wechat service is unavailable.',
+  WECHAT_RESPONSE_INVALID: 'Wechat response is invalid.',
+  WECHAT_OPENID_MISSING: 'Wechat identity is invalid.',
+  WECHAT_OPENID_REQUIRED: 'Wechat identity is invalid.',
+  WECHAT_PHONE_NUMBER_FAILED: 'Wechat phone number exchange failed.',
+  WECHAT_TIMEOUT: 'Wechat request timed out.',
+  PHONE_REQUIRED: 'Phone number is required.',
+  PHONE_INVALID: 'Phone number is invalid.',
+  PHONE_HASH_SECRET_MISSING: 'Phone login is not configured.',
+  USER_DB_CONFIG_MISSING: 'User database is not configured.',
+  IDENTITY_CONFLICT: 'Identity binding conflict.',
+  INTERNAL_SERVER_ERROR: 'Internal server error.'
+}
+
+function sendPhoneLoginError(res, error) {
+  const statusCode = Number(error && error.statusCode) || 500
+  const code = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+  sendJson(res, statusCode, {
+    ok: false,
+    code,
+    message: SAFE_PHONE_LOGIN_ERROR_MESSAGES[code] || (
+      statusCode >= 500 ? 'Internal server error.' : 'Request failed.'
+    )
+  })
+}
+
+function logPhoneLoginError(error, context = {}) {
+  if (!context.requestId) return
+  const code = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+  console.warn(`wechat-phone-login requestId=${context.requestId} failed with ${code}`)
+}
+
 function summarizePublishedWords(words) {
   return (Array.isArray(words) ? words : []).map((word) => ({
     id: word.id,
@@ -79,6 +129,7 @@ function summarizePublishedWords(words) {
 export function createApiHandler(options = {}) {
   const store = options.store || createWordStore()
   const userStore = options.userStore || createUserStore(options)
+  const identityStore = options.identityStore || createIdentityStore(options)
   const wechatLoginClient = options.wechatLoginClient || createWechatLoginClient(options)
   const now = options.now || (() => new Date())
   const adminAuthOptions = {
@@ -188,6 +239,42 @@ export function createApiHandler(options = {}) {
               ? 'Internal server error.'
               : (error && error.message ? error.message : 'Request failed.')
           })
+        }
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/auth/wechat-phone-login') {
+        let requestId = ''
+        try {
+          const body = await readJsonBody(req)
+          requestId = normalizeRequestId(body.requestId)
+          const wechatIdentity = await wechatLoginClient.code2Session(body.loginCode)
+          const phoneIdentity = await wechatLoginClient.phoneCode2Number(body.phoneCode)
+          const user = await identityStore.resolveWechatPhoneIdentity({
+            openid: wechatIdentity.openid,
+            unionid: wechatIdentity.unionid,
+            phone: phoneIdentity
+          })
+          const session = createUserSessionToken(user.id, userAuthOptions)
+
+          sendJson(res, 200, {
+            ok: true,
+            token: session.token,
+            tokenType: 'Bearer',
+            expiresAt: session.expiresAt,
+            user: {
+              id: user.id,
+              hasWechatBinding: true,
+              hasPhoneBinding: true,
+              phoneMasked: user.phoneMasked,
+              isNew: Boolean(user.isNew)
+            }
+          })
+        } catch (error) {
+          logPhoneLoginError(error, {
+            requestId
+          })
+          sendPhoneLoginError(res, error)
         }
         return
       }
