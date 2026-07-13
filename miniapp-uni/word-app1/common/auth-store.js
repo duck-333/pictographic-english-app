@@ -18,7 +18,9 @@ function normalizeSession(value) {
     expiresAt: String(source.expiresAt || '').trim(),
     user: {
       id: String(user.id || '').trim(),
-      hasWechatBinding: Boolean(user.hasWechatBinding)
+      hasWechatBinding: Boolean(user.hasWechatBinding),
+      hasPhoneBinding: Boolean(user.hasPhoneBinding),
+      phoneMasked: String(user.phoneMasked || '').trim()
     }
   }
 }

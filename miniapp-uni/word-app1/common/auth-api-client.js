@@ -14,6 +14,16 @@ function createAuthError(message, options = {}) {
   return error
 }
 
+function normalizePhoneCode(value) {
+  return String(value || '').trim()
+}
+
+function createRequestId(options = {}) {
+  const configured = String(options.requestId || '').trim()
+  if (configured) return configured
+  return `phone-login-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 function buildUrl(path, options = {}) {
   const baseUrl = getWordApiBaseUrl(options)
   if (!baseUrl) return ''
@@ -116,6 +126,34 @@ export async function loginWithWechat(options = {}) {
     method: 'POST',
     data: {
       code
+    }
+  })
+  const savedSession = saveAuthSession(session)
+  if (!savedSession) {
+    throw createAuthError('Auth API response is invalid.', {
+      code: 'AUTH_SESSION_INVALID'
+    })
+  }
+  return savedSession
+}
+
+export async function loginWithWechatPhone(phoneCode, options = {}) {
+  const normalizedPhoneCode = normalizePhoneCode(phoneCode)
+  if (!normalizedPhoneCode) {
+    throw createAuthError('Phone code is required.', {
+      code: 'WECHAT_PHONE_CODE_REQUIRED',
+      statusCode: 400
+    })
+  }
+
+  const loginCode = await requestWechatLoginCode(options)
+  const session = await requestJson('/api/auth/wechat-phone-login', {
+    ...options,
+    method: 'POST',
+    data: {
+      loginCode,
+      phoneCode: normalizedPhoneCode,
+      requestId: createRequestId(options)
     }
   })
   const savedSession = saveAuthSession(session)
