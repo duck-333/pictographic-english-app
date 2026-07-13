@@ -23,6 +23,40 @@ Risks / Follow-up:
 - ...
 ```
 
+## 2026-07-13: Module 1.3 Stage Split Design
+
+Scope:
+
+- Split Module 1.3 implementation planning into two independent stages.
+- Kept the work documentation-only.
+- Did not modify business code.
+- Did not modify the mini program.
+- Did not modify server code.
+- Did not modify API behavior.
+- Did not create or execute any database migration.
+
+Changed:
+
+- Updated `docs/modules/user-auth/MODULE_1_3_IMPLEMENTATION_PLAN.md`.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Verified:
+
+- Read `PROJECT_RULES.md`, `docs/modules/user-auth/MODULE_1_3_IMPLEMENTATION_PLAN.md`, and `DEVELOPMENT_LOG.md` before editing.
+- Ran `git diff --check`.
+
+Docs:
+
+- Module 1.3 is now split into:
+  - Module 1.3.1: frontend auth capability layer, limited to `auth-api-client.js` and `auth-store.js`.
+  - Module 1.3.2: Mine page phone authorization entry, limited to `pages/mine/index.vue`.
+- The plan records stage-specific scope, forbidden changes, completion standards, and tests.
+
+Risks / Follow-up:
+
+- Module 1.3.1 still requires explicit human confirmation before coding.
+- Module 1.3.2 must not start until Module 1.3.1 is implemented, reviewed, and confirmed.
+
 ## 2026-07-10: Module 1.2 WeChat Phone Login API
 
 Scope:

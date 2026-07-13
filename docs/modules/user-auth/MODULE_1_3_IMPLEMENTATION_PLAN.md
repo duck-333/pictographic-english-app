@@ -14,6 +14,15 @@ POST /api/auth/wechat-phone-login
 
 The goal is to let a user actively authorize phone quick login in the mini program, receive a project user session token, and store only the safe session summary needed by the client.
 
+Module 1.3 must be implemented in two independent stages:
+
+```text
+Module 1.3.1: Frontend auth capability layer
+Module 1.3.2: Mine page phone authorization entry
+```
+
+Module 1.3.1 must be completed, reviewed, and confirmed before Module 1.3.2 starts.
+
 ## Out Of Scope
 
 Module 1.3 does not include:
@@ -29,36 +38,116 @@ Module 1.3 does not include:
 - Account merge.
 - Silent phone binding or silent phone refresh.
 
-## Planned Modified Files
+## Implementation Stages
+
+### Module 1.3.1: Frontend Auth Capability Layer
+
+Scope:
 
 - `miniapp-uni/word-app1/common/auth-api-client.js`
+- `miniapp-uni/word-app1/common/auth-store.js`
+- Optional test script for this layer only.
+- `package.json` only if the new layer test is added to `check:miniapp`.
+- Documentation updates after implementation.
+
+Goals:
+
+- Add `loginWithWechatPhone(phoneCode, options)`.
+- Keep `loginWithWechat()` compatible with the old `/api/auth/wechat-login`.
+- Implement client request construction for `POST /api/auth/wechat-phone-login`.
+- Generate or pass a client `requestId` for tracing only.
+- Extend auth session normalization to include:
+  - `user.hasPhoneBinding`
+  - `user.phoneMasked`
+- Keep old session compatibility when phone fields are missing.
+- Ensure auth storage keeps only safe session fields.
+
+Forbidden:
+
+- Do not modify `miniapp-uni/word-app1/pages/mine/index.vue`.
+- Do not add `button open-type="getPhoneNumber"`.
+- Do not modify server files.
+- Do not modify API behavior.
+- Do not execute or create database changes.
+- Do not implement quota, membership, content access, admin user query, or account merge.
+
+Completion standard:
+
+- `loginWithWechatPhone(phoneCode, options)` can be tested with fake `uni.login` and fake `uni.request`.
+- Successful phone login saves the safe extended session.
+- Old sessions without phone fields remain valid.
+- Sensitive fields are not saved.
+- Existing `loginWithWechat()` still calls `/api/auth/wechat-login`.
+
+### Module 1.3.2: Mine Page Phone Authorization Entry
+
+Scope:
+
+- `miniapp-uni/word-app1/pages/mine/index.vue`
+- Optional Mine-page-focused test only if feasible without WeChat runtime.
+- Documentation updates after implementation.
+
+Goals:
+
+- Use `button open-type="getPhoneNumber"` for the logged-out login action.
+- Handle the WeChat phone authorization event.
+- Pass `event.detail.code` to `loginWithWechatPhone(phoneCode)`.
+- Display login/loading/logout states.
+- Display masked phone when `hasPhoneBinding` and `phoneMasked` exist.
+- Replace stale copy that says phone number is not collected.
+- Show safe user-facing error messages for authorization denial, invalid code, service config errors, identity conflict, and network failures.
+
+Forbidden:
+
+- Do not modify `auth-api-client.js` or `auth-store.js` unless Module 1.3.1 review requires a fix.
+- Do not modify server files.
+- Do not modify API behavior.
+- Do not execute or create database changes.
+- Do not implement quota, membership, content access, admin user query, or account merge.
+- Do not add silent login or silent phone authorization refresh.
+
+Completion standard:
+
+- Logged-out Mine page uses `button open-type="getPhoneNumber"`.
+- Ordinary tap/click does not trigger phone authorization.
+- Authorization denial does not call `uni.login()` or backend API.
+- Successful login uses the Module 1.3.1 auth capability layer.
+- Logout clears visible phone binding state through existing session clear behavior.
+- Reopening Mine page restores session state through `getAuthSession()`.
+
+## Planned Modified Files
+
+- Module 1.3.1: `miniapp-uni/word-app1/common/auth-api-client.js`
   - Add a phone quick login client function.
   - Keep the existing `loginWithWechat()` path compatible.
 
-- `miniapp-uni/word-app1/common/auth-store.js`
+- Module 1.3.1: `miniapp-uni/word-app1/common/auth-store.js`
   - Extend safe session normalization.
   - Keep old session compatibility when phone fields are missing.
 
-- `miniapp-uni/word-app1/pages/mine/index.vue`
+- Module 1.3.2: `miniapp-uni/word-app1/pages/mine/index.vue`
   - Replace the main login action with a WeChat phone authorization button.
   - Update login status copy and error messages.
   - Display only masked phone when available.
 
-- `package.json`
+- Module 1.3.1 or 1.3.2: `package.json`
   - Add Module 1.3 mini program auth tests to `check:miniapp` if a new script is added.
 
-- `docs/modules/user-auth/IMPLEMENTATION.md`
+- After each implemented stage: `docs/modules/user-auth/IMPLEMENTATION.md`
   - Update after implementation with the actual Module 1.3 mini program flow.
 
-- `DEVELOPMENT_LOG.md`
+- After each implemented stage: `DEVELOPMENT_LOG.md`
   - Record implementation and verification results after coding.
 
 ## Planned New Files
 
-- `scripts/test-miniapp-auth-phone-login.mjs`
+- Module 1.3.1: `scripts/test-miniapp-auth-phone-login.mjs`
   - Tests mini program auth client/store behavior with fake `uni`.
   - Must not call real WeChat.
   - Must not call the real production API.
+
+- Module 1.3.2 optional: `scripts/test-miniapp-mine-phone-login.mjs`
+  - Add only if Mine page behavior can be tested without WeChat runtime and without brittle UI coupling.
 
 ## Required Login Flow
 
@@ -193,7 +282,7 @@ Expected client-safe handling:
 
 ## Test Plan
 
-Required checks after implementation:
+Required checks after Module 1.3.1:
 
 ```text
 node --check miniapp-uni/word-app1/common/auth-api-client.js
@@ -204,12 +293,10 @@ npm.cmd run check:miniapp
 git diff --check
 ```
 
-Required test cases:
+Required Module 1.3.1 test cases:
 
 - Phone quick login uses `POST /api/auth/wechat-phone-login`.
 - Request body includes `loginCode`, `phoneCode`, and `requestId`.
-- User cancellation does not call `uni.login()`.
-- User cancellation does not call backend API.
 - Successful login saves `token`, `expiresAt`, `user.id`, `hasWechatBinding`, `hasPhoneBinding`, and `phoneMasked`.
 - Successful login does not save phone plaintext.
 - Successful login does not save `openid`, `session_key`, or `access_token`.
@@ -217,6 +304,28 @@ Required test cases:
 - Reopening the mini program restores a valid saved session including phone fields.
 - Old saved sessions without `hasPhoneBinding` and `phoneMasked` remain valid with default values.
 - Existing `loginWithWechat()` still calls `/api/auth/wechat-login`.
+
+Required checks after Module 1.3.2:
+
+```text
+node --check miniapp-uni/word-app1/common/auth-api-client.js
+node --check miniapp-uni/word-app1/common/auth-store.js
+npm.cmd run check:miniapp
+git diff --check
+```
+
+Run any Mine-page-specific test script if added.
+
+Required Module 1.3.2 test cases:
+
+- Logged-out Mine page uses `button open-type="getPhoneNumber"`.
+- User cancellation does not call `uni.login()`.
+- User cancellation does not call backend API.
+- Successful authorization passes `event.detail.code` to `loginWithWechatPhone(phoneCode)`.
+- Mine page displays masked phone only after login.
+- Mine page does not display phone plaintext.
+- Logout clears Mine page phone binding state after session clear.
+- Reopening the Mine page restores saved session display.
 
 Manual verification:
 
