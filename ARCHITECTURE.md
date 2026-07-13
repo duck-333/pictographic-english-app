@@ -4,6 +4,26 @@ Date: 2026-07-09
 
 This document records the current architecture and the confirmed direction. It is intentionally v1. Do not try to make it perfect in one pass. Update it after major architecture changes.
 
+## Current Module Status
+
+```text
+Module 1: 用户身份体系升级 - Completed
+```
+
+Completed scope:
+
+- Module 1.1: `server/identity-store.mjs` identity storage boundary.
+- Module 1.2: `POST /api/auth/wechat-phone-login` server API.
+- Module 1.3.1: mini program auth client/store phone login capability.
+- Module 1.3.2: Mine page `button open-type="getPhoneNumber"` entry.
+- Module 1 closing fix: safe error mapping for phone-login API responses.
+
+Remaining operational items:
+
+- `database/migrations/001_create_user_phone_bindings.sql` has not been executed in a target database.
+- WeChat real-device or WeChat Developer Tools validation is still required.
+- The word API guard failure is an independent legacy issue outside Module 1.
+
 ## System Context
 
 ```text
@@ -51,7 +71,7 @@ Responsibilities:
 - Show illustration when available.
 - Play configured video clips when available.
 - Show local learning data.
-- Perform current WeChat identity login.
+- Perform WeChat identity login and phone quick login.
 
 Non-responsibilities:
 
@@ -102,6 +122,8 @@ Responsibilities:
 - Admin session login.
 - WeChat mini program login.
 - Server-side WeChat `jscode2session`.
+- Server-side WeChat phone code exchange.
+- User identity binding through WeChat and phone bindings.
 - User token creation.
 
 ### Content Data
@@ -119,17 +141,22 @@ Longer-term direction:
 
 ### User Data
 
-Current implemented tables:
+Current implemented user tables/code paths:
 
 ```text
 users
 wechat_user_bindings
 ```
 
-Confirmed next direction:
+Module 1 migration design exists and is required before enabling real phone login in a target database:
 
 ```text
 user_phone_bindings
+```
+
+Confirmed next direction:
+
+```text
 user_quota_accounts
 user_quota_logs
 ```
@@ -168,7 +195,7 @@ The module docs under `docs/modules/` document the current implementation as it 
 | Module | Module docs | Primary source areas | Main API/storage boundaries |
 | --- | --- | --- | --- |
 | Word content | `docs/modules/word-content/PRINCIPLE.md`, `docs/modules/word-content/IMPLEMENTATION.md` | `miniapp-uni/word-app1/common/word-repository.js`, `miniapp-uni/word-app1/common/content-schema.js`, `miniapp-uni/word-app1/pages/index/index.vue`, `miniapp-uni/word-app1/pages/word-detail/index.vue`, `server/word-store.mjs` | `GET /api/words`, `GET /api/words/:id`, `GET /api/homepage/featured-word`, `POST /api/admin/words`, `server/local-data/words.json` |
-| User auth | `docs/modules/user-auth/PRINCIPLE.md`, `docs/modules/user-auth/IMPLEMENTATION.md` | `miniapp-uni/word-app1/common/auth-api-client.js`, `miniapp-uni/word-app1/common/auth-store.js`, `miniapp-uni/word-app1/pages/mine/index.vue`, `server/auth.mjs`, `server/wechat-login.mjs`, `server/user-store.mjs` | `POST /api/auth/wechat-login`, `POST /api/admin/login`, `GET /api/admin/auth/check`, MySQL `users`, MySQL `wechat_user_bindings` |
+| User auth | `docs/modules/user-auth/PRINCIPLE.md`, `docs/modules/user-auth/IMPLEMENTATION.md` | `miniapp-uni/word-app1/common/auth-api-client.js`, `miniapp-uni/word-app1/common/auth-store.js`, `miniapp-uni/word-app1/pages/mine/index.vue`, `server/auth.mjs`, `server/wechat-login.mjs`, `server/user-store.mjs`, `server/identity-store.mjs` | `POST /api/auth/wechat-login`, `POST /api/auth/wechat-phone-login`, `POST /api/admin/login`, `GET /api/admin/auth/check`, MySQL `users`, MySQL `wechat_user_bindings`, migration-designed `user_phone_bindings` |
 | Video/VOD | `docs/modules/video-vod/PRINCIPLE.md`, `docs/modules/video-vod/IMPLEMENTATION.md` | `miniapp-uni/word-app1/pages/word-detail/index.vue`, `miniapp-uni/word-app1/common/content-schema.js`, `admin-portal/pictographic-admin/pages/index/index.vue`, `scripts/dev-preview-bridge.mjs`, `scripts/check-production-ready.mjs` | Media fields inside word records, `POST /api/admin/words`, public word APIs, local preview bridge `127.0.0.1:8787` for development only |
 | Admin portal | `docs/modules/admin-portal/PRINCIPLE.md`, `docs/modules/admin-portal/IMPLEMENTATION.md` | `admin-portal/pictographic-admin/pages/index/index.vue`, `admin-portal/pictographic-admin/common/api-client.js`, `server/index.mjs`, `server/auth.mjs`, `server/word-store.mjs` | Admin session token, `POST /api/admin/login`, `POST /api/admin/words`, `GET/POST /api/admin/homepage-featured`, browser localStorage drafts |
 | Data storage | `docs/modules/data-storage/PRINCIPLE.md`, `docs/modules/data-storage/IMPLEMENTATION.md` | `server/word-store.mjs`, `server/user-store.mjs`, `miniapp-uni/word-app1/common/user-store.js`, `miniapp-uni/word-app1/common/auth-store.js`, `content-seed`, `scripts/validate-content.mjs` | Service JSON word store, MySQL user tables, mini program storage, admin localStorage, seed JSON, dev preview generated files |
@@ -187,13 +214,13 @@ Cross-module rules:
 - Video clipping remains a playback experience, not an entitlement boundary.
 - Production database changes still require ADR, migration plan, rollback plan, and backup verification.
 
-## Confirmed Next-Phase Module Map
+## Completed And Next-Phase Module Map
 
-The next development phase is architectural design first. These modules are confirmed direction, not implemented code yet.
+Module 1 is complete for the confirmed user identity scope. The remaining modules below are future development targets and require their own design, implementation, review, and tests.
 
 | Module | ADR | Main responsibility | Implementation status |
 | --- | --- | --- | --- |
-| User identity system upgrade | `ADR/ADR-0010-user-identity-system-upgrade.md`, `ADR/ADR-0011-identity-binding-conflict-rules.md` | Phone quick login, WeChat binding, phone binding, conflict rules, `users.id` ownership | Not implemented |
+| User identity system upgrade | `ADR/ADR-0010-user-identity-system-upgrade.md`, `ADR/ADR-0011-identity-binding-conflict-rules.md` | Phone quick login, WeChat binding, phone binding, conflict rules, `users.id` ownership | Completed; `user_phone_bindings` migration still requires human execution per ADR-0007 |
 | User entitlement model | `ADR/ADR-0012-user-entitlement-model.md` | Separate consumable quota from qualification entitlement; define `word_lookup` quota | Not implemented |
 | Content access layer | `ADR/ADR-0014-content-access-layer-model.md` | Define `public_basic`, `user_full`, and future `member_media` content projections | Not implemented |
 | Admin user entitlement query | `ADR/ADR-0013-admin-user-entitlement-query.md` | Minimal admin user list/detail, masked identity display, quota balance and ledger lookup | Not implemented |
@@ -260,22 +287,34 @@ Rules:
 - `wechat_user_bindings.openid` is the WeChat identity lookup source.
 - `users.id` is the internal account identity.
 
-## Planned Entitlement Data Flow
-
-Phone quick login, quota, entitlement, and content access enforcement are not implemented yet. The confirmed intended identity flow is:
+### Current Phone Quick Login
 
 ```text
-user taps phone quick login button
-  -> getPhoneNumber returns phone code
-  -> uni.login returns login code
-  -> backend exchanges login code for openid
-  -> backend exchanges phone code for phone number
-  -> backend creates/finds user_id
-  -> backend binds openid and phone
-  -> backend applies identity conflict rules
-  -> backend can grant register quota once after identity is resolved
-  -> backend returns token + user + quota summary
+Mine page button open-type=getPhoneNumber
+  -> event.detail.code as phoneCode
+  -> miniapp uni.login() as loginCode
+  -> POST /api/auth/wechat-phone-login
+  -> server calls WeChat jscode2session
+  -> server exchanges phoneCode through WeChat phone API
+  -> identity-store normalizes phone
+  -> HMAC-SHA256(phone, PHONE_HASH_SECRET)
+  -> find or create users.id
+  -> bind openid in wechat_user_bindings
+  -> bind phone_hash / phone_masked in user_phone_bindings
+  -> return project token + safe user summary
+  -> auth-store saves token, expiresAt, user.id, hasWechatBinding, hasPhoneBinding, phoneMasked
 ```
+
+Rules:
+
+- Mini program must not receive `openid`, `session_key`, WeChat `access_token`, phone plaintext, app secret, DB password, or signing secret.
+- Phone plaintext exists only transiently on the server between WeChat phone response and identity-store normalization/hash/mask.
+- Phone login requires the `user_phone_bindings` migration to be reviewed and executed in the target database before real traffic.
+- Binding conflicts follow ADR-0011 and must not be auto-merged.
+
+## Planned Entitlement Data Flow
+
+Quota, entitlement, and content access enforcement are not implemented yet. Phone quick login now provides the user identity foundation that those future modules must reference through `users.id`.
 
 Lookup quota intended flow:
 
@@ -323,6 +362,7 @@ Current public APIs:
 Current auth APIs:
 
 - `POST /api/auth/wechat-login`
+- `POST /api/auth/wechat-phone-login`
 
 Current admin APIs:
 
@@ -334,7 +374,6 @@ Current admin APIs:
 
 Expected future APIs:
 
-- `POST /api/auth/wechat-phone-login`
 - `GET /api/me`
 - `GET /api/me/quota`
 - `POST /api/words/:id/view`
@@ -387,7 +426,9 @@ Current ADR set:
 ## Known Architecture Gaps
 
 - Server docs and `.env.example` may lag the current admin username/password session login implementation.
-- User login currently has no phone binding.
+- Module 1 user identity code path is completed, but target databases still need reviewed/manual `user_phone_bindings` migration execution before real phone binding traffic.
+- WeChat phone quick login still requires WeChat Developer Tools or real-device validation.
+- `npm.cmd run check:server` still has an independent word API guard failure in `scripts/test-server-word-api-link.mjs`.
 - Learning records remain local on device.
 - Quota is not implemented.
 - Entitlement is only reserved in architecture and not implemented.

@@ -95,26 +95,83 @@ const SAFE_PHONE_LOGIN_ERROR_MESSAGES = {
   PHONE_INVALID: 'Phone number is invalid.',
   PHONE_HASH_SECRET_MISSING: 'Phone login is not configured.',
   USER_DB_CONFIG_MISSING: 'User database is not configured.',
+  USER_DB_ERROR: 'User database is unavailable.',
   IDENTITY_CONFLICT: 'Identity binding conflict.',
   INTERNAL_SERVER_ERROR: 'Internal server error.'
 }
 
+const DATABASE_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  'EHOSTUNREACH'
+])
+
+function normalizeErrorStatusCode(value, fallback = 500) {
+  const statusCode = Number(value)
+  return Number.isFinite(statusCode) && statusCode >= 400 && statusCode <= 599
+    ? statusCode
+    : fallback
+}
+
+function isDatabaseErrorCode(code) {
+  return /^ER_/.test(code) || /^PROTOCOL_/.test(code) || DATABASE_ERROR_CODES.has(code)
+}
+
+function getPublicPhoneLoginError(error) {
+  const rawCode = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+
+  if (Object.prototype.hasOwnProperty.call(SAFE_PHONE_LOGIN_ERROR_MESSAGES, rawCode)) {
+    return {
+      statusCode: normalizeErrorStatusCode(error && error.statusCode),
+      code: rawCode
+    }
+  }
+
+  if (isDatabaseErrorCode(rawCode)) {
+    return {
+      statusCode: 503,
+      code: 'USER_DB_ERROR'
+    }
+  }
+
+  if (/^WECHAT_/.test(rawCode)) {
+    return {
+      statusCode: normalizeErrorStatusCode(error && error.statusCode, 502),
+      code: 'WECHAT_LOGIN_FAILED'
+    }
+  }
+
+  if (/^IDENTITY_/.test(rawCode)) {
+    return {
+      statusCode: 409,
+      code: 'IDENTITY_CONFLICT'
+    }
+  }
+
+  return {
+    statusCode: 500,
+    code: 'INTERNAL_SERVER_ERROR'
+  }
+}
+
 function sendPhoneLoginError(res, error) {
-  const statusCode = Number(error && error.statusCode) || 500
-  const code = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
-  sendJson(res, statusCode, {
+  const publicError = getPublicPhoneLoginError(error)
+  sendJson(res, publicError.statusCode, {
     ok: false,
-    code,
-    message: SAFE_PHONE_LOGIN_ERROR_MESSAGES[code] || (
-      statusCode >= 500 ? 'Internal server error.' : 'Request failed.'
-    )
+    code: publicError.code,
+    message: SAFE_PHONE_LOGIN_ERROR_MESSAGES[publicError.code]
   })
 }
 
 function logPhoneLoginError(error, context = {}) {
-  if (!context.requestId) return
-  const code = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
-  console.warn(`wechat-phone-login requestId=${context.requestId} failed with ${code}`)
+  const rawCode = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+  const publicError = getPublicPhoneLoginError(error)
+  const requestPart = context.requestId ? ` requestId=${context.requestId}` : ''
+  console.warn(
+    `wechat-phone-login${requestPart} failed rawCode=${rawCode} publicCode=${publicError.code} status=${publicError.statusCode}`
+  )
 }
 
 function summarizePublishedWords(words) {

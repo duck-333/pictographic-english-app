@@ -1,5 +1,38 @@
 # 用户认证模块实现
 
+## Module 1 Final Status
+
+```text
+Module 1: 用户身份体系升级 - Completed
+```
+
+Completed implementation blocks:
+
+- Module 1.1 identity-store:
+  - `server/identity-store.mjs`
+  - `database/migrations/001_create_user_phone_bindings.sql`
+  - `scripts/test-identity-store.mjs`
+- Module 1.2 wechat-phone-login API:
+  - `POST /api/auth/wechat-phone-login`
+  - `server/index.mjs`
+  - `server/wechat-login.mjs`
+  - `scripts/test-wechat-phone-login-api.mjs`
+- Module 1.3.1 auth client:
+  - `miniapp-uni/word-app1/common/auth-api-client.js`
+  - `miniapp-uni/word-app1/common/auth-store.js`
+  - `scripts/test-miniapp-auth-phone-login.mjs`
+- Module 1.3.2 Mine 页面入口:
+  - `miniapp-uni/word-app1/pages/mine/index.vue`
+- Module 1 收尾安全修复:
+  - phone login API maps raw MySQL/connection errors to safe public error codes.
+  - mini program auth test is connected to `npm.cmd run check:miniapp`.
+
+Current remaining items:
+
+- `user_phone_bindings` migration has not been executed.
+- WeChat real-device / WeChat Developer Tools validation is still pending.
+- The word API guard failure is an independent legacy issue outside Module 1.
+
 ## 文件路径
 
 小程序用户登录：
@@ -14,6 +47,13 @@
 - `server/auth.mjs`
 - `server/wechat-login.mjs`
 - `server/user-store.mjs`
+- `server/identity-store.mjs`
+
+认证相关测试：
+
+- `scripts/test-identity-store.mjs`
+- `scripts/test-wechat-phone-login-api.mjs`
+- `scripts/test-miniapp-auth-phone-login.mjs`
 
 后台管理员认证：
 
@@ -28,11 +68,12 @@
 
 ## 核心文件职责
 
-- `auth-api-client.js`：小程序端调用 `uni.login()` 获取 code，并请求 `/api/auth/wechat-login`。
-- `auth-store.js`：保存、读取、校验和清除小程序用户 auth session。
-- `mine/index.vue`：登录/退出按钮、登录状态展示、本地学习数据展示。
-- `wechat-login.mjs`：服务端调用 WeChat `jscode2session`，映射 WeChat 错误。
-- `user-store.mjs`：MySQL 用户和 WeChat 绑定读写。
+- `auth-api-client.js`：小程序端调用 `uni.login()` 获取 login code；旧链路请求 `/api/auth/wechat-login`，手机号快捷登录请求 `/api/auth/wechat-phone-login`。
+- `auth-store.js`：保存、读取、校验和清除小程序用户 auth session，只保留 token、过期时间和安全 user 摘要。
+- `mine/index.vue`：手机号快捷登录入口、退出按钮、登录状态展示、masked phone 展示、本地学习数据展示。
+- `wechat-login.mjs`：服务端调用 WeChat `jscode2session`、获取服务端 `access_token`、交换手机号 code，并映射 WeChat 错误。
+- `user-store.mjs`：旧 WeChat 登录路径的 MySQL 用户和 WeChat 绑定读写。
+- `identity-store.mjs`：手机号快捷登录路径的身份绑定存储边界，处理手机号 normalize、HMAC hash、mask、绑定查询和冲突规则。
 - `auth.mjs`：管理员和用户 session token 创建、签名和管理员 token 校验。
 - `admin api-client.js`：后台登录、保存 session token、构造管理员 API Authorization header。
 
@@ -41,19 +82,27 @@
 小程序端：
 
 - `loginWithWechat(options)`
+- `loginWithWechatPhone(phoneCode, options)`
 - `getAuthSession(options)`
 - `saveAuthSession(value)`
 - `clearAuthSession()`
 - `isAuthSessionValid(session)`
-- `handleWechatLogin()`
+- `handlePhoneLogin(event)`
 - `handleLogout()`
 
 服务端：
 
 - `createWechatLoginClient(options)`
 - `code2Session(jsCode)`
+- `phoneCode2Number(phoneCode)`
 - `createUserStore(options)`
 - `findOrCreateWechatUser(identity)`
+- `createIdentityStore(options)`
+- `resolveWechatPhoneIdentity(identity)`
+- `normalizePhone(value, options)`
+- `hashPhone(phone, options)`
+- `maskPhone(phone, options)`
+- `resolveIdentityConflict(input)`
 - `createUserSessionToken(userId, options)`
 - `createAdminSessionToken(username, options)`
 - `verifyAdminCredentials(username, password, options)`
@@ -76,6 +125,7 @@
 用户认证：
 
 - `POST /api/auth/wechat-login`
+- `POST /api/auth/wechat-phone-login`
 
 管理员认证：
 
@@ -97,6 +147,23 @@ Mine page
   -> auth-store saves pictographic:authSession
 ```
 
+小程序手机号快捷登录：
+
+```text
+Mine page
+  -> button open-type="getPhoneNumber"
+  -> getPhoneNumber event.detail.code as phoneCode
+  -> loginWithWechatPhone(phoneCode)
+  -> uni.login({ provider: "weixin" }) as loginCode
+  -> POST /api/auth/wechat-phone-login { loginCode, phoneCode, requestId }
+  -> createWechatLoginClient().code2Session()
+  -> createWechatLoginClient().phoneCode2Number()
+  -> createIdentityStore().resolveWechatPhoneIdentity()
+  -> createUserSessionToken(users.id)
+  -> auth-store saves token + safe user summary
+  -> Mine page displays phoneMasked
+```
+
 服务端用户查找/创建：
 
 ```text
@@ -105,6 +172,20 @@ openid
   -> existing: update users.last_login_at / binding.unionid
   -> missing: INSERT users, INSERT wechat_user_bindings
   -> return users.id
+```
+
+服务端手机号绑定：
+
+```text
+openid / unionid + WeChat phone response
+  -> normalize phone
+  -> HMAC-SHA256(normalized phone, PHONE_HASH_SECRET)
+  -> phone_masked
+  -> SELECT wechat_user_bindings WHERE openid = ?
+  -> SELECT user_phone_bindings WHERE phone_hash = ?
+  -> apply ADR-0011 conflict rules
+  -> INSERT/UPDATE users, wechat_user_bindings, user_phone_bindings in transaction
+  -> return users.id + phoneMasked
 ```
 
 管理员登录：
@@ -121,17 +202,20 @@ admin portal login form
 ## 模块依赖关系
 
 - 小程序端依赖 uni-app 的 `uni.login`、`uni.request` 和 storage API。
-- 服务端依赖 WeChat `jscode2session` HTTPS API。
+- 服务端依赖 WeChat `jscode2session` HTTPS API 和手机号 code 交换 API。
 - 用户存储依赖 `mysql2/promise`。
 - 管理后台依赖浏览器 `localStorage` 和 `fetch`。
 - token 签名依赖 Node `crypto`。
+- 手机号 hash 依赖服务端 `PHONE_HASH_SECRET`。
 
 ## 当前风险/未知
 
 - 当前 `JWT_SECRET` 缺失时会使用进程内随机 secret，重启会导致既有 token 失效；生产必须显式配置。
-- 手机号绑定、配额账户和配额流水尚未实现。
+- `database/migrations/001_create_user_phone_bindings.sql` 尚未执行；目标数据库未迁移前，真实手机号登录无法完成绑定。
+- 配额账户和配额流水尚未实现。
 - 小程序本地学习数据尚未绑定账号同步。
 - 管理员只有单一 username/password session，没有完整角色权限系统。
+- 手机号快捷登录仍需要 HBuilderX + 微信开发者工具/真机环境完成手动验收。
 ## Module 1.1 Implementation Update
 
 Status:
@@ -175,10 +259,10 @@ Boundary rules:
 - `identity-store.mjs` does not implement quota, entitlement, content access, or permission logic.
 - Existing `server/user-store.mjs` and `POST /api/auth/wechat-login` remain unchanged.
 
-Planned future integration:
+Current integration after Module 1.2:
 
 ```text
-future POST /api/auth/wechat-phone-login
+POST /api/auth/wechat-phone-login
   -> exchange loginCode outside identity-store.mjs
   -> exchange phoneCode outside identity-store.mjs
   -> identity-store.resolveWechatPhoneIdentity()
@@ -274,3 +358,69 @@ Tests:
 
 - `scripts/test-wechat-phone-login-api.mjs` verifies the new API with fake WeChat and fake identity store.
 - The test does not call real WeChat and does not connect to a production database.
+- The test verifies raw MySQL-style errors are mapped to safe public error codes before returning to the mini program.
+
+## Module 1.3.1 Implementation Update
+
+Status:
+
+- Implemented the mini program frontend auth capability layer.
+- Added `loginWithWechatPhone(phoneCode, options)` in `auth-api-client.js`.
+- Extended `auth-store.js` to persist `hasPhoneBinding` and `phoneMasked` safely.
+- Did not implement quota, membership, VOD permission, admin user management, content access, payment, or orders.
+- Did not execute any database migration.
+
+Changed mini program files:
+
+- `miniapp-uni/word-app1/common/auth-api-client.js`
+- `miniapp-uni/word-app1/common/auth-store.js`
+
+Current auth client behavior:
+
+- `loginWithWechatPhone(phoneCode)` calls `uni.login()` to get `loginCode`.
+- The client posts `{ loginCode, phoneCode, requestId }` to `/api/auth/wechat-phone-login`.
+- `auth-store` saves only:
+  - `token`
+  - `tokenType`
+  - `expiresAt`
+  - `user.id`
+  - `user.hasWechatBinding`
+  - `user.hasPhoneBinding`
+  - `user.phoneMasked`
+- `auth-store` does not save `openid`, `session_key`, `access_token`, phone plaintext, or WeChat secrets.
+- Old sessions without `hasPhoneBinding` and `phoneMasked` remain compatible; missing fields normalize to `false` and an empty string.
+
+Tests:
+
+- `scripts/test-miniapp-auth-phone-login.mjs` verifies the mini program auth client/store with fake `uni`.
+- `npm.cmd run check:miniapp` runs the phone login auth test.
+
+## Module 1.3.2 Implementation Update
+
+Status:
+
+- Implemented the Mine page phone authorization entry.
+- Did not modify server APIs, database, quota, membership, VOD permission, admin user management, content access, payment, or orders.
+
+Changed mini program file:
+
+- `miniapp-uni/word-app1/pages/mine/index.vue`
+
+Current Mine page display:
+
+- Logged-out Mine page uses `button open-type="getPhoneNumber"`.
+- The `getPhoneNumber` event provides `event.detail.code` as `phoneCode`.
+- Logged-out state shows "手机号快捷登录".
+- Logged-in phone-bound state shows masked phone only, such as `138****8000`.
+- Logout clears the stored auth session, including phone binding state.
+- Local favorites, recent words, and learning counters remain local-only.
+
+## Module 1 Closing Safety Update
+
+Status:
+
+- Completed Module 1 final safety cleanup.
+- `POST /api/auth/wechat-phone-login` does not return raw MySQL error codes to the mini program.
+- Raw MySQL/connection errors are mapped to safe public error codes, such as `USER_DB_ERROR`.
+- Server logs keep request-level debugging information without logging phone plaintext, `openid`, `session_key`, or access token values.
+- Success response structure remains unchanged.

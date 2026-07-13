@@ -23,6 +23,94 @@ Risks / Follow-up:
 - ...
 ```
 
+## 2026-07-13: Module 1 Finalization
+
+Scope:
+
+- Marked Module 1 user identity system upgrade as completed.
+- Updated project status documentation only.
+- Did not modify business code.
+- Did not modify database schema.
+- Did not execute any database migration.
+- Did not enter Module 2.
+- Did not implement quota, membership, VOD permission, admin user management, content access, payment, or orders.
+
+Changed:
+
+- Updated `PROJECT_OVERVIEW.md`.
+- Updated `ARCHITECTURE.md`.
+- Updated `docs/modules/user-auth/PRINCIPLE.md`.
+- Updated `docs/modules/user-auth/IMPLEMENTATION.md`.
+- Updated `docs/modules/user-auth/MODULE_1_2_IMPLEMENTATION_PLAN.md`.
+- Updated `docs/modules/user-auth/MODULE_1_3_IMPLEMENTATION_PLAN.md`.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Docs:
+
+- Recorded Module 1.1 `identity-store` as completed.
+- Recorded Module 1.2 `wechat-phone-login` API as completed.
+- Recorded Module 1.3.1 mini program auth client/store as completed.
+- Recorded Module 1.3.2 Mine page phone authorization entry as completed.
+- Recorded Module 1 closing safety fix for safe phone-login error responses as completed.
+
+Remaining:
+
+- `user_phone_bindings` migration has not been executed.
+- WeChat real-device / WeChat Developer Tools validation is still pending.
+- The word API guard failure is an independent legacy issue outside Module 1.
+
+Verified:
+
+- Documentation-only finalization; implementation tests were not rerun.
+- Ran `git diff --check`; it passed with LF/CRLF warnings only.
+
+## 2026-07-13: Module 1 Closing Fixes
+
+Scope:
+
+- Completed Module 1 closing work after the overall acceptance review.
+- Fixed the phone login API error-response safety boundary.
+- Synchronized Module 1 documentation with the current code state.
+- Added mini program auth phone login tests.
+- Did not enter Module 2.
+- Did not implement quota, membership, VOD permission, admin user management, content access, payment, or orders.
+- Did not execute any database migration.
+
+Changed:
+
+- Updated `server/index.mjs` so `POST /api/auth/wechat-phone-login` maps raw MySQL/connection errors to safe public error codes before responding to the mini program.
+- Updated `scripts/test-wechat-phone-login-api.mjs` with a raw MySQL error sanitization case.
+- Added `scripts/test-miniapp-auth-phone-login.mjs`.
+- Updated `package.json` so `npm.cmd run check:miniapp` runs the new mini program auth test.
+- Updated `ARCHITECTURE.md`.
+- Updated `PROJECT_OVERVIEW.md`.
+- Updated `docs/modules/user-auth/PRINCIPLE.md`.
+- Updated `docs/modules/user-auth/IMPLEMENTATION.md`.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Verified:
+
+- Ran `node --check server/index.mjs`.
+- Ran `node --check scripts/test-miniapp-auth-phone-login.mjs`.
+- Ran `node scripts/test-miniapp-auth-phone-login.mjs`.
+- Ran `node scripts/test-wechat-phone-login-api.mjs`.
+- Ran `npm.cmd run check:miniapp`.
+- Ran `git diff --check`; it passed with LF/CRLF warnings only.
+- Ran `npm.cmd run check:server`; Module 1 syntax checks and tests passed, then the existing `scripts/test-server-word-api-link.mjs` assertion failed with `remote empty search results must not silently fall back to bundled words`.
+
+Docs:
+
+- Architecture and project overview now list `POST /api/auth/wechat-phone-login` as an implemented auth API.
+- User auth module docs now describe Module 1.1, 1.2, and 1.3 as implemented code paths.
+- Docs now explicitly state that `database/migrations/001_create_user_phone_bindings.sql` has not been executed and must still follow ADR-0007 before target database enablement.
+
+Risks / Follow-up:
+
+- HBuilderX + WeChat Developer Tools or real-device validation is still required for the real `getPhoneNumber` runtime flow.
+- Phone login cannot work against a target database until `user_phone_bindings` is reviewed, backed up, and manually migrated.
+- `npm.cmd run check:server` still has the pre-existing word API guard failure outside Module 1.
+- Module 2 must not start until this closing work is reviewed and confirmed.
+
 ## 2026-07-13: Module 1.3 Stage Split Design
 
 Scope:

@@ -48,6 +48,7 @@ The project has completed the fast MVP delivery stage for the first usable produ
 - Admin content management.
 - Admin login.
 - WeChat login first version.
+- Phone quick login code path.
 - Basic MySQL user tables.
 
 The project is now entering the long-term maintenance stage. Future feature work should follow:
@@ -64,6 +65,21 @@ requirement analysis
 
 This phase change does not rewrite the existing MVP code. It means future work should use module documentation, ADRs where needed, and explicit file boundaries before implementation.
 
+## Module Status
+
+Current completed module:
+
+```text
+Module 1: 用户身份体系升级 - Completed
+  -> Module 1.1 identity-store
+  -> Module 1.2 wechat-phone-login API
+  -> Module 1.3.1 mini program auth client/store
+  -> Module 1.3.2 Mine page phone authorization entry
+  -> Module 1 closing safety fix for phone-login error responses
+```
+
+Completion here means the repository code and documentation for the user identity system are complete for the confirmed Module 1 scope. It does not mean production database migration has been executed.
+
 ## Current Mainline
 
 Current implemented mainline:
@@ -74,6 +90,7 @@ mini program
   -> word detail page
   -> mine page / local learning records
   -> WeChat identity login
+  -> phone quick login
 
 admin portal
   -> admin login
@@ -87,12 +104,14 @@ server
   -> public published word APIs
   -> admin write APIs
   -> WeChat login API
+  -> WeChat phone login API
   -> MySQL users + wechat_user_bindings
+  -> migration-designed user_phone_bindings
 ```
 
 ## Completed Capabilities
 
-Implemented as of the latest read-only audit:
+Implemented as of Module 1 finalization:
 
 - WeChat mini program MVP pages exist under `miniapp-uni/word-app1`.
 - Public production API base is `https://baxiaota.com`.
@@ -110,6 +129,7 @@ Implemented as of the latest read-only audit:
   - `POST /api/admin/words`
   - `GET/POST /api/admin/homepage-featured`
   - `POST /api/auth/wechat-login`
+  - `POST /api/auth/wechat-phone-login`
 - WeChat login first version is complete:
   - `uni.login()`
   - `/api/auth/wechat-login`
@@ -118,6 +138,16 @@ Implemented as of the latest read-only audit:
   - `users`
   - `wechat_user_bindings`
   - project token returned to mini program
+- Phone quick login Module 1 code path is complete:
+  - `server/identity-store.mjs` owns identity data access, phone hash/mask, and binding conflict rules.
+  - Mine page uses `button open-type="getPhoneNumber"`.
+  - Mini program auth client/store supports phone quick login and safe session storage.
+  - Mini program calls `/api/auth/wechat-phone-login`.
+  - Server exchanges WeChat login code and phone code.
+  - Server binds WeChat identity and phone identity to `users.id`.
+  - Phone numbers are stored as HMAC-SHA256 hash plus masked display value.
+  - Phone login error responses are mapped to safe public codes and do not return MySQL raw error codes.
+  - The migration file for `user_phone_bindings` exists, but has not been executed by this repository task.
 - Manual VOD URL and video segment playback path exists.
 - Audio pronunciation and illustration image fields exist.
 - Validation scripts exist in `package.json`.
@@ -126,8 +156,7 @@ Implemented as of the latest read-only audit:
 
 The following are confirmed directions or likely next work, but not implemented in code as of this document:
 
-- WeChat phone number quick login.
-- `user_phone_bindings`.
+- Production/staging execution of the `user_phone_bindings` migration.
 - User quota account.
 - User quota ledger/log.
 - Backend user management pages.
@@ -165,7 +194,9 @@ Phone number should be treated as a strong identity binding for rights and custo
 
 - Some older docs still describe admin token login, while current code uses admin username/password login and JWT-style session token.
 - `.env.example` may lag current admin login requirements.
-- The mini program Mine page still says no phone number is collected, which is true for current code but will need revision before phone quick login.
+- Phone quick login still requires HBuilderX + WeChat Developer Tools or real-device manual validation.
+- `user_phone_bindings` migration has not been executed in any target database by this repository task.
+- `npm.cmd run check:server` still has an independent legacy word API guard failure: `remote empty search results must not silently fall back to bundled words`.
 - User quota and permissions are not yet modeled.
 - `admin-portal/pictographic-admin/pages/index/index.vue` is large and should not absorb every future admin function without boundaries.
 - Production `JWT_SECRET` must be explicitly configured.
@@ -173,10 +204,11 @@ Phone number should be treated as a strong identity binding for rights and custo
 
 ## Recommended Next Product Block
 
-Before coding phone login or quota:
+Before coding Module 2 quota:
 
-1. Confirm the V1 rules and ADR set.
-2. Design phone login API and database migration.
-3. Design quota account and ledger schema.
-4. Add backend user management scope.
-5. Implement in small blocks with ADR and `DEVELOPMENT_LOG.md` updates.
+1. Confirm Module 1 finalization review.
+2. Review, back up, and manually execute the `user_phone_bindings` migration in the target database when enabling phone login.
+3. Complete HBuilderX + WeChat Developer Tools or real-device validation for phone quick login.
+4. Design quota account and ledger implementation from ADR-0012.
+5. Add backend user management scope only after quota data exists.
+6. Implement in small blocks with ADR and `DEVELOPMENT_LOG.md` updates.

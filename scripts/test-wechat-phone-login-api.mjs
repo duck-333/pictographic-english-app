@@ -316,6 +316,54 @@ async function testIdentityConflict() {
   })
 }
 
+async function testRawDatabaseErrorIsSanitized() {
+  await withServer({
+    wechatLoginClient: {
+      async code2Session() {
+        return {
+          openid: 'openid-secret',
+          unionid: 'unionid-secret'
+        }
+      },
+      async phoneCode2Number() {
+        return {
+          phoneNumber: '+8613800138000',
+          purePhoneNumber: '13800138000',
+          countryCode: '86'
+        }
+      }
+    },
+    identityStore: {
+      async resolveWechatPhoneIdentity() {
+        const error = new Error('Table user_phone_bindings does not exist.')
+        error.code = 'ER_NO_SUCH_TABLE'
+        throw error
+      }
+    }
+  }, async (baseUrl) => {
+    const result = await readJson(await fetch(`${baseUrl}/api/auth/wechat-phone-login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        loginCode: 'login-code-1',
+        phoneCode: 'phone-code-1',
+        requestId: 'request-db-error'
+      })
+    }))
+
+    assert.equal(result.status, 503)
+    assert.deepEqual(result.body, {
+      ok: false,
+      code: 'USER_DB_ERROR',
+      message: 'User database is unavailable.'
+    })
+    assertSafeAuthResponse(result.body)
+    assert(!JSON.stringify(result.body).includes('ER_NO_SUCH_TABLE'), 'response must not include raw MySQL error code')
+  })
+}
+
 async function testExistingWechatLoginCompatibility() {
   let identityStoreCalled = false
   await withServer({
@@ -375,6 +423,7 @@ await testMissingLoginCode()
 await testMissingPhoneCode()
 await testWechatConfigMissing()
 await testIdentityConflict()
+await testRawDatabaseErrorIsSanitized()
 await testExistingWechatLoginCompatibility()
 
 console.log('wechat phone login API tests passed')

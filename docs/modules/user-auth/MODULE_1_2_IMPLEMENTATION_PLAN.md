@@ -1,8 +1,16 @@
 # Module 1.2 Implementation Plan
 
-Status: Design only. Not approved for coding until human confirmation.
+Status: Completed. Historical implementation plan for Module 1.2.
 
 Date: 2026-07-10
+
+Finalization note:
+
+- Module 1.2 has been implemented as part of Module 1.
+- `POST /api/auth/wechat-phone-login` exists in the server API.
+- The existing `POST /api/auth/wechat-login` path remains compatible.
+- Module 1 closing fixes added safe public error mapping for raw MySQL/connection errors.
+- This document remains as implementation history and should not be treated as pending approval.
 
 ## Goal
 

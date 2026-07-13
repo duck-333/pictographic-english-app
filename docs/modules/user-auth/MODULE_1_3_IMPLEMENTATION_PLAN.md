@@ -1,8 +1,16 @@
 # Module 1.3 Implementation Plan
 
-Status: Design only. Not approved for coding until human confirmation.
+Status: Completed. Historical implementation plan for Module 1.3.
 
 Date: 2026-07-13
+
+Finalization note:
+
+- Module 1.3.1 frontend auth capability layer has been implemented.
+- Module 1.3.2 Mine page phone authorization entry has been implemented.
+- `scripts/test-miniapp-auth-phone-login.mjs` is connected to `npm.cmd run check:miniapp`.
+- WeChat runtime/manual validation is still pending.
+- This document remains as implementation history and should not be treated as pending approval.
 
 ## Goal
 
