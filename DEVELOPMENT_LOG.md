@@ -23,6 +23,46 @@ Risks / Follow-up:
 - ...
 ```
 
+## 2026-07-15: Production API Port Migration Documentation
+
+Scope:
+
+- Documented the completed production API service migration.
+- Updated deployment/security documentation only.
+- Did not modify business code.
+- Did not modify server configuration files.
+- Did not execute deployment commands from this workspace.
+- Did not enter Module 2.
+
+Changed:
+
+- Added `docs/deployment/API_PORT_MIGRATION_2026-07-15.md`.
+- Updated `server/README.md`.
+- Updated `ARCHITECTURE.md`.
+- Updated `security/SECURITY_HARDENING_LOG_2026-07-08.md`.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Deployment facts recorded:
+
+- Previous production PM2 process: `pictographic-english-api-full`.
+- Previous production local port: `3001`.
+- Current production PM2 process: `pictographic-english-api-new`.
+- Current production local port: `3002`.
+- Nginx config file: `/etc/nginx/sites-enabled/baxiaota.com`.
+- Nginx upstream changed from `http://127.0.0.1:3001` to `http://127.0.0.1:3002`.
+
+Verification recorded:
+
+- `curl http://127.0.0.1:3002/api/health` returned `ok=true`.
+- `curl https://baxiaota.com/api/health` returned `ok=true`.
+- `pm2 list` shows `pictographic-english-api-new online`.
+- `pm2 save` completed successfully.
+
+Notes:
+
+- Existing historical references to development port `3001` remain valid when they explicitly describe local development or 2026-07-08 historical security state.
+- Current production API traffic should be documented as Nginx -> `127.0.0.1:3002` -> `pictographic-english-api-new`.
+
 ## 2026-07-13: Module 1 Finalization
 
 Scope:

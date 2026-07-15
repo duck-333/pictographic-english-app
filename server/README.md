@@ -16,16 +16,68 @@ From the repository root:
 npm.cmd run dev:api
 ```
 
-Default endpoint:
+Default local development endpoint:
 
 ```text
 http://127.0.0.1:3001
 ```
 
-To test from another device or a server, expose port `3001` and use:
+For local development from another device on the same private network, expose the development port `3001` and use:
 
 ```text
 http://SERVER_IP:3001
+```
+
+Do not treat the local development port as the production deployment port.
+
+## Production Deployment
+
+Current production API deployment, as of 2026-07-15:
+
+```text
+PM2 process: pictographic-english-api-new
+Local API port: 3002
+Public HTTPS entry: https://baxiaota.com/api/*
+Nginx config: /etc/nginx/sites-enabled/baxiaota.com
+Nginx upstream: http://127.0.0.1:3002
+```
+
+The previous production API service was:
+
+```text
+PM2 process: pictographic-english-api-full
+Local API port: 3001
+Status: old production service
+```
+
+The 2026-07-15 migration changed Nginx from:
+
+```nginx
+proxy_pass http://127.0.0.1:3001;
+```
+
+to:
+
+```nginx
+proxy_pass http://127.0.0.1:3002;
+```
+
+Verification performed after migration:
+
+```bash
+curl http://127.0.0.1:3002/api/health
+curl https://baxiaota.com/api/health
+pm2 list
+pm2 save
+```
+
+Observed status:
+
+```text
+local health ok=true
+public health ok=true
+pictographic-english-api-new online
+pm2 save succeeded
 ```
 
 Admin login is configured with server-side environment variables:
@@ -292,5 +344,6 @@ Only published word IDs can be saved. Daily rotation uses the Asia/Shanghai cale
 - Do not commit real `.env` files, admin passwords, WeChat secrets, database passwords, phone hash secrets, or `JWT_SECRET` values.
 - Production must set private `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `JWT_SECRET`, and, before phone login is enabled, `PHONE_HASH_SECRET`.
 - Development may use `http://127.0.0.1:3001` or `http://SERVER_IP:3001`.
+- Production currently uses Nginx to proxy `https://baxiaota.com/api/*` to `http://127.0.0.1:3002`.
 - Production must use a filed HTTPS domain configured in the WeChat mini program allowed request domains.
 - `npm.cmd run check:production` blocks local HTTP API bases in production or unknown runtime.

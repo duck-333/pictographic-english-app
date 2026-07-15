@@ -10,6 +10,105 @@
 
 ---
 
+## 2026-07-15 生产 API 端口迁移补充
+
+2026-07-15 已完成生产 API 服务迁移，新生产 API 服务正式接管旧服务。
+
+本节记录当前生产状态；下方 2026-07-08 的 `3001`、`pictographic-english-api-full` 和 Nginx 反代记录保留为当日历史排查事实。
+
+迁移前：
+
+```text
+PM2: pictographic-english-api-full
+端口: 3001
+状态: 旧生产服务
+```
+
+迁移后：
+
+```text
+PM2: pictographic-english-api-new
+端口: 3002
+状态: 当前生产服务
+```
+
+Nginx 修改：
+
+```text
+文件: /etc/nginx/sites-enabled/baxiaota.com
+```
+
+```nginx
+proxy_pass http://127.0.0.1:3001;
+```
+
+已改为：
+
+```nginx
+proxy_pass http://127.0.0.1:3002;
+```
+
+验证结果：
+
+```bash
+curl http://127.0.0.1:3002/api/health
+```
+
+结果：
+
+```text
+ok=true
+```
+
+```bash
+curl https://baxiaota.com/api/health
+```
+
+结果：
+
+```text
+ok=true
+```
+
+```bash
+pm2 list
+```
+
+当前：
+
+```text
+pictographic-english-api-new online
+```
+
+```bash
+pm2 save
+```
+
+结果：
+
+```text
+已执行成功
+```
+
+当前生产安全口径：
+
+| 检查项 | 当前状态 |
+|---|---|
+| 生产 API PM2 | `pictographic-english-api-new` |
+| 生产 API 本机端口 | `127.0.0.1:3002` |
+| 旧生产 API PM2 | `pictographic-english-api-full` |
+| 旧生产 API 本机端口 | `127.0.0.1:3001` |
+| Nginx 反代 | `https://baxiaota.com/api/*` -> `http://127.0.0.1:3002` |
+| PM2 进程表 | 已执行 `pm2 save` |
+
+详细迁移记录见：
+
+```text
+docs/deployment/API_PORT_MIGRATION_2026-07-15.md
+```
+
+---
+
 ## 一、触发原因
 
 收到腾讯云邮件/告警，提示服务器存在异常 SSH 连接风险。担心服务器、网站、后台、数据库被黑，因此进行安全排查。
@@ -364,28 +463,29 @@ HTTP/1.1 403 Forbidden
 
 ---
 
-## 九、admin 子域名检查
+## 九、后台入口检查
 
 测试：
 
 ```powershell
-curl.exe -i https://admin.baxiaota.com/api/health
-curl.exe -i https://admin.baxiaota.com/api/words
-curl.exe -i -X POST https://admin.baxiaota.com/api/admin/login -H "Content-Type: application/json" -d "{}"
+curl.exe -i https://baxiaota.com/admin/
+curl.exe -i https://baxiaota.com/api/health
+curl.exe -i https://baxiaota.com/api/words
+curl.exe -i -X POST https://baxiaota.com/api/admin/login -H "Content-Type: application/json" -d "{}"
 ```
 
 结果：
 
 ```text
-HTTP/1.1 302 Moved Temporarily
-Location: https://baxiaota.com/admin/
+后台入口使用 https://baxiaota.com/admin/
+API 入口使用 https://baxiaota.com/api/*
 ```
 
 判断：
 
 ```text
-admin.baxiaota.com 当前不是 API 域名，而是跳转到 baxiaota.com/admin/。
-API 实际走 baxiaota.com/api。
+后台统一入口是 https://baxiaota.com/admin/。
+API 实际走 https://baxiaota.com/api/*。
 ```
 
 ---

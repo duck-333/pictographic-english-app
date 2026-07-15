@@ -50,6 +50,39 @@ Admin Portal
 Node API
 ```
 
+## Production API Deployment
+
+Current production API deployment, as of 2026-07-15:
+
+```text
+https://baxiaota.com/api/*
+  -> Nginx /etc/nginx/sites-enabled/baxiaota.com
+  -> proxy_pass http://127.0.0.1:3002
+  -> PM2 pictographic-english-api-new
+```
+
+Migration record:
+
+- `docs/deployment/API_PORT_MIGRATION_2026-07-15.md`
+
+Previous production API deployment:
+
+```text
+PM2 pictographic-english-api-full
+port 3001
+status: old production service
+```
+
+Current production API deployment:
+
+```text
+PM2 pictographic-english-api-new
+port 3002
+status: current production service
+```
+
+The public API base remains `https://baxiaota.com`; mini program and admin clients should not call the local PM2 port directly.
+
 ## Runtime Components
 
 ### Mini Program
