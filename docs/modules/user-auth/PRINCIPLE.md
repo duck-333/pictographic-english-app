@@ -4,7 +4,7 @@
 
 用户认证模块负责建立项目自己的用户身份，并把外部 WeChat 身份和手机号身份绑定到内部 `users.id`。
 
-当前已实现 WeChat `uni.login()` 身份登录第一版，以及 Module 1 手机号快捷登录代码链路。`user_phone_bindings` 迁移文件已创建但尚未执行；配额、会员、支付和权益系统尚未实现。
+当前已实现 WeChat `uni.login()` 身份登录第一版，以及 Module 1 手机号快捷登录链路。2026-07-15 已在生产 MySQL 执行 `database/migrations/001_create_user_phone_bindings.sql`，并完成生产微信手机号快捷登录验证；配额、会员、支付和权益系统尚未实现。
 
 ## 当前模块状态
 
@@ -19,6 +19,7 @@ Module 1: 用户身份体系升级 - Completed
 - Module 1.3.1：小程序 `auth-api-client.js` / `auth-store.js` 认证能力层。
 - Module 1.3.2：Mine 页面手机号授权入口。
 - Module 1 收尾：手机号登录错误响应安全映射，避免向前端暴露 MySQL 原始错误 code。
+- 生产验证：`user_phone_bindings` 已创建，微信 `getPhoneNumber` 到项目 session 返回链路已验证。
 
 未包含范围：
 
@@ -57,7 +58,7 @@ WeChat `openid` 能让 MVP 建立用户身份，但它不适合作为长期业�
 
 ## 与其他模块关系
 
-- 数据存储模块：认证依赖 MySQL `users`、`wechat_user_bindings` 和待人工执行的 `user_phone_bindings` 迁移。
+- 数据存储模块：认证依赖 MySQL `users`、`wechat_user_bindings` 和已在生产执行的 `user_phone_bindings`。
 - 单词内容模块：当前公开查词不强制登录；未来完整详情配额扣减会依赖用户身份。
 - 管理后台模块：后台管理员登录使用同一 `auth.mjs` token 工具，但认证对象和权限边界不同。
 - 视频/VOD 模块：当前视频播放不依赖认证；未来会员/付费视频不能依靠客户端裁剪，需要服务端权限。

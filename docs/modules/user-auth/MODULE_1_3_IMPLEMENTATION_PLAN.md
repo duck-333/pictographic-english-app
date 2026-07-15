@@ -9,7 +9,7 @@ Finalization note:
 - Module 1.3.1 frontend auth capability layer has been implemented.
 - Module 1.3.2 Mine page phone authorization entry has been implemented.
 - `scripts/test-miniapp-auth-phone-login.mjs` is connected to `npm.cmd run check:miniapp`.
-- WeChat runtime/manual validation is still pending.
+- 2026-07-15 production validation confirmed the WeChat `getPhoneNumber` to `/api/auth/wechat-phone-login` flow.
 - This document remains as implementation history and should not be treated as pending approval.
 
 ## Goal
@@ -346,9 +346,9 @@ Manual verification:
 
 ## Risks
 
-- Real `getPhoneNumber` behavior must be validated in WeChat runtime; browser-only testing is not enough.
-- Target database must have `user_phone_bindings` migrated before real phone login can succeed.
-- Production WeChat app ID, app secret, phone API permission, legal domain, and `PHONE_HASH_SECRET` must be configured.
+- Real `getPhoneNumber` behavior must be validated in WeChat runtime for each production-like deployment; browser-only testing is not enough.
+- Target database must have `user_phone_bindings` migrated before real phone login can succeed. Production was migrated and verified on 2026-07-15.
+- Production WeChat app ID, app secret, phone API permission, legal domain, and `PHONE_HASH_SECRET` must remain configured.
 - If `POST /api/auth/wechat-phone-login` is deployed without database readiness, the client must show a safe service error.
 - Existing `npm.cmd run check:server` may still fail on the unrelated word API guard and should not be treated as Module 1.3 failure unless the failure moves into auth code.
 

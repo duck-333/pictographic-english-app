@@ -10,6 +10,7 @@ Finalization note:
 - `POST /api/auth/wechat-phone-login` exists in the server API.
 - The existing `POST /api/auth/wechat-login` path remains compatible.
 - Module 1 closing fixes added safe public error mapping for raw MySQL/connection errors.
+- 2026-07-15 production validation confirmed `user_phone_bindings` migration execution and successful phone quick login.
 - This document remains as implementation history and should not be treated as pending approval.
 
 ## Goal
@@ -228,7 +229,7 @@ Module 1.2 does not add database schema and does not execute migrations.
 
 Runtime dependency:
 
-- `user_phone_bindings` from Module 1.1 must exist in the target database before the real API can complete phone binding.
+- `user_phone_bindings` from Module 1.1 must exist in the target database before the real API can complete phone binding. Production was migrated and verified on 2026-07-15; future target databases still need their own ADR-0007 migration/backup process.
 
 If the table is missing, the API must return a safe error and must not expose raw SQL errors.
 

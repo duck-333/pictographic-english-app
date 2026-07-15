@@ -27,10 +27,28 @@ Completed implementation blocks:
   - phone login API maps raw MySQL/connection errors to safe public error codes.
   - mini program auth test is connected to `npm.cmd run check:miniapp`.
 
+Production validation:
+
+- 2026-07-15: production MySQL executed `database/migrations/001_create_user_phone_bindings.sql`.
+- Production table `user_phone_bindings` exists.
+- Production WeChat phone quick login has been verified.
+- Verified production flow:
+  - WeChat `getPhoneNumber`.
+  - `POST /api/auth/wechat-phone-login`.
+  - Server-side phone hash.
+  - `user_phone_bindings`.
+  - `users`.
+  - Project session returned to the mini program.
+- Data check found a production test binding:
+  - `user_id=1`
+  - `phone_masked=195****0953`
+  - `status=active`
+- Database backups were saved outside the repository:
+  - `~/backups/baxiaota_before_phone_binding_20260715.sql`
+  - `~/backups/baxiaota_after_phone_binding_20260715.sql`
+
 Current remaining items:
 
-- `user_phone_bindings` migration has not been executed.
-- WeChat real-device / WeChat Developer Tools validation is still pending.
 - The word API guard failure is an independent legacy issue outside Module 1.
 
 ## 文件路径
@@ -211,11 +229,40 @@ admin portal login form
 ## 当前风险/未知
 
 - 当前 `JWT_SECRET` 缺失时会使用进程内随机 secret，重启会导致既有 token 失效；生产必须显式配置。
-- `database/migrations/001_create_user_phone_bindings.sql` 尚未执行；目标数据库未迁移前，真实手机号登录无法完成绑定。
+- 生产 `user_phone_bindings` 已完成迁移和验证；未来 staging、新生产副本或灾备环境仍需按 ADR-0007 单独执行迁移、回滚方案和备份验证。
+- 生产数据库备份文件位于服务器 `~/backups/`，不得提交到 Git。
 - 配额账户和配额流水尚未实现。
 - 小程序本地学习数据尚未绑定账号同步。
 - 管理员只有单一 username/password session，没有完整角色权限系统。
-- 手机号快捷登录仍需要 HBuilderX + 微信开发者工具/真机环境完成手动验收。
+
+## 2026-07-15 Production Verification Update
+
+Status:
+
+- Module 1 phone quick login is verified on the production server.
+- The production database contains `user_phone_bindings`.
+- The verified test data confirms phone masking and active binding status.
+
+Production verified data:
+
+```text
+table: user_phone_bindings
+user_id: 1
+phone_masked: 195****0953
+status: active
+```
+
+Backup records:
+
+```text
+~/backups/baxiaota_before_phone_binding_20260715.sql
+~/backups/baxiaota_after_phone_binding_20260715.sql
+```
+
+Operational notes:
+
+- Backup files are not repository artifacts and must not be committed.
+- Future environments must not assume the production migration state; each target database still needs reviewed migration execution and backup verification.
 ## Module 1.1 Implementation Update
 
 Status:

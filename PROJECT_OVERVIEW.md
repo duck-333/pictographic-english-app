@@ -78,7 +78,7 @@ Module 1: 用户身份体系升级 - Completed
   -> Module 1 closing safety fix for phone-login error responses
 ```
 
-Completion here means the repository code and documentation for the user identity system are complete for the confirmed Module 1 scope. It does not mean production database migration has been executed.
+Completion here means the repository code, documentation, production database migration, and production phone login validation are complete for the confirmed Module 1 scope.
 
 ## Current Mainline
 
@@ -106,7 +106,7 @@ server
   -> WeChat login API
   -> WeChat phone login API
   -> MySQL users + wechat_user_bindings
-  -> migration-designed user_phone_bindings
+  -> MySQL user_phone_bindings
 ```
 
 ## Completed Capabilities
@@ -147,7 +147,9 @@ Implemented as of Module 1 finalization:
   - Server binds WeChat identity and phone identity to `users.id`.
   - Phone numbers are stored as HMAC-SHA256 hash plus masked display value.
   - Phone login error responses are mapped to safe public codes and do not return MySQL raw error codes.
-  - The migration file for `user_phone_bindings` exists, but has not been executed by this repository task.
+  - Production MySQL has executed `database/migrations/001_create_user_phone_bindings.sql`.
+  - Production `user_phone_bindings` has verified test data with `user_id=1`, `phone_masked=195****0953`, and `status=active`.
+  - Production before/after database backups were saved under `~/backups/`.
 - Manual VOD URL and video segment playback path exists.
 - Audio pronunciation and illustration image fields exist.
 - Validation scripts exist in `package.json`.
@@ -156,7 +158,6 @@ Implemented as of Module 1 finalization:
 
 The following are confirmed directions or likely next work, but not implemented in code as of this document:
 
-- Production/staging execution of the `user_phone_bindings` migration.
 - User quota account.
 - User quota ledger/log.
 - Backend user management pages.
@@ -194,8 +195,7 @@ Phone number should be treated as a strong identity binding for rights and custo
 
 - Some older docs still describe admin token login, while current code uses admin username/password login and JWT-style session token.
 - `.env.example` may lag current admin login requirements.
-- Phone quick login still requires HBuilderX + WeChat Developer Tools or real-device manual validation.
-- `user_phone_bindings` migration has not been executed in any target database by this repository task.
+- Future staging or production-like databases still need their own reviewed `user_phone_bindings` migration execution and backup verification under ADR-0007.
 - `npm.cmd run check:server` still has an independent legacy word API guard failure: `remote empty search results must not silently fall back to bundled words`.
 - User quota and permissions are not yet modeled.
 - `admin-portal/pictographic-admin/pages/index/index.vue` is large and should not absorb every future admin function without boundaries.
@@ -206,9 +206,8 @@ Phone number should be treated as a strong identity binding for rights and custo
 
 Before coding Module 2 quota:
 
-1. Confirm Module 1 finalization review.
-2. Review, back up, and manually execute the `user_phone_bindings` migration in the target database when enabling phone login.
-3. Complete HBuilderX + WeChat Developer Tools or real-device validation for phone quick login.
-4. Design quota account and ledger implementation from ADR-0012.
-5. Add backend user management scope only after quota data exists.
-6. Implement in small blocks with ADR and `DEVELOPMENT_LOG.md` updates.
+1. Confirm Module 1 production validation documentation.
+2. Keep production database backups outside Git.
+3. Design quota account and ledger implementation from ADR-0012.
+4. Add backend user management scope only after quota data exists.
+5. Implement in small blocks with ADR and `DEVELOPMENT_LOG.md` updates.

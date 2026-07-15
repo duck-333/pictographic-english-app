@@ -1,6 +1,6 @@
 # Architecture v1
 
-Date: 2026-07-09
+Date: 2026-07-15
 
 This document records the current architecture and the confirmed direction. It is intentionally v1. Do not try to make it perfect in one pass. Update it after major architecture changes.
 
@@ -18,11 +18,14 @@ Completed scope:
 - Module 1.3.2: Mine page `button open-type="getPhoneNumber"` entry.
 - Module 1 closing fix: safe error mapping for phone-login API responses.
 
-Remaining operational items:
+Production validation:
 
-- `database/migrations/001_create_user_phone_bindings.sql` has not been executed in a target database.
-- WeChat real-device or WeChat Developer Tools validation is still required.
-- The word API guard failure is an independent legacy issue outside Module 1.
+- `database/migrations/001_create_user_phone_bindings.sql` has been executed in production MySQL.
+- Production `user_phone_bindings` exists.
+- WeChat phone quick login has been verified on the production server.
+- A production test binding exists in `user_phone_bindings` with `user_id=1`, `phone_masked=195****0953`, and `status=active`.
+- Before/after production backups were saved under `~/backups/`.
+- The word API guard failure remains an independent legacy issue outside Module 1.
 
 ## System Context
 
@@ -181,7 +184,7 @@ users
 wechat_user_bindings
 ```
 
-Module 1 migration design exists and is required before enabling real phone login in a target database:
+Module 1 phone binding storage is implemented in production:
 
 ```text
 user_phone_bindings
@@ -228,7 +231,7 @@ The module docs under `docs/modules/` document the current implementation as it 
 | Module | Module docs | Primary source areas | Main API/storage boundaries |
 | --- | --- | --- | --- |
 | Word content | `docs/modules/word-content/PRINCIPLE.md`, `docs/modules/word-content/IMPLEMENTATION.md` | `miniapp-uni/word-app1/common/word-repository.js`, `miniapp-uni/word-app1/common/content-schema.js`, `miniapp-uni/word-app1/pages/index/index.vue`, `miniapp-uni/word-app1/pages/word-detail/index.vue`, `server/word-store.mjs` | `GET /api/words`, `GET /api/words/:id`, `GET /api/homepage/featured-word`, `POST /api/admin/words`, `server/local-data/words.json` |
-| User auth | `docs/modules/user-auth/PRINCIPLE.md`, `docs/modules/user-auth/IMPLEMENTATION.md` | `miniapp-uni/word-app1/common/auth-api-client.js`, `miniapp-uni/word-app1/common/auth-store.js`, `miniapp-uni/word-app1/pages/mine/index.vue`, `server/auth.mjs`, `server/wechat-login.mjs`, `server/user-store.mjs`, `server/identity-store.mjs` | `POST /api/auth/wechat-login`, `POST /api/auth/wechat-phone-login`, `POST /api/admin/login`, `GET /api/admin/auth/check`, MySQL `users`, MySQL `wechat_user_bindings`, migration-designed `user_phone_bindings` |
+| User auth | `docs/modules/user-auth/PRINCIPLE.md`, `docs/modules/user-auth/IMPLEMENTATION.md` | `miniapp-uni/word-app1/common/auth-api-client.js`, `miniapp-uni/word-app1/common/auth-store.js`, `miniapp-uni/word-app1/pages/mine/index.vue`, `server/auth.mjs`, `server/wechat-login.mjs`, `server/user-store.mjs`, `server/identity-store.mjs` | `POST /api/auth/wechat-login`, `POST /api/auth/wechat-phone-login`, `POST /api/admin/login`, `GET /api/admin/auth/check`, MySQL `users`, MySQL `wechat_user_bindings`, MySQL `user_phone_bindings` |
 | Video/VOD | `docs/modules/video-vod/PRINCIPLE.md`, `docs/modules/video-vod/IMPLEMENTATION.md` | `miniapp-uni/word-app1/pages/word-detail/index.vue`, `miniapp-uni/word-app1/common/content-schema.js`, `admin-portal/pictographic-admin/pages/index/index.vue`, `scripts/dev-preview-bridge.mjs`, `scripts/check-production-ready.mjs` | Media fields inside word records, `POST /api/admin/words`, public word APIs, local preview bridge `127.0.0.1:8787` for development only |
 | Admin portal | `docs/modules/admin-portal/PRINCIPLE.md`, `docs/modules/admin-portal/IMPLEMENTATION.md` | `admin-portal/pictographic-admin/pages/index/index.vue`, `admin-portal/pictographic-admin/common/api-client.js`, `server/index.mjs`, `server/auth.mjs`, `server/word-store.mjs` | Admin session token, `POST /api/admin/login`, `POST /api/admin/words`, `GET/POST /api/admin/homepage-featured`, browser localStorage drafts |
 | Data storage | `docs/modules/data-storage/PRINCIPLE.md`, `docs/modules/data-storage/IMPLEMENTATION.md` | `server/word-store.mjs`, `server/user-store.mjs`, `miniapp-uni/word-app1/common/user-store.js`, `miniapp-uni/word-app1/common/auth-store.js`, `content-seed`, `scripts/validate-content.mjs` | Service JSON word store, MySQL user tables, mini program storage, admin localStorage, seed JSON, dev preview generated files |
@@ -253,7 +256,7 @@ Module 1 is complete for the confirmed user identity scope. The remaining module
 
 | Module | ADR | Main responsibility | Implementation status |
 | --- | --- | --- | --- |
-| User identity system upgrade | `ADR/ADR-0010-user-identity-system-upgrade.md`, `ADR/ADR-0011-identity-binding-conflict-rules.md` | Phone quick login, WeChat binding, phone binding, conflict rules, `users.id` ownership | Completed; `user_phone_bindings` migration still requires human execution per ADR-0007 |
+| User identity system upgrade | `ADR/ADR-0010-user-identity-system-upgrade.md`, `ADR/ADR-0011-identity-binding-conflict-rules.md` | Phone quick login, WeChat binding, phone binding, conflict rules, `users.id` ownership | Completed; production migration and phone login validation completed on 2026-07-15 |
 | User entitlement model | `ADR/ADR-0012-user-entitlement-model.md` | Separate consumable quota from qualification entitlement; define `word_lookup` quota | Not implemented |
 | Content access layer | `ADR/ADR-0014-content-access-layer-model.md` | Define `public_basic`, `user_full`, and future `member_media` content projections | Not implemented |
 | Admin user entitlement query | `ADR/ADR-0013-admin-user-entitlement-query.md` | Minimal admin user list/detail, masked identity display, quota balance and ledger lookup | Not implemented |
@@ -342,7 +345,7 @@ Rules:
 
 - Mini program must not receive `openid`, `session_key`, WeChat `access_token`, phone plaintext, app secret, DB password, or signing secret.
 - Phone plaintext exists only transiently on the server between WeChat phone response and identity-store normalization/hash/mask.
-- Phone login requires the `user_phone_bindings` migration to be reviewed and executed in the target database before real traffic.
+- Production phone login uses the migrated `user_phone_bindings` table. Any new target database still requires reviewed migration execution, rollback planning, and backup verification under ADR-0007 before real traffic.
 - Binding conflicts follow ADR-0011 and must not be auto-merged.
 
 ## Planned Entitlement Data Flow
@@ -459,8 +462,8 @@ Current ADR set:
 ## Known Architecture Gaps
 
 - Server docs and `.env.example` may lag the current admin username/password session login implementation.
-- Module 1 user identity code path is completed, but target databases still need reviewed/manual `user_phone_bindings` migration execution before real phone binding traffic.
-- WeChat phone quick login still requires WeChat Developer Tools or real-device validation.
+- Module 1 user identity code path, production `user_phone_bindings` migration, and production WeChat phone quick login validation are completed.
+- Future staging or production-like databases still require reviewed/manual `user_phone_bindings` migration execution before real phone binding traffic.
 - `npm.cmd run check:server` still has an independent word API guard failure in `scripts/test-server-word-api-link.mjs`.
 - Learning records remain local on device.
 - Quota is not implemented.

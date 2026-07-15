@@ -23,6 +23,65 @@ Risks / Follow-up:
 - ...
 ```
 
+## 2026-07-15: Module 1 Production Phone Login Validation
+
+Scope:
+
+- Recorded completed production validation for Module 1 user identity phone quick login.
+- Updated documentation only.
+- Did not modify business code.
+- Did not modify database schema from this workspace.
+- Did not commit or copy database backup files into the repository.
+- Did not enter Module 2.
+
+Changed:
+
+- Updated `DEVELOPMENT_LOG.md`.
+- Updated `ARCHITECTURE.md`.
+- Updated `docs/modules/user-auth/PRINCIPLE.md`.
+- Updated `docs/modules/user-auth/IMPLEMENTATION.md`.
+
+Production facts recorded:
+
+- Production MySQL has executed `database/migrations/001_create_user_phone_bindings.sql`.
+- Production table `user_phone_bindings` exists.
+- WeChat phone quick login has been verified on production server.
+- Verified flow:
+  - WeChat `getPhoneNumber`.
+  - `POST /api/auth/wechat-phone-login`.
+  - Server-side phone hash.
+  - `user_phone_bindings`.
+  - `users`.
+  - Project session returned to the mini program.
+- Data check found a test user in `user_phone_bindings`:
+  - `user_id=1`
+  - `phone_masked=195****0953`
+  - `status=active`
+
+Backup facts recorded:
+
+- Pre-migration backup:
+  - `~/backups/baxiaota_before_phone_binding_20260715.sql`
+- Post-migration backup:
+  - `~/backups/baxiaota_after_phone_binding_20260715.sql`
+
+Verified:
+
+- Production verification facts were provided by the project owner.
+- No automated checks were run because this was a documentation-only update.
+
+Docs:
+
+- Module 1 is now documented as completed in production for the phone binding path.
+- Previous documentation that described the production phone binding migration or WeChat phone login validation as pending has been updated.
+
+Risks / Follow-up:
+
+- The backup files are production artifacts and must remain outside Git.
+- Future staging or production-like environments still need their own reviewed migration execution, rollback plan, and backup verification under ADR-0007.
+- The word API guard failure remains an independent legacy issue outside Module 1.
+- Module 2 quota work remains unimplemented and requires its own design/review cycle before coding.
+
 ## 2026-07-15: Production API Port Migration Documentation
 
 Scope:
