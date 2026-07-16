@@ -249,7 +249,7 @@ commercial rights
   -> entitlements
 ```
 
-The mini program's local `pictographic:userState` remains the current implementation for favorites, recent words, `searchCount`, and `streakDays`. It is planned to become visitor-mode cache and offline fallback after server-side learning data sync is implemented. Local `searchCount` must not be treated as a real quota balance.
+The mini program's local `pictographic:userState` remains the current implementation for favorites, recent words, `searchCount`, and `streakDays`. In Phase 2 MVP, it becomes visitor-mode cache only. After a user logs in, favorites, word views, and learning stats are created and read from server-side learning data under `users.id`; pre-login visitor data is not imported, merged, or associated with the account. Local `searchCount` must not be treated as a real quota balance.
 
 ## Module Map
 
@@ -284,10 +284,25 @@ Module 1 is complete for the confirmed user identity scope. The remaining module
 | Module | ADR | Main responsibility | Implementation status |
 | --- | --- | --- | --- |
 | User identity system upgrade | `ADR/ADR-0010-user-identity-system-upgrade.md`, `ADR/ADR-0011-identity-binding-conflict-rules.md` | Phone quick login, WeChat binding, phone binding, conflict rules, `users.id` ownership | Completed; production migration and phone login validation completed on 2026-07-15 |
-| User learning data sync | `ADR/ADR-0015-user-learning-data-sync.md` | Server-side favorites, word views, daily learning stats, visitor cache migration rules | Not implemented; design stage only |
+| User learning data sync | `ADR/ADR-0015-user-learning-data-sync.md` | Server-side favorites, word views, daily learning stats, visitor cache isolation rules | Not implemented; design stage only |
 | User entitlement model | `ADR/ADR-0012-user-entitlement-model.md` | Separate consumable quota from qualification entitlement; define `word_lookup` quota | Not implemented |
 | Content access layer | `ADR/ADR-0014-content-access-layer-model.md` | Define `public_basic`, `user_full`, and future `member_media` content projections | Not implemented |
 | Admin user entitlement query | `ADR/ADR-0013-admin-user-entitlement-query.md` | Minimal admin user list/detail, masked identity display, quota balance and ledger lookup | Not implemented |
+
+Confirmed Phase 2 module split:
+
+1. User identity authentication layer.
+2. User learning data sync layer.
+3. Lookup quota / entitlement system.
+4. Content access control layer.
+5. Admin user operations query.
+
+Phase 2 MVP visitor data rule:
+
+- Logged-out users continue to use local `pictographic:userState`.
+- After login, account learning data uses server-side records under `users.id`.
+- Phase 2 does not import, merge, or associate pre-login visitor data.
+- Future visitor data migration requires a new ADR.
 
 ## Current Data Flows
 
@@ -400,8 +415,8 @@ Rules:
 - This data is not bound to `users.id` yet.
 - Logging out clears `pictographic:authSession`, but does not clear `pictographic:userState`.
 - Clearing mini program storage removes this learning data.
-- The next module must make logged-in learning data server-owned while keeping local storage for visitor mode and offline fallback.
-- Visitor data migration must require explicit user confirmation after login.
+- The next module must make logged-in learning data server-owned while keeping local storage for visitor mode.
+- Phase 2 MVP must not import, merge, or associate visitor data after login.
 
 ### Planned User Learning Data Sync
 
@@ -416,14 +431,14 @@ logged-in miniapp user
   -> miniapp renders account learning state
 ```
 
-Planned visitor migration:
+Phase 2 MVP visitor boundary:
 
 ```text
 local pictographic:userState
   -> user logs in
-  -> miniapp asks for confirmation
-  -> server imports local favorites / recent words under users.id
-  -> server returns latest learning state
+  -> local visitor data remains on this device
+  -> server creates or reads learning state under users.id
+  -> subsequent favorites / views / daily stats write to server
 ```
 
 ## Planned Entitlement Data Flow
@@ -490,7 +505,6 @@ Expected future APIs:
 
 - `GET /api/me`
 - `GET /api/me/learning-state`
-- `POST /api/me/learning-state/import`
 - `GET /api/me/favorites`
 - `POST /api/me/favorites`
 - `DELETE /api/me/favorites/:wordId`

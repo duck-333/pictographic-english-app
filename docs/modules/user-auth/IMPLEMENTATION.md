@@ -233,16 +233,17 @@ miniapp Authorization: Bearer <user token>
   -> server returns learning state
 ```
 
-Planned visitor migration:
+Phase 2 MVP visitor boundary:
 
 ```text
 local pictographic:userState
   -> user logs in
-  -> miniapp asks for explicit confirmation
-  -> POST /api/me/learning-state/import
-  -> server merges favorites and recent words under users.id
-  -> local cache becomes visitor/offline fallback, not the only source for logged-in users
+  -> local visitor data remains on this device
+  -> server creates or reads learning state under users.id
+  -> subsequent favorites, word views, and daily stats write to server
 ```
+
+Phase 2 MVP does not import, merge, or associate pre-login visitor data. If visitor data migration is needed later, it must be designed in a separate ADR.
 
 服务端用户查找/创建：
 

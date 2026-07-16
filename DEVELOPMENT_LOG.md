@@ -23,6 +23,51 @@ Risks / Follow-up:
 - ...
 ```
 
+## 2026-07-16: Phase 2 User System Architecture Confirmation
+
+Scope:
+
+- Confirmed the Phase 2 user system module split.
+- Updated documentation only.
+- Did not modify business code.
+- Did not create a database migration.
+- Did not execute any database operation.
+- Did not submit git.
+
+Changed:
+
+- Updated `ADR/ADR-0015-user-learning-data-sync.md`.
+- Updated `ARCHITECTURE.md`.
+- Updated `docs/modules/user-auth/PRINCIPLE.md`.
+- Updated `docs/modules/user-auth/IMPLEMENTATION.md`.
+- Updated `docs/database/DATABASE_CHANGE_PLAN.md`.
+- Updated `Plan.md`.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Decision:
+
+- Phase 2 remains split into:
+  - User identity authentication layer.
+  - User learning data sync layer.
+  - Lookup quota / entitlement system.
+  - Content access control layer.
+  - Admin user operations query.
+- Phase 2 MVP does not import, merge, or associate pre-login visitor data.
+- Logged-out favorites, recent words, and local counters remain local visitor data.
+- After login, favorites, word views, and learning stats are created and read from server-side data under `users.id`.
+- Future visitor data migration requires a separate ADR.
+
+Verified:
+
+- Documentation-only update; no automated tests were run.
+- No database migration was created or executed.
+
+Risks / Follow-up:
+
+- User token verification is still the first required implementation step before protected `/api/me/*` APIs.
+- Learning data tables and APIs are still design-only.
+- Quota, entitlement, content access enforcement, and admin user operations query remain unimplemented.
+
 ## 2026-07-15: User Learning Data Sync Architecture Design
 
 Scope:

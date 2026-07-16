@@ -78,14 +78,14 @@ Field rules:
 - `user_id`: project user identity, always references `users.id` at the service layer.
 - `word_id`: stable word record id from the content system.
 - `status`: first version uses `active` and `deleted`.
-- `source`: first version can use `miniapp`; future values may include `import` or `admin`.
+- `source`: first version can use `miniapp`; visitor import is not part of Phase 2 MVP and would require a future ADR.
 - `deleted_at`: set when a user cancels a favorite.
 
 Behavior rules:
 
 - Use soft delete for unfavorite operations.
 - Re-favoriting the same word should reactivate the existing row.
-- Local visitor favorites can be imported only after explicit user confirmation.
+- Local visitor favorites are not imported, merged, or associated with `users.id` in Phase 2 MVP.
 
 ### user_word_views
 
@@ -107,10 +107,10 @@ Field rules:
 
 - `user_id`: project user identity, always references `users.id` at the service layer.
 - `word_id`: stable word record id from the content system.
-- `first_viewed_at`: first known server-side or imported view time.
-- `last_viewed_at`: latest known server-side or imported view time.
+- `first_viewed_at`: first known server-side view time for this account.
+- `last_viewed_at`: latest known server-side view time for this account.
 - `view_count`: aggregate view count for this user and word.
-- `source`: first version can use `miniapp`; future values may include `import`.
+- `source`: first version can use `miniapp`; visitor import is not part of Phase 2 MVP and would require a future ADR.
 
 Behavior rules:
 
@@ -312,8 +312,8 @@ Data backfill:
 
 - Existing WeChat-only users remain valid.
 - No phone binding backfill is possible until a user authorizes phone quick login.
-- Existing local mini program learning data remains local until the user explicitly confirms import after login.
-- Favorites and recent words can be imported by `word_id`; local `searchCount` must not be imported as quota balance.
+- Existing local mini program learning data remains local visitor data and is not imported after login in Phase 2 MVP.
+- Favorites, recent words, local `searchCount`, and local `streakDays` from pre-login visitor mode must not be associated with `users.id` in Phase 2 MVP.
 - Register bonus should be granted only after identity is resolved and must be idempotent.
 
 ## Rollback Strategy
@@ -372,8 +372,8 @@ Learning data sync tests:
 - Word view updates `last_viewed_at` and increments `view_count`.
 - Recent words are returned in `last_viewed_at DESC` order.
 - Daily stats create or update one row per user per date.
-- Local visitor data import requires explicit confirmation at the mini program layer.
-- Importing the same local favorite set twice is idempotent.
+- Logging in does not import, merge, or associate existing local visitor data.
+- A newly logged-in account starts from existing server-side learning data for `users.id`, or an empty server learning state if none exists.
 - Local `searchCount` is not treated as `word_lookup` quota.
 
 Admin tests:
