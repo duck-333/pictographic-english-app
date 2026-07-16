@@ -190,7 +190,15 @@ Module 1 phone binding storage is implemented in production:
 user_phone_bindings
 ```
 
-Confirmed next direction:
+Confirmed next learning data sync direction:
+
+```text
+user_favorites
+user_word_views
+user_learning_daily_stats
+```
+
+Confirmed commercial rights direction:
 
 ```text
 user_quota_accounts
@@ -219,10 +227,29 @@ Confirmed identity direction:
 users.id
   -> wechat_user_bindings.openid / unionid
   -> user_phone_bindings.phone_hash / phone_masked
+  -> user_favorites
+  -> user_word_views
+  -> user_learning_daily_stats
   -> user_quota_accounts
   -> user_quota_logs
   -> future user_entitlements
 ```
+
+Learning behavior and commercial rights are separate:
+
+```text
+learning data
+  -> favorites
+  -> word views
+  -> daily learning stats
+
+commercial rights
+  -> quota accounts
+  -> quota logs
+  -> entitlements
+```
+
+The mini program's local `pictographic:userState` remains the current implementation for favorites, recent words, `searchCount`, and `streakDays`. It is planned to become visitor-mode cache and offline fallback after server-side learning data sync is implemented. Local `searchCount` must not be treated as a real quota balance.
 
 ## Module Map
 
@@ -257,6 +284,7 @@ Module 1 is complete for the confirmed user identity scope. The remaining module
 | Module | ADR | Main responsibility | Implementation status |
 | --- | --- | --- | --- |
 | User identity system upgrade | `ADR/ADR-0010-user-identity-system-upgrade.md`, `ADR/ADR-0011-identity-binding-conflict-rules.md` | Phone quick login, WeChat binding, phone binding, conflict rules, `users.id` ownership | Completed; production migration and phone login validation completed on 2026-07-15 |
+| User learning data sync | `ADR/ADR-0015-user-learning-data-sync.md` | Server-side favorites, word views, daily learning stats, visitor cache migration rules | Not implemented; design stage only |
 | User entitlement model | `ADR/ADR-0012-user-entitlement-model.md` | Separate consumable quota from qualification entitlement; define `word_lookup` quota | Not implemented |
 | Content access layer | `ADR/ADR-0014-content-access-layer-model.md` | Define `public_basic`, `user_full`, and future `member_media` content projections | Not implemented |
 | Admin user entitlement query | `ADR/ADR-0013-admin-user-entitlement-query.md` | Minimal admin user list/detail, masked identity display, quota balance and ledger lookup | Not implemented |
@@ -348,6 +376,56 @@ Rules:
 - Production phone login uses the migrated `user_phone_bindings` table. Any new target database still requires reviewed migration execution, rollback planning, and backup verification under ADR-0007 before real traffic.
 - Binding conflicts follow ADR-0011 and must not be auto-merged.
 
+### Current Local Learning Data
+
+```text
+miniapp favorites / recent words / counters
+  -> miniapp user-store.js
+  -> uni storage pictographic:userState
+  -> Mine page and homepage counters
+```
+
+Current fields:
+
+```text
+favoriteWordIds
+recentWordIds
+searchCount
+streakDays
+lastActiveDate
+```
+
+Rules:
+
+- This data is not bound to `users.id` yet.
+- Logging out clears `pictographic:authSession`, but does not clear `pictographic:userState`.
+- Clearing mini program storage removes this learning data.
+- The next module must make logged-in learning data server-owned while keeping local storage for visitor mode and offline fallback.
+- Visitor data migration must require explicit user confirmation after login.
+
+### Planned User Learning Data Sync
+
+```text
+logged-in miniapp user
+  -> Authorization: Bearer <user token>
+  -> server verifies user token
+  -> users.id
+  -> user_favorites
+  -> user_word_views
+  -> user_learning_daily_stats
+  -> miniapp renders account learning state
+```
+
+Planned visitor migration:
+
+```text
+local pictographic:userState
+  -> user logs in
+  -> miniapp asks for confirmation
+  -> server imports local favorites / recent words under users.id
+  -> server returns latest learning state
+```
+
 ## Planned Entitlement Data Flow
 
 Quota, entitlement, and content access enforcement are not implemented yet. Phone quick login now provides the user identity foundation that those future modules must reference through `users.id`.
@@ -411,6 +489,13 @@ Current admin APIs:
 Expected future APIs:
 
 - `GET /api/me`
+- `GET /api/me/learning-state`
+- `POST /api/me/learning-state/import`
+- `GET /api/me/favorites`
+- `POST /api/me/favorites`
+- `DELETE /api/me/favorites/:wordId`
+- `GET /api/me/word-views`
+- `POST /api/me/word-views`
 - `GET /api/me/quota`
 - `POST /api/words/:id/view`
 - `GET /api/admin/users`
@@ -458,6 +543,7 @@ Current ADR set:
 - `ADR/ADR-0012-user-entitlement-model.md`
 - `ADR/ADR-0013-admin-user-entitlement-query.md`
 - `ADR/ADR-0014-content-access-layer-model.md`
+- `ADR/ADR-0015-user-learning-data-sync.md`
 
 ## Known Architecture Gaps
 
@@ -466,6 +552,7 @@ Current ADR set:
 - Future staging or production-like databases still require reviewed/manual `user_phone_bindings` migration execution before real phone binding traffic.
 - `npm.cmd run check:server` still has an independent word API guard failure in `scripts/test-server-word-api-link.mjs`.
 - Learning records remain local on device.
+- User learning data sync is design-only; `user_favorites`, `user_word_views`, and `user_learning_daily_stats` do not exist yet.
 - Quota is not implemented.
 - Entitlement is only reserved in architecture and not implemented.
 - Content access layering is confirmed in ADR but not implemented.

@@ -50,6 +50,9 @@ Production validation:
 Current remaining items:
 
 - The word API guard failure is an independent legacy issue outside Module 1.
+- User token verification for protected user APIs is not implemented yet.
+- Local favorites, recent words, `searchCount`, and `streakDays` remain stored only in mini program cache under `pictographic:userState`.
+- User learning data sync is the next design-stage module and is covered by `ADR/ADR-0015-user-learning-data-sync.md`.
 
 ## 文件路径
 
@@ -84,6 +87,13 @@ Current remaining items:
 
 - `miniapp-uni/word-app1/common/user-store.js`
 
+未来用户学习数据同步相关：
+
+- 未来可新增服务端用户 token 校验能力：`verifyUserSessionToken()` / `requireUserAuth()`。
+- 未来可新增服务端学习数据存储边界：例如 `server/learning-store.mjs`。
+- 未来可新增小程序学习数据 API 客户端：例如 `miniapp-uni/word-app1/common/learning-api-client.js`。
+- 未来可新增小程序学习数据同步层：例如 `miniapp-uni/word-app1/common/learning-store.js`。
+
 ## 核心文件职责
 
 - `auth-api-client.js`：小程序端调用 `uni.login()` 获取 login code；旧链路请求 `/api/auth/wechat-login`，手机号快捷登录请求 `/api/auth/wechat-phone-login`。
@@ -94,6 +104,7 @@ Current remaining items:
 - `identity-store.mjs`：手机号快捷登录路径的身份绑定存储边界，处理手机号 normalize、HMAC hash、mask、绑定查询和冲突规则。
 - `auth.mjs`：管理员和用户 session token 创建、签名和管理员 token 校验。
 - `admin api-client.js`：后台登录、保存 session token、构造管理员 API Authorization header。
+- `user-store.js`：当前只负责本机学习状态，包括收藏、最近查看、查词次数和连续学习天数；它尚未与 `users.id` 绑定。
 
 ## 核心函数/方法名称
 
@@ -122,6 +133,8 @@ Current remaining items:
 - `maskPhone(phone, options)`
 - `resolveIdentityConflict(input)`
 - `createUserSessionToken(userId, options)`
+- 未来：`verifyUserSessionToken(token, options)`
+- 未来：`requireUserAuth(req, options)`
 - `createAdminSessionToken(username, options)`
 - `verifyAdminCredentials(username, password, options)`
 - `verifyAdminSessionToken(token, options)`
@@ -182,6 +195,55 @@ Mine page
   -> Mine page displays phoneMasked
 ```
 
+当前本机学习状态：
+
+```text
+favorite / recent / search count / streak
+  -> miniapp user-store.js
+  -> uni storage pictographic:userState
+  -> Mine page and homepage counters
+```
+
+Current storage fields:
+
+```text
+recentWordIds
+favoriteWordIds
+searchCount
+streakDays
+lastActiveDate
+```
+
+Current limitations:
+
+- These fields are not associated with `users.id`.
+- Logging out only clears `pictographic:authSession`; it does not clear `pictographic:userState`.
+- Clearing mini program storage deletes the learning data.
+- This local `searchCount` is not a real quota balance and must not be used as commercial entitlement.
+
+Planned user learning data sync:
+
+```text
+miniapp Authorization: Bearer <user token>
+  -> server verifies user token
+  -> users.id
+  -> user_favorites
+  -> user_word_views
+  -> user_learning_daily_stats
+  -> server returns learning state
+```
+
+Planned visitor migration:
+
+```text
+local pictographic:userState
+  -> user logs in
+  -> miniapp asks for explicit confirmation
+  -> POST /api/me/learning-state/import
+  -> server merges favorites and recent words under users.id
+  -> local cache becomes visitor/offline fallback, not the only source for logged-in users
+```
+
 服务端用户查找/创建：
 
 ```text
@@ -231,6 +293,8 @@ admin portal login form
 - 当前 `JWT_SECRET` 缺失时会使用进程内随机 secret，重启会导致既有 token 失效；生产必须显式配置。
 - 生产 `user_phone_bindings` 已完成迁移和验证；未来 staging、新生产副本或灾备环境仍需按 ADR-0007 单独执行迁移、回滚方案和备份验证。
 - 生产数据库备份文件位于服务器 `~/backups/`，不得提交到 Git。
+- User session token creation exists, but protected user API verification is not implemented yet.
+- User learning data sync is design-only; `user_favorites`, `user_word_views`, and `user_learning_daily_stats` do not exist yet.
 - 配额账户和配额流水尚未实现。
 - 小程序本地学习数据尚未绑定账号同步。
 - 管理员只有单一 username/password session，没有完整角色权限系统。

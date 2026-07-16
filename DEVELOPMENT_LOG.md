@@ -23,6 +23,72 @@ Risks / Follow-up:
 - ...
 ```
 
+## 2026-07-15: User Learning Data Sync Architecture Design
+
+Scope:
+
+- Entered user learning data sync design stage after Module 1 phone quick login production validation.
+- Updated documentation and ADRs only.
+- Did not modify business code.
+- Did not create a database migration.
+- Did not execute any database operation.
+- Did not modify the existing WeChat phone quick login flow.
+- Did not implement quota, entitlement, payment, membership, or content access deduction.
+
+Changed:
+
+- Added `ADR/ADR-0015-user-learning-data-sync.md`.
+- Updated `ARCHITECTURE.md`.
+- Updated `docs/modules/user-auth/PRINCIPLE.md`.
+- Updated `docs/modules/user-auth/IMPLEMENTATION.md`.
+- Updated `docs/database/DATABASE_CHANGE_PLAN.md`.
+- Updated `DEVELOPMENT_LOG.md`.
+
+Context:
+
+- Module 1 user identity system is complete for the confirmed scope.
+- Production WeChat phone quick login has been verified.
+- `users`, `wechat_user_bindings`, and `user_phone_bindings` now provide the identity foundation.
+- Current mini program learning data still depends on local cache key `pictographic:userState`.
+- Local learning fields include:
+  - `favoriteWordIds`
+  - `recentWordIds`
+  - `searchCount`
+  - `streakDays`
+  - `lastActiveDate`
+
+Decision:
+
+- Next design direction is server-side user learning data sync.
+- Logged-in learning data must reference `users.id`.
+- Planned learning data tables are:
+  - `user_favorites`
+  - `user_word_views`
+  - `user_learning_daily_stats`
+- Mini program local `pictographic:userState` should become visitor-mode cache and offline fallback after sync is implemented.
+- Visitor data migration after login must require explicit user confirmation.
+- Learning behavior data is separate from quota and entitlement.
+- Local `searchCount` must not be used as real quota balance.
+
+Verified:
+
+- Documentation-only update; no automated tests were run.
+- No database migration was created or executed.
+
+Docs:
+
+- ADR-0015 records the final current decision for user learning data sync.
+- Architecture now separates learning behavior from commercial rights.
+- User auth module docs now identify user token verification as a prerequisite for protected `/api/me/*` APIs.
+- Database design docs now list planned learning data tables without creating migration SQL.
+
+Risks / Follow-up:
+
+- `verifyUserSessionToken()` / `requireUserAuth()` are not implemented yet.
+- `user_favorites`, `user_word_views`, and `user_learning_daily_stats` do not exist yet.
+- Any future database implementation still requires ADR-0007 migration review, rollback plan, backup verification, and human confirmation.
+- The existing word API guard failure remains independent and outside this design work.
+
 ## 2026-07-15: Module 1 Production Phone Login Validation
 
 Scope:

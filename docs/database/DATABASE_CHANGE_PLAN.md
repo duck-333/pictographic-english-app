@@ -11,6 +11,9 @@ Before any database execution, follow `ADR/ADR-0007-database-change-standard.md`
 Planned next-phase database design for:
 
 - `user_phone_bindings`
+- `user_favorites`
+- `user_word_views`
+- `user_learning_daily_stats`
 - `user_quota_accounts`
 - `user_quota_logs`
 - Future-reserved `user_entitlements`
@@ -54,6 +57,98 @@ Field rules:
 - `unbound_at`: only set by a future confirmed unbind flow.
 - `verified_at`: first successful WeChat phone verification time.
 - `last_verified_at`: latest successful WeChat phone verification time.
+
+### user_favorites
+
+Purpose: store account-bound favorite words for `users.id`.
+
+```text
+id
+user_id
+word_id
+status
+source
+created_at
+updated_at
+deleted_at
+```
+
+Field rules:
+
+- `user_id`: project user identity, always references `users.id` at the service layer.
+- `word_id`: stable word record id from the content system.
+- `status`: first version uses `active` and `deleted`.
+- `source`: first version can use `miniapp`; future values may include `import` or `admin`.
+- `deleted_at`: set when a user cancels a favorite.
+
+Behavior rules:
+
+- Use soft delete for unfavorite operations.
+- Re-favoriting the same word should reactivate the existing row.
+- Local visitor favorites can be imported only after explicit user confirmation.
+
+### user_word_views
+
+Purpose: store account-bound word view aggregation for recent words and view counts.
+
+```text
+id
+user_id
+word_id
+first_viewed_at
+last_viewed_at
+view_count
+source
+created_at
+updated_at
+```
+
+Field rules:
+
+- `user_id`: project user identity, always references `users.id` at the service layer.
+- `word_id`: stable word record id from the content system.
+- `first_viewed_at`: first known server-side or imported view time.
+- `last_viewed_at`: latest known server-side or imported view time.
+- `view_count`: aggregate view count for this user and word.
+- `source`: first version can use `miniapp`; future values may include `import`.
+
+Behavior rules:
+
+- Recent words should be queried by `user_id` and `last_viewed_at DESC`.
+- Re-viewing the same word updates `last_viewed_at` and increments `view_count`.
+- This table is learning behavior data, not quota deduction history.
+
+### user_learning_daily_stats
+
+Purpose: store account-bound daily learning activity aggregation.
+
+```text
+id
+user_id
+stat_date
+word_view_count
+favorite_add_count
+favorite_remove_count
+first_active_at
+last_active_at
+created_at
+updated_at
+```
+
+Field rules:
+
+- `stat_date`: calendar date used for daily learning stats.
+- `word_view_count`: number of word view events counted for that day.
+- `favorite_add_count`: number of favorite additions counted for that day.
+- `favorite_remove_count`: number of unfavorite operations counted for that day.
+- `first_active_at`: first activity timestamp for that date.
+- `last_active_at`: latest activity timestamp for that date.
+
+Behavior rules:
+
+- Continuous learning days should be derived from server daily stats, not from local `streakDays`.
+- Local `searchCount` can be treated only as local behavior history and must not become quota balance.
+- This table is learning behavior data and remains separate from quota and entitlement tables.
 
 ### user_quota_accounts
 
@@ -151,6 +246,14 @@ user_phone_bindings.user_id
 user_phone_bindings.phone_hash
 user_phone_bindings.status
 
+user_favorites.user_id + status + created_at
+user_favorites.word_id
+
+user_word_views.user_id + last_viewed_at
+user_word_views.word_id + last_viewed_at
+
+user_learning_daily_stats.user_id + stat_date
+
 user_quota_accounts.user_id
 user_quota_accounts.user_id + quota_type
 
@@ -171,6 +274,9 @@ Recommended unique constraints:
 
 ```text
 user_phone_bindings.phone_hash
+user_favorites.user_id + word_id
+user_word_views.user_id + word_id
+user_learning_daily_stats.user_id + stat_date
 user_quota_accounts.user_id + quota_type
 user_quota_logs.idempotency_key
 ```
@@ -178,6 +284,9 @@ user_quota_logs.idempotency_key
 Notes:
 
 - `user_phone_bindings.phone_hash` is unique in the MVP to prevent one phone number from owning multiple active user identities.
+- `user_favorites.user_id + word_id` prevents duplicate favorite rows and supports soft-delete/reactivation.
+- `user_word_views.user_id + word_id` supports aggregate recent-view updates.
+- `user_learning_daily_stats.user_id + stat_date` stores one aggregate row per user per day.
 - If future unbind/rebind needs historical multiple rows, add a new ADR and revise this unique constraint.
 - `user_quota_logs.idempotency_key` prevents duplicate grants or duplicate deductions.
 
@@ -189,16 +298,22 @@ Recommended migration order:
 
 1. Verify production backup is complete and restorable.
 2. Add `user_phone_bindings`.
-3. Add `user_quota_accounts`.
-4. Add `user_quota_logs`.
-5. Do not add `user_entitlements` until entitlement implementation is approved.
-6. Deploy server code that can use the new tables.
-7. Verify new login and quota flows against staging or development database first.
+3. Add user token verification in application code before exposing protected learning APIs.
+4. Add `user_favorites`.
+5. Add `user_word_views`.
+6. Add `user_learning_daily_stats`.
+7. Add `user_quota_accounts`.
+8. Add `user_quota_logs`.
+9. Do not add `user_entitlements` until entitlement implementation is approved.
+10. Deploy server code that can use the new tables.
+11. Verify new learning sync and quota flows against staging or development database first.
 
 Data backfill:
 
 - Existing WeChat-only users remain valid.
 - No phone binding backfill is possible until a user authorizes phone quick login.
+- Existing local mini program learning data remains local until the user explicitly confirms import after login.
+- Favorites and recent words can be imported by `word_id`; local `searchCount` must not be imported as quota balance.
 - Register bonus should be granted only after identity is resolved and must be idempotent.
 
 ## Rollback Strategy
@@ -248,6 +363,18 @@ Quota tests:
 - Duplicate `request_id` / `idempotency_key` does not double deduct.
 - `balance_before` and `balance_after` are correct.
 - Insufficient balance does not return full detail and does not create a misleading deduction.
+
+Learning data sync tests:
+
+- Logged-in user favorites are saved under `users.id`.
+- Unfavorite soft-deletes or deactivates the existing favorite row.
+- Re-favorite reactivates the existing row without duplicate records.
+- Word view updates `last_viewed_at` and increments `view_count`.
+- Recent words are returned in `last_viewed_at DESC` order.
+- Daily stats create or update one row per user per date.
+- Local visitor data import requires explicit confirmation at the mini program layer.
+- Importing the same local favorite set twice is idempotent.
+- Local `searchCount` is not treated as `word_lookup` quota.
 
 Admin tests:
 
