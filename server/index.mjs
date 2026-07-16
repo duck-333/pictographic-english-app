@@ -1,7 +1,13 @@
 import http from 'node:http'
 import { pathToFileURL } from 'node:url'
 
-import { createAdminSessionToken, createUserSessionToken, requireAdminAuth, verifyAdminCredentials } from './auth.mjs'
+import {
+  createAdminSessionToken,
+  createUserSessionToken,
+  requireAdminAuth,
+  requireUserAuth,
+  verifyAdminCredentials
+} from './auth.mjs'
 import { createIdentityStore } from './identity-store.mjs'
 import { createUserStore } from './user-store.mjs'
 import { createWechatLoginClient } from './wechat-login.mjs'
@@ -174,6 +180,32 @@ function logPhoneLoginError(error, context = {}) {
   )
 }
 
+function getPublicUserStoreError(error) {
+  const rawCode = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+  if (rawCode === 'USER_DB_CONFIG_MISSING' || isDatabaseErrorCode(rawCode)) {
+    return {
+      statusCode: 503,
+      code: 'USER_DB_ERROR',
+      message: 'User database is unavailable.'
+    }
+  }
+
+  return {
+    statusCode: 500,
+    code: 'INTERNAL_SERVER_ERROR',
+    message: 'Internal server error.'
+  }
+}
+
+function sendUserStoreError(res, error) {
+  const publicError = getPublicUserStoreError(error)
+  sendJson(res, publicError.statusCode, {
+    ok: false,
+    code: publicError.code,
+    message: publicError.message
+  })
+}
+
 function summarizePublishedWords(words) {
   return (Array.isArray(words) ? words : []).map((word) => ({
     id: word.id,
@@ -332,6 +364,46 @@ export function createApiHandler(options = {}) {
             requestId
           })
           sendPhoneLoginError(res, error)
+        }
+        return
+      }
+
+      if (req.method === 'GET' && pathname === '/api/me') {
+        const authResult = requireUserAuth(req, userAuthOptions)
+        if (!authResult.ok) {
+          sendJson(res, authResult.statusCode, {
+            ok: false,
+            message: 'Unauthorized'
+          })
+          return
+        }
+
+        try {
+          const profile = await userStore.findUserProfileById(authResult.userId)
+          if (!profile) {
+            sendJson(res, 404, {
+              ok: false,
+              code: 'USER_NOT_FOUND',
+              message: 'User not found.'
+            })
+            return
+          }
+
+          sendJson(res, 200, {
+            ok: true,
+            user: {
+              id: profile.id,
+              hasWechatBinding: Boolean(profile.hasWechatBinding),
+              hasPhoneBinding: Boolean(profile.hasPhoneBinding),
+              phoneMasked: String(profile.phoneMasked || '')
+            },
+            session: {
+              tokenType: 'Bearer',
+              expiresAt: authResult.expiresAt
+            }
+          })
+        } catch (error) {
+          sendUserStoreError(res, error)
         }
         return
       }

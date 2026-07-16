@@ -177,6 +177,53 @@ export function createUserSessionToken(userId, options = {}) {
   }
 }
 
+export function verifyUserSessionToken(token, options = {}) {
+  const value = String(token || '').trim()
+  const parts = value.split('.')
+  if (parts.length !== 3) {
+    return {
+      ok: false,
+      statusCode: 403,
+      message: 'Unauthorized'
+    }
+  }
+
+  const body = `${parts[0]}.${parts[1]}`
+  const expectedSignature = signTokenBody(body, getJwtSecret(options))
+  if (!safeTokenEquals(parts[2], expectedSignature)) {
+    return {
+      ok: false,
+      statusCode: 403,
+      message: 'Unauthorized'
+    }
+  }
+
+  const payload = parseJson(base64UrlDecode(parts[1]))
+  const userId = String(payload && payload.sub || '').trim()
+  const expiresAtMs = Number(payload && payload.exp) * 1000
+  if (!payload || payload.role !== 'user' || !userId) {
+    return {
+      ok: false,
+      statusCode: 403,
+      message: 'Unauthorized'
+    }
+  }
+
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= getNowMs(options)) {
+    return {
+      ok: false,
+      statusCode: 401,
+      message: 'Unauthorized'
+    }
+  }
+
+  return {
+    ok: true,
+    userId,
+    expiresAt: new Date(expiresAtMs).toISOString()
+  }
+}
+
 export function verifyAdminSessionToken(token, options = {}) {
   const credentials = getAdminCredentials(options)
   if (!credentials.configured) {
@@ -243,4 +290,18 @@ export function requireAdminAuth(req, options = {}) {
   }
 
   return verifyAdminSessionToken(receivedToken, options)
+}
+
+export function requireUserAuth(req, options = {}) {
+  const receivedToken = getBearerToken(req)
+
+  if (!receivedToken) {
+    return {
+      ok: false,
+      statusCode: 401,
+      message: 'Unauthorized'
+    }
+  }
+
+  return verifyUserSessionToken(receivedToken, options)
 }

@@ -5,6 +5,7 @@ const DEFAULT_DB_PORT = 3306
 const DEFAULT_DB_NAME = 'baxiaota'
 const USERS_TABLE = 'users'
 const WECHAT_BINDINGS_TABLE = 'wechat_user_bindings'
+const PHONE_BINDINGS_TABLE = 'user_phone_bindings'
 
 function normalizeString(value) {
   return String(value || '').trim()
@@ -243,7 +244,50 @@ export function createUserStore(options = {}) {
     }
   }
 
+  async function findUserProfileById(userId) {
+    const normalizedUserId = normalizeString(userId)
+    if (!normalizedUserId) {
+      throw createUserStoreError('User id is required.', {
+        code: 'USER_ID_REQUIRED',
+        statusCode: 400
+      })
+    }
+
+    const connection = await getPool().getConnection()
+    try {
+      const [userRows] = await connection.execute(
+        `SELECT id FROM ${quoteIdentifier(USERS_TABLE)} WHERE id = ? LIMIT 1`,
+        [normalizedUserId]
+      )
+      const userRow = Array.isArray(userRows) && userRows.length ? userRows[0] : null
+      if (!userRow || userRow.id === undefined || userRow.id === null) return null
+
+      const [wechatRows] = await connection.execute(
+        `SELECT user_id FROM ${quoteIdentifier(WECHAT_BINDINGS_TABLE)} WHERE user_id = ? LIMIT 1`,
+        [normalizedUserId]
+      )
+      const hasWechatBinding = Array.isArray(wechatRows) && wechatRows.length > 0
+
+      const [phoneRows] = await connection.execute(
+        `SELECT phone_masked FROM ${quoteIdentifier(PHONE_BINDINGS_TABLE)} WHERE user_id = ? AND status = ? LIMIT 1`,
+        [normalizedUserId, 'active']
+      )
+      const phoneRow = Array.isArray(phoneRows) && phoneRows.length ? phoneRows[0] : null
+      const phoneMasked = normalizeString(phoneRow && phoneRow.phone_masked)
+
+      return {
+        id: String(userRow.id),
+        hasWechatBinding,
+        hasPhoneBinding: Boolean(phoneRow),
+        phoneMasked
+      }
+    } finally {
+      connection.release()
+    }
+  }
+
   return {
-    findOrCreateWechatUser
+    findOrCreateWechatUser,
+    findUserProfileById
   }
 }
