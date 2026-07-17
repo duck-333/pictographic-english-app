@@ -314,3 +314,172 @@ curl https://baxiaota.com/api/health
 2. 交给 PM2 重启。
 3. 检查端口真实监听。
 4. 从 HTTPS 入口验证 Nginx 反代和 API 健康状态。
+---
+
+## Node.js ESM API 入口启动规范
+
+### 背景
+
+2026-07-17 生产 API 部署排查过程中，发现 Node.js 服务出现启动异常。
+
+### 现象
+
+- PM2 显示进程 online
+- 但是 3001 端口没有监听
+- Nginx 访问 `/api/health` 返回 `502 Bad Gateway`
+- 手动执行 `node server/index.mjs` 时，出现 `SyntaxError` 或启动异常，需要继续排查入口代码
+
+### 最终发现
+
+`server/index.mjs` 原入口：
+
+```js
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startServer()
+}
+```
+
+在当前生产部署方式（PM2 + Node.js ESM）下存在入口判断不稳定风险。
+
+生产 API 服务入口应保持：
+
+```js
+startServer()
+```
+
+原因：
+
+- `server/index.mjs` 当前职责是 API 服务启动入口，不是通用模块库。
+- PM2 负责管理进程生命周期，入口文件应该明确启动服务。
+- 依赖 `process.argv` 和 `import.meta.url` 判断可能因为 PM2 启动方式、Node.js ESM 路径解析、环境差异而失效。
+
+导致：
+
+- 代码执行但没有监听端口
+- PM2 显示 online 但实际服务不可用
+- Nginx 反向代理返回 502
+
+### 后续遇到 API 无法访问时排查顺序
+
+以后服务器 API 异常时，按照以下顺序检查。
+
+#### 1. 检查 PM2
+
+命令：
+
+```bash
+pm2 list
+```
+
+确认：
+
+- `status` 是否 online
+- 是否频繁 restart
+
+#### 2. 检查启动入口
+
+命令：
+
+```bash
+pm2 describe <process-name>
+```
+
+确认：
+
+- `script path` 是否正确
+- `exec cwd` 是否正确
+- Node version 是否正确
+
+#### 3. 手动启动验证
+
+进入项目目录：
+
+```bash
+node server/index.mjs
+```
+
+确认是否出现：
+
+```text
+Pictographic English API running at http://0.0.0.0:3001
+```
+
+#### 4. 检查端口
+
+命令：
+
+```bash
+ss -lntp | grep 3001
+```
+
+正常应该看到 Node 占用 3001。
+
+#### 5. 检查本机接口
+
+命令：
+
+```bash
+curl http://127.0.0.1:3001/api/health
+```
+
+正常返回：
+
+```json
+{
+  "ok": true
+}
+```
+
+#### 6. 检查 Nginx
+
+命令：
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+然后：
+
+```bash
+curl https://baxiaota.com/api/health
+```
+
+---
+
+## 文档使用原则
+
+该安全文档用于记录：
+
+- 服务器安全检查
+- 部署异常原因
+- 修复过程
+- 后续排查方法
+- 生产环境注意事项
+
+以后遇到问题，先搜索本文档关键词，例如：
+
+```text
+API
+502
+PM2
+nginx
+MySQL
+SSH
+端口
+部署
+```
+
+优先按照已有故障记录排查。
+
+如果发现新的问题：
+
+1. 先恢复服务。
+2. 再补充本文件。
+3. 记录原因和解决方式。
+
+目标：
+
+```text
+让服务器维护从“依靠个人记忆”变成“可重复执行的运维流程”。
+```
