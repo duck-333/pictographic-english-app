@@ -3,8 +3,38 @@
     <view class="profile-card">
       <view class="avatar-fallback">象</view>
       <view class="profile-main">
-        <text class="profile-title">本机学习记录</text>
-        <text class="profile-subtitle">收藏、最近查看和学习次数仅保存在当前设备</text>
+        <text class="profile-title">{{ authLoggedIn ? '学习账号已启用' : '本机学习记录' }}</text>
+        <text class="profile-subtitle">{{ authSubtitle }}</text>
+      </view>
+    </view>
+
+    <view class="section auth-card">
+      <view class="auth-copy">
+        <text class="setting-title">{{ authLoggedIn ? (hasPhoneBinding ? '手机号已绑定' : '账号已登录') : '手机号快捷登录' }}</text>
+        <text class="setting-desc">
+          {{ authDescription }}
+        </text>
+      </view>
+      <view class="auth-actions">
+        <button
+          v-if="!authLoggedIn"
+          class="login-button"
+          :class="{ disabled: authLoading }"
+          hover-class="button-pressed"
+          :disabled="authLoading"
+          open-type="getPhoneNumber"
+          @getphonenumber="handlePhoneLogin"
+        >
+          {{ authLoading ? '登录中' : '手机号快捷登录' }}
+        </button>
+        <button
+          v-else
+          class="logout-button"
+          hover-class="button-pressed"
+          @tap="handleLogout"
+        >
+          退出登录
+        </button>
       </view>
     </view>
 
@@ -87,9 +117,9 @@
       <view class="setting-row">
         <view>
           <text class="setting-title">数据同步状态</text>
-          <text class="setting-desc">当前版本不登录、不采集头像昵称，学习数据仅保存在当前设备。</text>
+          <text class="setting-desc">{{ syncDescription }}</text>
         </view>
-        <text class="sync-badge">本机</text>
+        <text class="sync-badge">{{ authLoggedIn ? (hasPhoneBinding ? '已绑定' : '已登录') : '本机' }}</text>
       </view>
       <view class="setting-row">
         <view>
@@ -106,6 +136,8 @@
 
 <script>
 import BottomNav from '../../components/BottomNav.vue'
+import { loginWithWechatPhone } from '../../common/auth-api-client.js'
+import { clearAuthSession, getAuthSession } from '../../common/auth-store.js'
 import {
   clearUserData,
   getFavoriteWords,
@@ -122,7 +154,41 @@ export default {
     return {
       state: getUserState(),
       recentWords: [],
-      favoriteWords: []
+      favoriteWords: [],
+      authSession: getAuthSession(),
+      authLoading: false
+    }
+  },
+  computed: {
+    authLoggedIn() {
+      return Boolean(this.authSession && this.authSession.token && this.authSession.user && this.authSession.user.id)
+    },
+    hasPhoneBinding() {
+      return Boolean(this.authSession && this.authSession.user && this.authSession.user.hasPhoneBinding)
+    },
+    phoneMasked() {
+      return this.authSession && this.authSession.user ? String(this.authSession.user.phoneMasked || '').trim() : ''
+    },
+    authSubtitle() {
+      if (!this.authLoggedIn) return '收藏、最近查看和学习次数仅保存在当前设备'
+      if (this.hasPhoneBinding && this.phoneMasked) {
+        return `已绑定 ${this.phoneMasked}，本机学习记录仍保留在当前设备`
+      }
+      return '已建立账号身份，本机学习记录仍保留在当前设备'
+    },
+    authDescription() {
+      if (!this.authLoggedIn) {
+        return '授权手机号用于创建学习账号、同步学习记录和后续权益管理，不采集头像昵称。'
+      }
+      if (this.hasPhoneBinding && this.phoneMasked) {
+        return `当前账号手机号：${this.phoneMasked}。本机收藏和最近查看暂不自动同步。`
+      }
+      return '已建立账号身份。本机收藏和最近查看暂不自动同步。'
+    },
+    syncDescription() {
+      return this.authLoggedIn
+        ? '已建立学习账号。本机学习数据暂未自动同步到账号。'
+        : '当前未登录，不采集头像昵称，学习数据仅保存在当前设备。'
     }
   },
   onShow() {
@@ -133,6 +199,56 @@ export default {
       this.state = getUserState()
       this.recentWords = getRecentWords()
       this.favoriteWords = getFavoriteWords()
+      this.authSession = getAuthSession()
+    },
+    getPhoneCodeFromEvent(event) {
+      const detail = event && event.detail ? event.detail : {}
+      return detail.code ? String(detail.code).trim() : ''
+    },
+    async handlePhoneLogin(event) {
+      if (this.authLoading) return
+      const phoneCode = this.getPhoneCodeFromEvent(event)
+      if (!phoneCode) {
+        uni.showToast({
+          title: '未完成手机号授权',
+          icon: 'none'
+        })
+        return
+      }
+      this.authLoading = true
+      try {
+        this.authSession = await loginWithWechatPhone(phoneCode)
+        uni.showToast({
+          title: '登录成功',
+          icon: 'none'
+        })
+      } catch (error) {
+        uni.showToast({
+          title: this.getLoginErrorMessage(error),
+          icon: 'none'
+        })
+      } finally {
+        this.authLoading = false
+      }
+    },
+    handleLogout() {
+      clearAuthSession()
+      this.authSession = null
+      uni.showToast({
+        title: '已退出登录',
+        icon: 'none'
+      })
+    },
+    getLoginErrorMessage(error) {
+      const code = error && error.code ? String(error.code) : ''
+      if (code === 'WECHAT_CODE_INVALID' || code === 'WECHAT_CODE_MISSING') return '登录状态已过期，请重试'
+      if (code === 'WECHAT_PHONE_CODE_REQUIRED' || code === 'WECHAT_PHONE_CODE_INVALID') return '手机号授权已失效，请重新授权'
+      if (code === 'IDENTITY_CONFLICT') return '账号绑定状态需要人工处理，请联系客服'
+      if (code === 'WECHAT_RATE_LIMITED') return '登录太频繁，请稍后再试'
+      if (code === 'WECHAT_LOGIN_BLOCKED') return '当前微信账号暂无法登录'
+      if (code === 'WECHAT_CONFIG_MISSING' || code === 'USER_DB_CONFIG_MISSING' || code === 'PHONE_HASH_SECRET_MISSING') return '登录服务暂未配置'
+      if (code === 'AUTH_API_TIMEOUT' || code === 'AUTH_API_NETWORK_ERROR') return '登录服务连接失败'
+      return '登录暂不可用，请稍后重试'
     },
     openDetailFromEvent(event) {
       const dataset = event && event.currentTarget ? event.currentTarget.dataset : {}
@@ -329,6 +445,28 @@ export default {
   box-shadow: 0 6rpx 18rpx rgba(14, 58, 92, 0.06);
 }
 
+.auth-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24rpx;
+  padding: 30rpx;
+  border: 2rpx solid #dbeeff;
+  border-radius: 30rpx;
+  background: #ffffff;
+  box-shadow: 0 6rpx 18rpx rgba(14, 58, 92, 0.06);
+}
+
+.auth-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.auth-actions {
+  flex-shrink: 0;
+  width: 224rpx;
+}
+
 .clear-button {
   width: 100%;
   height: 84rpx;
@@ -376,6 +514,31 @@ export default {
 .clear-button {
   background: #fff1f2;
   color: #dc2626;
+}
+
+.login-button,
+.logout-button {
+  width: 224rpx;
+  height: 76rpx;
+  padding: 0;
+  border-radius: 999rpx;
+  font-size: 26rpx;
+  font-weight: 900;
+  line-height: 76rpx;
+}
+
+.login-button {
+  background: #0e3a5c;
+  color: #ffffff;
+}
+
+.login-button.disabled {
+  opacity: 0.6;
+}
+
+.logout-button {
+  background: #ebf8ff;
+  color: #0e3a5c;
 }
 
 .button-pressed,
