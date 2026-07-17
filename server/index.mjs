@@ -1,7 +1,10 @@
 import http from 'node:http'
 import { pathToFileURL } from 'node:url'
 
-import { requireAdminAuth } from './auth.mjs'
+import { createUserSessionToken, requireAdminAuth, requireUserAuth } from './auth.mjs'
+import { createIdentityStore } from './identity-store.mjs'
+import { createUserStore } from './user-store.mjs'
+import { createWechatLoginClient } from './wechat-login.mjs'
 import { createWordStore } from './word-store.mjs'
 
 const DEFAULT_PORT = 3001
@@ -65,6 +68,138 @@ function normalizePathname(pathname) {
   return pathname.replace(/\/+$/, '') || '/'
 }
 
+function normalizeRequestId(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^\w:.-]/g, '')
+    .slice(0, 80)
+}
+
+const SAFE_PHONE_LOGIN_ERROR_MESSAGES = {
+  WECHAT_CODE_REQUIRED: 'Login code is required.',
+  WECHAT_PHONE_CODE_REQUIRED: 'Phone code is required.',
+  WECHAT_CODE_INVALID: 'Login code is invalid.',
+  WECHAT_PHONE_CODE_INVALID: 'Phone code is invalid.',
+  WECHAT_CONFIG_MISSING: 'Wechat login is not configured.',
+  WECHAT_LOGIN_BLOCKED: 'Wechat login is blocked.',
+  WECHAT_RATE_LIMITED: 'Wechat login is rate limited.',
+  WECHAT_SYSTEM_BUSY: 'Wechat service is busy.',
+  WECHAT_LOGIN_FAILED: 'Wechat login failed.',
+  WECHAT_NETWORK_ERROR: 'Wechat service is unavailable.',
+  WECHAT_RESPONSE_INVALID: 'Wechat response is invalid.',
+  WECHAT_OPENID_MISSING: 'Wechat identity is invalid.',
+  WECHAT_OPENID_REQUIRED: 'Wechat identity is invalid.',
+  WECHAT_PHONE_NUMBER_FAILED: 'Wechat phone number exchange failed.',
+  WECHAT_TIMEOUT: 'Wechat request timed out.',
+  PHONE_REQUIRED: 'Phone number is required.',
+  PHONE_INVALID: 'Phone number is invalid.',
+  PHONE_HASH_SECRET_MISSING: 'Phone login is not configured.',
+  USER_DB_CONFIG_MISSING: 'User database is not configured.',
+  USER_DB_ERROR: 'User database is unavailable.',
+  IDENTITY_CONFLICT: 'Identity binding conflict.',
+  INTERNAL_SERVER_ERROR: 'Internal server error.'
+}
+
+const DATABASE_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  'EHOSTUNREACH'
+])
+
+function normalizeErrorStatusCode(value, fallback = 500) {
+  const statusCode = Number(value)
+  return Number.isFinite(statusCode) && statusCode >= 400 && statusCode <= 599
+    ? statusCode
+    : fallback
+}
+
+function isDatabaseErrorCode(code) {
+  return /^ER_/.test(code) || /^PROTOCOL_/.test(code) || DATABASE_ERROR_CODES.has(code)
+}
+
+function getPublicPhoneLoginError(error) {
+  const rawCode = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+
+  if (Object.prototype.hasOwnProperty.call(SAFE_PHONE_LOGIN_ERROR_MESSAGES, rawCode)) {
+    return {
+      statusCode: normalizeErrorStatusCode(error && error.statusCode),
+      code: rawCode
+    }
+  }
+
+  if (isDatabaseErrorCode(rawCode)) {
+    return {
+      statusCode: 503,
+      code: 'USER_DB_ERROR'
+    }
+  }
+
+  if (/^WECHAT_/.test(rawCode)) {
+    return {
+      statusCode: normalizeErrorStatusCode(error && error.statusCode, 502),
+      code: 'WECHAT_LOGIN_FAILED'
+    }
+  }
+
+  if (/^IDENTITY_/.test(rawCode)) {
+    return {
+      statusCode: 409,
+      code: 'IDENTITY_CONFLICT'
+    }
+  }
+
+  return {
+    statusCode: 500,
+    code: 'INTERNAL_SERVER_ERROR'
+  }
+}
+
+function sendPhoneLoginError(res, error) {
+  const publicError = getPublicPhoneLoginError(error)
+  sendJson(res, publicError.statusCode, {
+    ok: false,
+    code: publicError.code,
+    message: SAFE_PHONE_LOGIN_ERROR_MESSAGES[publicError.code]
+  })
+}
+
+function logPhoneLoginError(error, context = {}) {
+  const rawCode = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+  const publicError = getPublicPhoneLoginError(error)
+  const requestPart = context.requestId ? ` requestId=${context.requestId}` : ''
+  console.warn(
+    `wechat-phone-login${requestPart} failed rawCode=${rawCode} publicCode=${publicError.code} status=${publicError.statusCode}`
+  )
+}
+
+function getPublicUserStoreError(error) {
+  const rawCode = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+  if (rawCode === 'USER_DB_CONFIG_MISSING' || isDatabaseErrorCode(rawCode)) {
+    return {
+      statusCode: 503,
+      code: 'USER_DB_ERROR',
+      message: 'User database is unavailable.'
+    }
+  }
+
+  return {
+    statusCode: 500,
+    code: 'INTERNAL_SERVER_ERROR',
+    message: 'Internal server error.'
+  }
+}
+
+function sendUserStoreError(res, error) {
+  const publicError = getPublicUserStoreError(error)
+  sendJson(res, publicError.statusCode, {
+    ok: false,
+    code: publicError.code,
+    message: publicError.message
+  })
+}
+
 function summarizePublishedWords(words) {
   return (Array.isArray(words) ? words : []).map((word) => ({
     id: word.id,
@@ -76,10 +211,18 @@ function summarizePublishedWords(words) {
 
 export function createApiHandler(options = {}) {
   const store = options.store || createWordStore()
+  const userStore = options.userStore || createUserStore(options)
+  const identityStore = options.identityStore || createIdentityStore(options)
+  const wechatLoginClient = options.wechatLoginClient || createWechatLoginClient(options)
   const now = options.now || (() => new Date())
   const adminAuthOptions = {
     nodeEnv: options.nodeEnv,
     adminApiToken: options.adminApiToken
+  }
+  const userAuthOptions = {
+    jwtSecret: options.jwtSecret,
+    userSessionTtlMs: options.userSessionTtlMs,
+    now
   }
 
   return async function handleApiRequest(req, res) {
@@ -145,6 +288,113 @@ export function createApiHandler(options = {}) {
           ok: true,
           word
         })
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/auth/wechat-login') {
+        try {
+          const body = await readJsonBody(req)
+          const wechatIdentity = await wechatLoginClient.code2Session(body.code)
+          const user = await userStore.findOrCreateWechatUser(wechatIdentity)
+          const session = createUserSessionToken(user.id, userAuthOptions)
+
+          sendJson(res, 200, {
+            ok: true,
+            token: session.token,
+            tokenType: 'Bearer',
+            expiresAt: session.expiresAt,
+            user: {
+              id: user.id,
+              hasWechatBinding: true,
+              isNew: Boolean(user.isNew)
+            }
+          })
+        } catch (error) {
+          const statusCode = Number(error && error.statusCode) || 500
+          sendJson(res, statusCode, {
+            ok: false,
+            code: error && error.code ? error.code : 'INTERNAL_SERVER_ERROR',
+            message: statusCode >= 500
+              ? 'Internal server error.'
+              : (error && error.message ? error.message : 'Request failed.')
+          })
+        }
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/auth/wechat-phone-login') {
+        let requestId = ''
+        try {
+          const body = await readJsonBody(req)
+          requestId = normalizeRequestId(body.requestId)
+          const wechatIdentity = await wechatLoginClient.code2Session(body.loginCode)
+          const phoneIdentity = await wechatLoginClient.phoneCode2Number(body.phoneCode)
+          const user = await identityStore.resolveWechatPhoneIdentity({
+            openid: wechatIdentity.openid,
+            unionid: wechatIdentity.unionid,
+            phone: phoneIdentity
+          })
+          const session = createUserSessionToken(user.id, userAuthOptions)
+
+          sendJson(res, 200, {
+            ok: true,
+            token: session.token,
+            tokenType: 'Bearer',
+            expiresAt: session.expiresAt,
+            user: {
+              id: user.id,
+              hasWechatBinding: true,
+              hasPhoneBinding: true,
+              phoneMasked: user.phoneMasked,
+              isNew: Boolean(user.isNew)
+            }
+          })
+        } catch (error) {
+          logPhoneLoginError(error, {
+            requestId
+          })
+          sendPhoneLoginError(res, error)
+        }
+        return
+      }
+
+      if (req.method === 'GET' && pathname === '/api/me') {
+        const authResult = requireUserAuth(req, userAuthOptions)
+        if (!authResult.ok) {
+          sendJson(res, authResult.statusCode, {
+            ok: false,
+            message: 'Unauthorized'
+          })
+          return
+        }
+
+        try {
+          const profile = await userStore.findUserProfileById(authResult.userId)
+          if (!profile) {
+            sendJson(res, 404, {
+              ok: false,
+              code: 'USER_NOT_FOUND',
+              message: 'User not found.'
+            })
+            return
+          }
+
+          sendJson(res, 200, {
+            ok: true,
+            user: {
+              id: profile.id,
+              hasWechatBinding: Boolean(profile.hasWechatBinding),
+              hasPhoneBinding: Boolean(profile.hasPhoneBinding),
+              phoneMasked: String(profile.phoneMasked || '')
+            },
+            session: {
+              tokenType: 'Bearer',
+              expiresAt: authResult.expiresAt
+            }
+          })
+        } catch (error) {
+          sendUserStoreError(res, error)
+        }
         return
       }
 
