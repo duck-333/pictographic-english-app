@@ -53,9 +53,14 @@ pictographic:userState.favoriteWordIds
 
    Phase 1 不修改登录流程、JWT/token 格式、`requireUserAuth()`、`/api/me`。
 
+8. 分阶段接入收藏云端化。
+
+   先完成服务端收藏闭环，包括 `user_favorites`、服务端 Store、API 路由和 API 测试。服务端 API 验证通过前，不修改小程序页面或本地收藏逻辑。
+
 ## Consequences
 
 - 登录用户收藏以服务器数据为准。
 - 游客收藏继续以本机 storage 为准。
 - 收藏云端化与 quota、entitlement、会员系统保持隔离。
 - 收藏接口和小程序展示之间通过 `wordId` 解耦。
+- 小程序收藏接入必须等待服务端收藏 API 验证通过后再执行。

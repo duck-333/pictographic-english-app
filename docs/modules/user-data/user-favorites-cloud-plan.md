@@ -2,9 +2,64 @@
 
 日期：2026-07-17
 
-范围：用户数据云端化 Phase 1，只规划 `user_favorites` 收藏云端化。
+范围：`user_favorites` 收藏云端化开发方案。当前执行拆分为 Phase 1 服务端收藏闭环和 Phase 2 小程序接入。
 
 本文件只记录开发方案，不包含代码实现，不创建数据库迁移，不改变现有登录链路。
+
+## 0. 开发执行约束
+
+收藏云端化必须分阶段执行，不允许一次性同时修改数据库、服务端 API 和小程序页面。
+
+当前仅允许进入服务端收藏闭环阶段。必须等待明确指令“开始执行 Phase 1”后，才允许修改代码。
+
+### Phase 1：服务端收藏闭环
+
+允许修改：
+
+- `database/migrations/002_create_user_favorites.sql`
+- `server/index.mjs`
+- `server/user-favorites-store.mjs`
+- `scripts/test-user-favorites-api.mjs`
+
+目标：
+
+- 完成 `user_favorites` 数据库设计。
+- 完成服务端收藏 Store。
+- 完成收藏 API 路由。
+- 完成 API 测试。
+
+验证要求：
+
+- API 可以正常创建收藏。
+- API 可以取消收藏。
+- API 查询收藏正常。
+- 用户隔离正常。
+- 幂等逻辑正常。
+
+Phase 1 禁止修改：
+
+- `miniapp-uni`
+- `miniapp-uni/word-app1/common/user-store.js`
+- `miniapp-uni/word-app1/pages/word-detail/index.vue`
+- `miniapp-uni/word-app1/pages/mine/index.vue`
+
+### Phase 2：小程序接入
+
+只有 Phase 1 API 验证通过后，才允许进入小程序接入阶段。
+
+Phase 2 允许修改：
+
+- `miniapp-uni/word-app1/common/user-store.js`
+- `miniapp-uni/word-app1/pages/word-detail/index.vue`
+- `miniapp-uni/word-app1/pages/mine/index.vue`
+
+目标：
+
+- 登录用户收藏读写走服务器 API。
+- 未登录用户继续使用本地 `uni` storage。
+- 不导入、不合并、不关联登录前游客收藏。
+
+任何超出当前阶段范围的发现，只记录，不顺手修复。
 
 ## 1. 当前问题分析
 
@@ -28,7 +83,7 @@ Module 2.1 用户认证层已经完成：
 
 收藏数据仍在本机 storage 中。用户登录后，收藏不会跟随账号；换设备、清理缓存或重新安装后，收藏数据会丢失。
 
-Phase 1 只处理收藏云端化，不处理最近查看、学习统计、quota、entitlement、会员系统。
+本阶段只处理收藏云端化，不处理最近查看、学习统计、quota、entitlement、会员系统。
 
 ## 2. 当前数据流分析
 
@@ -63,7 +118,7 @@ mine/index.vue
 
 ## 3. 目标架构
 
-Phase 1 目标：
+收藏云端化目标：
 
 ```text
 登录用户
@@ -87,6 +142,7 @@ Phase 1 目标：
 - 登录前的本机收藏不自动导入账号。
 - 收藏 API 返回 `wordId`，不返回完整词条。
 - 小程序继续通过现有词库读取展示用词条详情。
+- 执行顺序必须先完成服务端闭环，再接入小程序。
 
 ## 4. 数据库设计
 
@@ -224,6 +280,8 @@ const userId = authResult.userId
 
 ## 6. 小程序改造方案
 
+本节属于 Phase 2。当前 Phase 1 服务端闭环完成并验证通过前，不修改小程序代码。
+
 允许修改范围：
 
 - `miniapp-uni/word-app1/common/user-store.js`
@@ -251,7 +309,7 @@ toggleFavorite(wordId)
 getFavoriteWords()
 ```
 
-在 Phase 1 中需要支持异步服务器读写。页面层需要配合处理 loading 与错误提示。
+在 Phase 2 中需要支持异步服务器读写。页面层需要配合处理 loading 与错误提示。
 
 ### word-detail/index.vue
 
@@ -274,12 +332,12 @@ getFavoriteWords()
 
 ## 7. 测试方案
 
-### 服务端测试
+### Phase 1 服务端测试
 
-新增脚本范围：
+新增脚本：
 
 ```text
-scripts/test-*.mjs
+scripts/test-user-favorites-api.mjs
 ```
 
 覆盖：
@@ -294,7 +352,13 @@ scripts/test-*.mjs
 - 用户 A 与用户 B 收藏隔离。
 - 数据库错误返回安全错误，不暴露内部 SQL。
 
-### 小程序测试
+Phase 1 完成标准：
+
+- 可以通过 node test script 验证收藏 API 闭环。
+- 可以使用 curl 或同等 API 请求验证真实服务端行为。
+- 不依赖小程序页面改造完成情况。
+
+### Phase 2 小程序测试
 
 覆盖：
 
@@ -317,6 +381,8 @@ npm.cmd run check:miniapp
 
 部署顺序：
 
+### Phase 1 服务端部署
+
 1. 备份生产数据库。
 2. 人工 review `user_favorites` migration。
 3. 在生产数据库执行 migration。
@@ -324,7 +390,6 @@ npm.cmd run check:miniapp
 5. 重启 PM2。
 6. 验证 `/api/health`。
 7. 使用真实登录 token 验证收藏 API。
-8. 发布小程序版本或测试版体验。
 
 生产验证：
 
@@ -339,12 +404,16 @@ curl https://baxiaota.com/api/user/favorites \
   -H "Authorization: Bearer <token>"
 ```
 
+### Phase 2 小程序发布
+
+Phase 1 服务端 API 验证通过后，再发布小程序测试版或体验版。
+
 ## 9. 回滚方案
 
 代码回滚：
 
-- 回滚服务端收藏 API 相关代码。
-- 回滚小程序收藏调用逻辑。
+- Phase 1 回滚服务端收藏 API 相关代码。
+- Phase 2 如已接入小程序，再回滚小程序收藏调用逻辑。
 - 未登录本地收藏不受影响。
 
 数据库回滚：
@@ -359,26 +428,22 @@ curl https://baxiaota.com/api/user/favorites \
 
 ## 严格开发边界
 
-Phase 1 只允许涉及：
+当前 Phase 1 只允许涉及：
 
 数据库：
 
-- `database/migrations`
+- `database/migrations/002_create_user_favorites.sql`
 
 服务端：
 
 - `server/index.mjs`
 - 新增 `server/user-favorites-store.mjs`
 
-小程序：
-
-- `miniapp-uni/word-app1/common/user-store.js`
-- `miniapp-uni/word-app1/pages/word-detail/index.vue`
-- `miniapp-uni/word-app1/pages/mine/index.vue`
-
 测试：
 
-- `scripts/test-*.mjs`
+- `scripts/test-user-favorites-api.mjs`
+
+Phase 1 明确禁止修改小程序目录。小程序接入属于 Phase 2，必须等待 Phase 1 API 验证通过后再执行。
 
 禁止涉及：
 
