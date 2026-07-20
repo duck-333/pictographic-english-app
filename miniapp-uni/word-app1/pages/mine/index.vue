@@ -3,14 +3,14 @@
     <view class="profile-card">
       <view class="avatar-fallback">象</view>
       <view class="profile-main">
-        <text class="profile-title">{{ authLoggedIn ? '学习账号已启用' : '本机学习记录' }}</text>
+        <text class="profile-title">{{ authLoggedIn ? '学习账号已登录' : '我的学习空间' }}</text>
         <text class="profile-subtitle">{{ authSubtitle }}</text>
       </view>
     </view>
 
     <view class="section auth-card">
       <view class="auth-copy">
-        <text class="setting-title">{{ authLoggedIn ? (hasPhoneBinding ? '手机号已绑定' : '账号已登录') : '手机号快捷登录' }}</text>
+        <text class="setting-title">{{ authLoggedIn ? '账号信息' : '手机号快捷登录' }}</text>
         <text class="setting-desc">
           {{ authDescription }}
         </text>
@@ -49,18 +49,17 @@
       </view>
       <view class="stat-card">
         <text class="stat-value">{{ recentWords.length }}</text>
-        <text class="stat-label">最近查看</text>
+        <text class="stat-label">最近学习</text>
       </view>
       <view class="stat-card">
         <text class="stat-value">{{ state.streakDays || 0 }}</text>
-        <text class="stat-label">连续天数</text>
+        <text class="stat-label">连续学习</text>
       </view>
     </view>
 
     <view class="section">
       <view class="section-head">
-        <text class="section-title">最近查看</text>
-        <text class="hint-text">本机记录</text>
+        <text class="section-title">最近学习</text>
       </view>
       <view v-if="recentWords.length" class="word-list">
         <view
@@ -80,7 +79,7 @@
       </view>
       <view v-else class="empty-state">
         <view class="empty-mark">象</view>
-        <text class="empty-title">还没有最近查看</text>
+        <text class="empty-title">还没有最近学习</text>
         <text class="empty-description">查过的单词会自动出现在这里。</text>
       </view>
     </view>
@@ -108,18 +107,18 @@
       </view>
       <view v-else class="empty-state">
         <view class="empty-mark">象</view>
-        <text class="empty-title">还没有收藏</text>
-        <text class="empty-description">在单词详情页点收藏后，会出现在这里。</text>
+        <text class="empty-title">还没有收藏单词</text>
+        <text class="empty-description">收藏喜欢的单词，方便以后复习。</text>
       </view>
     </view>
 
     <view class="section settings-card">
       <view class="setting-row">
         <view>
-          <text class="setting-title">数据同步状态</text>
+          <text class="setting-title">学习记录</text>
           <text class="setting-desc">{{ syncDescription }}</text>
         </view>
-        <text class="sync-badge">{{ authLoggedIn ? (hasPhoneBinding ? '已绑定' : '已登录') : '本机' }}</text>
+        <text class="sync-badge">{{ authLoggedIn ? (hasPhoneBinding ? '已绑定' : '已登录') : '未登录' }}</text>
       </view>
       <view class="setting-row">
         <view>
@@ -127,7 +126,7 @@
           <text class="setting-desc">当前版本提供查词、词条讲解、收藏和学习记录。</text>
         </view>
       </view>
-      <button class="clear-button" hover-class="danger-pressed" @tap="confirmClear">清除本机记录</button>
+      <button class="feedback-button" hover-class="button-pressed" @tap="showFeedbackTip">学习反馈</button>
     </view>
 
     <bottom-nav current="/pages/mine/index" />
@@ -139,7 +138,6 @@ import BottomNav from '../../components/BottomNav.vue'
 import { loginWithWechatPhone } from '../../common/auth-api-client.js'
 import { clearAuthSession, getAuthSession } from '../../common/auth-store.js'
 import {
-  clearUserData,
   getFavoriteWords,
   getRecentWords,
   getUserState,
@@ -170,25 +168,25 @@ export default {
       return this.authSession && this.authSession.user ? String(this.authSession.user.phoneMasked || '').trim() : ''
     },
     authSubtitle() {
-      if (!this.authLoggedIn) return '收藏、最近查看和学习次数仅保存在当前设备'
+      if (!this.authLoggedIn) return '登录学习账号，逐步保存你的学习记录'
       if (this.hasPhoneBinding && this.phoneMasked) {
-        return `已绑定 ${this.phoneMasked}，本机学习记录仍保留在当前设备`
+        return `手机号：${this.phoneMasked}，学习记录将逐步跟随账号保存`
       }
-      return '已建立账号身份，本机学习记录仍保留在当前设备'
+      return '学习记录将逐步跟随账号保存'
     },
     authDescription() {
       if (!this.authLoggedIn) {
-        return '授权手机号用于创建学习账号、同步学习记录和后续权益管理，不采集头像昵称。'
+        return '授权手机号用于创建学习账号，后续保存学习记录和管理学习权益。'
       }
       if (this.hasPhoneBinding && this.phoneMasked) {
-        return `当前账号手机号：${this.phoneMasked}。本机收藏和最近查看暂不自动同步。`
+        return `手机号：${this.phoneMasked}`
       }
-      return '已建立账号身份。本机收藏和最近查看暂不自动同步。'
+      return '学习账号已建立'
     },
     syncDescription() {
       return this.authLoggedIn
-        ? '已建立学习账号。本机学习数据暂未自动同步到账号。'
-        : '当前未登录，不采集头像昵称，学习数据仅保存在当前设备。'
+        ? '学习账号已建立，后续将逐步支持学习记录跟随账号保存。'
+        : '登录后，可使用学习账号保存学习进度和学习权益。'
     }
   },
   onShow() {
@@ -266,21 +264,13 @@ export default {
         url: '/pages/index/index'
       })
     },
-    confirmClear() {
+    showFeedbackTip() {
       uni.showModal({
-        title: '清除本机记录',
-        content: '会清除最近查看和收藏记录。此操作只影响当前设备。',
-        confirmText: '清除',
-        confirmColor: '#dc2626',
-        success: (res) => {
-          if (!res.confirm) return
-          clearUserData()
-          this.refreshData()
-          uni.showToast({
-            title: '已清除',
-            icon: 'none'
-          })
-        }
+        title: '学习反馈',
+        content: '学习反馈功能正在完善中，感谢你的支持。',
+        showCancel: false,
+        confirmText: '知道了',
+        confirmColor: '#0e3a5c'
       })
     }
   }
@@ -467,7 +457,7 @@ export default {
   width: 224rpx;
 }
 
-.clear-button {
+.feedback-button {
   width: 100%;
   height: 84rpx;
   margin-top: 26rpx;
@@ -511,9 +501,9 @@ export default {
   font-weight: 800;
 }
 
-.clear-button {
-  background: #fff1f2;
-  color: #dc2626;
+.feedback-button {
+  background: #ebf8ff;
+  color: #0e3a5c;
 }
 
 .login-button,
@@ -542,8 +532,7 @@ export default {
 }
 
 .button-pressed,
-.row-pressed,
-.danger-pressed {
+.row-pressed {
   opacity: 0.76;
   transform: scale(0.98);
 }
