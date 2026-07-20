@@ -294,7 +294,9 @@ import {
   getPartFallbackStyle as resolvePartFallbackStyle,
   getPartVisualStyle as resolvePartVisualStyle
 } from '../../common/part-visual-style.js'
-import { addRecentWord, getPendingWordId, isFavorite, savePendingWordId, toggleFavorite } from '../../common/user-store.js'
+import { getAuthSession } from '../../common/auth-store.js'
+import { addUserFavorite, listUserFavorites, removeUserFavorite } from '../../common/user-favorites-api-client.js'
+import { addRecentWord, getPendingWordId, savePendingWordId } from '../../common/user-store.js'
 
 const ENABLE_VIDEO_MODULE = false
 
@@ -346,6 +348,7 @@ export default {
       word: null,
       relatedWords: [],
       bookmarked: false,
+      favoriteLoading: false,
       expandedPart: '',
       activePartMeaning: '',
       showFullDesc: true,
@@ -636,12 +639,33 @@ export default {
       this.notFoundTitle = ''
       this.notFoundDescription = ''
       this.relatedWords = getRelatedWords(word)
-      this.bookmarked = isFavorite(word.id)
+      this.bookmarked = false
+      this.favoriteLoading = false
       this.resetWordViewState()
       addRecentWord(word.id, {
         countSearch: false,
         skipPublishedCacheCheck: true
       })
+      this.refreshFavoriteState(word.id)
+    },
+    async refreshFavoriteState(wordId) {
+      const session = getAuthSession()
+      if (!session) {
+        this.bookmarked = false
+        return
+      }
+
+      const id = String(wordId || '').trim()
+      try {
+        const favorites = await listUserFavorites({ session })
+        if (this.word && this.word.id === id) {
+          this.bookmarked = favorites.some((favorite) => favorite.wordId === id)
+        }
+      } catch (error) {
+        if (this.word && this.word.id === id) {
+          this.bookmarked = false
+        }
+      }
     },
     resetWordViewState() {
       this.expandedPart = ''
@@ -659,13 +683,43 @@ export default {
       this.illustrationImageFailed = false
       this.clearClipPlaybackTimer()
     },
-    toggleBookmark() {
-      if (!this.word) return
-      this.bookmarked = toggleFavorite(this.word.id)
-      uni.showToast({
-        title: this.bookmarked ? '已收藏' : '已取消收藏',
-        icon: 'none'
-      })
+    async toggleBookmark() {
+      if (!this.word || this.favoriteLoading) return
+      const session = getAuthSession()
+      if (!session) {
+        uni.showToast({
+          title: '收藏功能需要登录学习账号',
+          icon: 'none'
+        })
+        setTimeout(() => {
+          uni.reLaunch({
+            url: '/pages/mine/index'
+          })
+        }, 700)
+        return
+      }
+
+      const nextBookmarked = !this.bookmarked
+      this.favoriteLoading = true
+      try {
+        if (nextBookmarked) {
+          await addUserFavorite(this.word.id, { session })
+        } else {
+          await removeUserFavorite(this.word.id, { session })
+        }
+        this.bookmarked = nextBookmarked
+        uni.showToast({
+          title: this.bookmarked ? '已收藏' : '已取消收藏',
+          icon: 'none'
+        })
+      } catch (error) {
+        uni.showToast({
+          title: '收藏服务暂不可用',
+          icon: 'none'
+        })
+      } finally {
+        this.favoriteLoading = false
+      }
     },
     handlePartTap(event) {
       const dataset = event && event.currentTarget ? event.currentTarget.dataset : {}

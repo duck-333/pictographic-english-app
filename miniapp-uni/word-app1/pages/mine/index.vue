@@ -137,8 +137,9 @@
 import BottomNav from '../../components/BottomNav.vue'
 import { loginWithWechatPhone } from '../../common/auth-api-client.js'
 import { clearAuthSession, getAuthSession } from '../../common/auth-store.js'
+import { listUserFavorites } from '../../common/user-favorites-api-client.js'
+import { fetchWordById, getCachedPublishedRemoteWordById } from '../../common/word-repository.js'
 import {
-  getFavoriteWords,
   getRecentWords,
   getUserState,
   savePendingWordId
@@ -154,7 +155,8 @@ export default {
       recentWords: [],
       favoriteWords: [],
       authSession: getAuthSession(),
-      authLoading: false
+      authLoading: false,
+      favoriteLoadToken: 0
     }
   },
   computed: {
@@ -193,11 +195,51 @@ export default {
     this.refreshData()
   },
   methods: {
-    refreshData() {
+    async refreshData() {
+      const loadToken = this.favoriteLoadToken + 1
+      this.favoriteLoadToken = loadToken
       this.state = getUserState()
       this.recentWords = getRecentWords()
-      this.favoriteWords = getFavoriteWords()
       this.authSession = getAuthSession()
+      if (!this.authLoggedIn) {
+        this.favoriteWords = []
+        return
+      }
+
+      try {
+        const favoriteWords = await this.loadCloudFavoriteWords(this.authSession)
+        if (this.favoriteLoadToken === loadToken && this.authLoggedIn) {
+          this.favoriteWords = favoriteWords
+        }
+      } catch (error) {
+        if (this.favoriteLoadToken === loadToken && this.authLoggedIn) {
+          this.favoriteWords = []
+          uni.showToast({
+            title: '收藏列表加载失败',
+            icon: 'none'
+          })
+        }
+      }
+    },
+    async loadCloudFavoriteWords(session) {
+      const favorites = await listUserFavorites({ session })
+      const words = []
+      for (let index = 0; index < favorites.length; index += 1) {
+        const wordId = String(favorites[index].wordId || '').trim()
+        if (!wordId) continue
+        let word = getCachedPublishedRemoteWordById(wordId)
+        if (!word) {
+          try {
+            word = await fetchWordById(wordId)
+          } catch (error) {
+            word = null
+          }
+        }
+        if (word && word.status === 'published') {
+          words.push(word)
+        }
+      }
+      return words
     },
     getPhoneCodeFromEvent(event) {
       const detail = event && event.detail ? event.detail : {}
@@ -216,6 +258,7 @@ export default {
       this.authLoading = true
       try {
         this.authSession = await loginWithWechatPhone(phoneCode)
+        await this.refreshData()
         uni.showToast({
           title: '登录成功',
           icon: 'none'
@@ -232,6 +275,8 @@ export default {
     handleLogout() {
       clearAuthSession()
       this.authSession = null
+      this.favoriteLoadToken += 1
+      this.favoriteWords = []
       uni.showToast({
         title: '已退出登录',
         icon: 'none'

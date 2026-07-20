@@ -56,7 +56,7 @@ Phase 2 允许修改：
 目标：
 
 - 登录用户收藏读写走服务器 API。
-- 未登录用户继续使用本地 `uni` storage。
+- 未登录用户不保存收藏，点击收藏时提示登录学习账号。
 - 不导入、不合并、不关联登录前游客收藏。
 
 任何超出当前阶段范围的发现，只记录，不顺手修复。
@@ -130,14 +130,15 @@ mine/index.vue
 
 ```text
 未登录用户
-  -> pictographic:userState.favoriteWordIds
-  -> uni storage
+  -> 点击收藏
+  -> 提示登录学习账号
+  -> 进入我的页面登录流程
 ```
 
 确认原则：
 
 - 登录用户收藏以服务器为准。
-- 未登录用户收藏继续使用本地 storage。
+- 未登录用户不保存收藏，不再写入 `pictographic:userState.favoriteWordIds`。
 - 不做游客数据自动迁移。
 - 登录前的本机收藏不自动导入账号。
 - 收藏 API 返回 `wordId`，不返回完整词条。
@@ -297,7 +298,8 @@ const userId = authResult.userId
 
 职责调整：
 
-- 保留本地 storage 收藏能力，服务未登录用户。
+- 保留现有本地状态能力，继续服务最近学习、查词次数等未云端化数据。
+- 收藏不再服务未登录用户；未登录点击收藏只提示登录。
 - 增加登录用户收藏 API 读写能力。
 - 登录用户不自动读取或导入本机 `favoriteWordIds`。
 
@@ -316,10 +318,10 @@ getFavoriteWords()
 改造点：
 
 - 页面加载词条后，登录用户从服务器收藏列表判断是否已收藏。
-- 未登录用户继续调用本地 `isFavorite(word.id)`。
+- 未登录用户收藏状态保持未收藏。
 - 点击收藏时：
   - 登录用户调用收藏 API。
-  - 未登录用户继续写入本地 storage。
+  - 未登录用户不写入本地 storage，只提示登录学习账号并进入我的页面。
 - 失败时保留当前页面状态并提示用户。
 
 ### mine/index.vue
@@ -327,7 +329,7 @@ getFavoriteWords()
 改造点：
 
 - 登录用户展示服务器收藏列表。
-- 未登录用户展示本地收藏列表。
+- 未登录用户不展示旧本地收藏列表。
 - “本机记录”与登录状态文案保持当前用户边界，不做游客收藏迁移。
 
 ## 7. 测试方案
@@ -362,10 +364,10 @@ Phase 1 完成标准：
 
 覆盖：
 
-- 未登录收藏仍写入 `pictographic:userState.favoriteWordIds`。
+- 未登录点击收藏不写入 `pictographic:userState.favoriteWordIds`，并提示“收藏功能需要登录学习账号”。
 - 登录后收藏调用服务器 API。
 - 登录后不自动导入本地游客收藏。
-- 退出登录后，本地游客收藏仍可使用。
+- 退出登录后，收藏列表不展示旧本地游客收藏。
 - 我的页收藏数量和列表按当前模式显示。
 
 ### 回归检查
@@ -458,3 +460,25 @@ Phase 1 明确禁止修改小程序目录。小程序接入属于 Phase 2，必�
 - 后台管理
 - 视频功能
 - 单词数据结构
+
+## 10. Phase 2.1 小程序接入结果
+
+日期：2026-07-20
+
+已完成：
+
+- 新增小程序收藏 API client：`miniapp-uni/word-app1/common/user-favorites-api-client.js`。
+- `word-detail/index.vue` 收藏按钮接入登录判断和云端收藏 API。
+- `mine/index.vue` 登录用户收藏列表改为读取云端 `user_favorites`。
+- 未登录点击收藏不写入 `pictographic:userState.favoriteWordIds`。
+- 未登录收藏入口提示“收藏功能需要登录学习账号”，并进入已有“我的”页面登录流程。
+- 旧本地 `favoriteWordIds` 不导入、不合并、不关联到登录账号。
+
+未涉及：
+
+- 服务端 API。
+- 数据库 migration。
+- 登录流程。
+- JWT/token 格式。
+- `/api/me`。
+- 最近学习、学习统计、quota、entitlement、会员系统。

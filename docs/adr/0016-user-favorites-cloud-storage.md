@@ -29,9 +29,9 @@ pictographic:userState.favoriteWordIds
 
    服务端使用 `users.id` 作为用户身份主键，通过 `user_favorites.user_id` 关联收藏。
 
-2. 未登录用户继续使用本地 storage。
+2. 未登录用户不保存收藏。
 
-   未登录时继续读写 `pictographic:userState.favoriteWordIds`。
+   收藏属于学习账号数据。未登录点击收藏时，小程序只提示“收藏功能需要登录学习账号”，并引导用户进入已有“我的”页面登录流程；不再写入 `pictographic:userState.favoriteWordIds`。
 
 3. 不做游客数据自动迁移。
 
@@ -60,7 +60,7 @@ pictographic:userState.favoriteWordIds
 ## Consequences
 
 - 登录用户收藏以服务器数据为准。
-- 游客收藏继续以本机 storage 为准。
+- 未登录用户不再产生新的收藏数据。
 - 收藏云端化与 quota、entitlement、会员系统保持隔离。
 - 收藏接口和小程序展示之间通过 `wordId` 解耦。
-- 小程序收藏接入必须等待服务端收藏 API 验证通过后再执行。
+- 小程序 Phase 2.1 接入后，收藏按钮只在登录态下写入云端 `user_favorites`。

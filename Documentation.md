@@ -1,5 +1,22 @@
 # Documentation
 
+### 2026-07-20: Phase 2.1 user favorites cloud integration
+
+Decision:
+- Mini program favorites are now account-owned learning data.
+- Logged-in users read and write favorites through `GET /api/user/favorites`, `POST /api/user/favorites`, and `DELETE /api/user/favorites/:wordId` with `Authorization: Bearer <user token>`.
+- Logged-in favorites are stored by the server in `user_favorites` through `users.id`.
+- Unauthenticated users do not create new favorite records. Tapping the favorite button shows “收藏功能需要登录学习账号” and sends the user to the existing Mine page login flow.
+- Existing local `pictographic:userState.favoriteWordIds` is not imported, merged, or associated with a login account.
+- The Mine page shows cloud favorites only for logged-in users; logged-out users do not see old local favorite history.
+
+Touched files:
+- `miniapp-uni/word-app1/common/user-favorites-api-client.js`
+- `miniapp-uni/word-app1/pages/word-detail/index.vue`
+- `miniapp-uni/word-app1/pages/mine/index.vue`
+- `docs/adr/0016-user-favorites-cloud-storage.md`
+- `docs/modules/user-data/user-favorites-cloud-plan.md`
+
 ### 2026-06-23: explicit public illustration projection
 
 Decision:
