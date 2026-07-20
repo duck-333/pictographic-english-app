@@ -49,7 +49,11 @@ Safety:
 ### 2026-06-22: production published text API enabled
 
 Decision:
-- The production mini program word API base is fixed to `https://baxiaota.com`; development may still use an explicitly configured local HTTP/HTTPS API.
+- The mini program API base defaults to `https://baxiaota.com` in production, test, and development. Development may still use an explicitly configured local HTTP/HTTPS API for local server testing.
+- API address rules:
+  - `NODE_ENV=development`: use `VUE_APP_WORD_API_BASE_URL` / `UNI_APP_WORD_API_BASE_URL` / `WORD_API_BASE_URL` when explicitly configured to a valid `http(s)://` URL; otherwise use `https://baxiaota.com`.
+  - `NODE_ENV=test`: use `https://baxiaota.com` and ignore local overrides.
+  - `NODE_ENV=production` or missing `NODE_ENV`: use `https://baxiaota.com` and ignore local overrides.
 - Reuse `GET /api/words?q=...` for search and `GET /api/words/:id` for detail. Public list responses are capped at 20 records.
 - Public server reads explicitly request `publishedOnly: true`. Store normalization treats a missing status as `draft`, and strict equality excludes draft, unpublished, archived, review, pending, unknown, and missing statuses.
 - The mini program filters remote payloads again with strict `status === "published"` checks.
@@ -565,7 +569,7 @@ Production boundary:
 ## 2026-06-20：第一版最小可审核上线版 P0 决策
 
 - 小程序第一版生产运行模式改为离线已发布词库；只有明确 `status === "published"` 的原始词条可进入列表和详情，缺省状态按 `draft` 处理。
-- 生产环境固定关闭远程词条 API；只有显式 `NODE_ENV=development` 且配置 API 地址时才启用开发联调。
+- 小程序 API 地址在 production、test、development 默认使用 `https://baxiaota.com`；development 可通过显式配置本地 HTTP/HTTPS API 地址进行本地联调。
 - 内置词条移除第三方测试视频和开发 provider 信息；没有正式自有媒体资源时，前台不显示视频模块。
 - 注销关系网、单词库、课堂三个未完成页面路由，不删除页面文件。
 - “我的”页不采集头像、昵称、手机号、openid 或 unionid，只保留本机学习统计、最近查看、收藏和清除本机记录。

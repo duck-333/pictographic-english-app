@@ -37,5 +37,5 @@ export function getWordApiBaseUrl(options = {}) {
     ? options.apiBaseUrl
     : getEnvApiBaseUrl()
   const candidate = normalizeApiBaseUrl(configured)
-  return isDevelopmentApiBaseUrl(candidate) ? candidate : ''
+  return isDevelopmentApiBaseUrl(candidate) ? candidate : PRODUCTION_WORD_API_BASE_URL
 }
