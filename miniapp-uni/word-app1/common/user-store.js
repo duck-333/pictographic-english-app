@@ -144,6 +144,15 @@ export function addRecentWord(wordId, options = {}) {
   })
 }
 
+export function recordLearningActivity(options = {}) {
+  const state = touchActiveDay(getUserState())
+  const shouldCountSearch = options.countSearch !== false
+  return saveUserState({
+    ...state,
+    searchCount: shouldCountSearch ? state.searchCount + 1 : state.searchCount
+  })
+}
+
 export function toggleFavorite(wordId) {
   const id = normalizeHistoryId(wordId)
   if (isBlockedLegacyHistoryId(id)) return false

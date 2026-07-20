@@ -212,8 +212,11 @@ import {
   fetchHomepageFeaturedWord,
   fetchWordByWord,
   fetchWords,
+  getCachedPublishedRemoteWordById,
   normalizeWordQuery
 } from '../../common/word-repository.js'
+import { getAuthSession } from '../../common/auth-store.js'
+import { recordUserRecentWord, listUserRecentWords } from '../../common/user-recent-words-api-client.js'
 import {
   buildPartChipStyle,
   buildPartTextStyle
@@ -225,6 +228,7 @@ import {
   getRecentWords,
   getUserState,
   isBlockedLegacyHistoryId,
+  recordLearningActivity,
   removeRecentWord,
   replaceRecentWordId,
   savePendingWordId
@@ -311,8 +315,43 @@ export default {
   methods: {
     refreshUserData() {
       this.userState = getUserState()
+      const session = getAuthSession()
+      if (session) {
+        this.recentWords = []
+        this.refreshRecentWordsFromCloud(session)
+        return
+      }
+
       this.recentWords = getRecentWords()
       this.refreshRecentWordsFromServer()
+    },
+    async refreshRecentWordsFromCloud(session) {
+      const requestId = this.recentWordsRequestId + 1
+      this.recentWordsRequestId = requestId
+
+      try {
+        const recentWords = (await listUserRecentWords({ session })).slice(0, 12)
+        const verifiedWords = []
+        for (let index = 0; index < recentWords.length; index += 1) {
+          const result = await this.resolvePublishedHistoryWord(recentWords[index].wordId)
+          if (this.recentWordsRequestId !== requestId) return
+          if (result.word) {
+            verifiedWords.push(result.word)
+          }
+        }
+
+        if (this.recentWordsRequestId !== requestId) return
+        const used = {}
+        this.recentWords = verifiedWords.filter((word) => {
+          if (!word || !word.id || used[word.id]) return false
+          used[word.id] = true
+          return word.status === 'published'
+        })
+      } catch (error) {
+        if (this.recentWordsRequestId === requestId) {
+          this.recentWords = []
+        }
+      }
     },
     async refreshRecentWordsFromServer() {
       const ids = getRecentWordIds()
@@ -511,6 +550,15 @@ export default {
       }
     },
     clearRecentHistory() {
+      if (getAuthSession()) {
+        uni.showToast({
+          title: '账号最近学习暂不支持清除',
+          icon: 'none'
+        })
+        this.searchPanelOpen = true
+        return
+      }
+
       clearRecentWords()
       this.refreshUserData()
       this.searchPanelOpen = true
@@ -530,10 +578,13 @@ export default {
       this.openDetail(dataset.id, countSearch)
     },
     async openRecentDetail(id) {
+      const session = getAuthSession()
       const result = await this.resolvePublishedHistoryWord(id)
       if (result.word) {
         if (result.word.id !== id) {
-          replaceRecentWordId(id, result.word.id)
+          if (!session) {
+            replaceRecentWordId(id, result.word.id)
+          }
           this.refreshUserData()
         }
         this.openDetail(result.word.id, false, { trustedWord: result.word })
@@ -541,7 +592,9 @@ export default {
       }
 
       if (result.remove) {
-        removeRecentWord(id)
+        if (!session) {
+          removeRecentWord(id)
+        }
         this.refreshUserData()
         uni.showToast({
           title: '该词条暂未发布',
@@ -562,14 +615,38 @@ export default {
       const trustedWord = options.trustedWord && options.trustedWord.status === 'published' ? options.trustedWord : null
       const targetId = trustedWord ? trustedWord.id : id
       savePendingWordId(targetId)
-      addRecentWord(targetId, {
+      this.recordRecentWordView(targetId, {
         countSearch,
         skipPublishedCacheCheck: Boolean(trustedWord)
       })
-      this.refreshUserData()
       uni.navigateTo({
         url: `/pages/word-detail/index?id=${targetId}`
       })
+    },
+    shouldRecordRecentWord(wordId, options = {}) {
+      const id = String(wordId || '').trim()
+      return Boolean(
+        !isBlockedLegacyHistoryId(id) &&
+        (options.skipPublishedCacheCheck || getCachedPublishedRemoteWordById(id))
+      )
+    },
+    recordRecentWordView(wordId, options = {}) {
+      if (!this.shouldRecordRecentWord(wordId, options)) return
+      const session = getAuthSession()
+      if (!session) {
+        addRecentWord(wordId, options)
+        this.refreshUserData()
+        return
+      }
+
+      recordLearningActivity({
+        countSearch: options.countSearch
+      })
+      recordUserRecentWord(wordId, { session })
+        .then(() => {
+          this.refreshUserData()
+        })
+        .catch(() => {})
     },
     goMine() {
       uni.reLaunch({

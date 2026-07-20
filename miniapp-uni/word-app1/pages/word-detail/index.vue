@@ -296,7 +296,8 @@ import {
 } from '../../common/part-visual-style.js'
 import { getAuthSession } from '../../common/auth-store.js'
 import { addUserFavorite, listUserFavorites, removeUserFavorite } from '../../common/user-favorites-api-client.js'
-import { addRecentWord, getPendingWordId, savePendingWordId } from '../../common/user-store.js'
+import { recordUserRecentWord } from '../../common/user-recent-words-api-client.js'
+import { addRecentWord, getPendingWordId, recordLearningActivity, savePendingWordId } from '../../common/user-store.js'
 
 const ENABLE_VIDEO_MODULE = false
 
@@ -642,11 +643,23 @@ export default {
       this.bookmarked = false
       this.favoriteLoading = false
       this.resetWordViewState()
-      addRecentWord(word.id, {
+      this.recordRecentWordView(word.id, {
         countSearch: false,
         skipPublishedCacheCheck: true
       })
       this.refreshFavoriteState(word.id)
+    },
+    recordRecentWordView(wordId, options = {}) {
+      const session = getAuthSession()
+      if (!session) {
+        addRecentWord(wordId, options)
+        return
+      }
+
+      recordLearningActivity({
+        countSearch: options.countSearch
+      })
+      recordUserRecentWord(wordId, { session }).catch(() => {})
     },
     async refreshFavoriteState(wordId) {
       const session = getAuthSession()

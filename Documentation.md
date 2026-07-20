@@ -1,5 +1,25 @@
 # Documentation
 
+### 2026-07-20: Phase 2.2 user recent words cloud integration
+
+Decision:
+- Logged-in users now record recent learning through `POST /api/user/recent-words` with `Authorization: Bearer <user token>`.
+- Logged-in recent learning is displayed from `GET /api/user/recent-words`.
+- Unauthenticated users continue to use local `pictographic:userState.recentWordIds`.
+- Guest recent words are not imported, merged, or associated with a login account.
+- Logged-in recent words are not written back to local `recentWordIds`, avoiding account history leakage after logout.
+- `user_recent_words` stores recent-list state only: one row per `user_id + word_id`, with `viewed_at` updated on repeated views.
+- `user_recent_words` is not a behavior event log, learning report table, or quota/entitlement source.
+
+Touched files:
+- `miniapp-uni/word-app1/common/user-recent-words-api-client.js`
+- `miniapp-uni/word-app1/common/user-store.js`
+- `miniapp-uni/word-app1/pages/word-detail/index.vue`
+- `miniapp-uni/word-app1/pages/index/index.vue`
+- `miniapp-uni/word-app1/pages/mine/index.vue`
+- `docs/adr/0017-user-recent-words-cloud-storage.md`
+- `docs/modules/user-data/user-recent-words-cloud-plan.md`
+
 ### 2026-07-20: Phase 2.1 user favorites cloud integration
 
 Decision:

@@ -138,6 +138,7 @@ import BottomNav from '../../components/BottomNav.vue'
 import { loginWithWechatPhone } from '../../common/auth-api-client.js'
 import { clearAuthSession, getAuthSession } from '../../common/auth-store.js'
 import { listUserFavorites } from '../../common/user-favorites-api-client.js'
+import { listUserRecentWords } from '../../common/user-recent-words-api-client.js'
 import { fetchWordById, getCachedPublishedRemoteWordById } from '../../common/word-repository.js'
 import {
   getRecentWords,
@@ -156,7 +157,8 @@ export default {
       favoriteWords: [],
       authSession: getAuthSession(),
       authLoading: false,
-      favoriteLoadToken: 0
+      favoriteLoadToken: 0,
+      recentLoadToken: 0
     }
   },
   computed: {
@@ -196,23 +198,28 @@ export default {
   },
   methods: {
     async refreshData() {
-      const loadToken = this.favoriteLoadToken + 1
-      this.favoriteLoadToken = loadToken
+      const favoriteLoadToken = this.favoriteLoadToken + 1
+      const recentLoadToken = this.recentLoadToken + 1
+      this.favoriteLoadToken = favoriteLoadToken
+      this.recentLoadToken = recentLoadToken
       this.state = getUserState()
-      this.recentWords = getRecentWords()
       this.authSession = getAuthSession()
       if (!this.authLoggedIn) {
+        this.recentWords = getRecentWords()
         this.favoriteWords = []
         return
       }
 
+      this.recentWords = []
+      this.refreshCloudRecentWords(this.authSession, recentLoadToken)
+
       try {
         const favoriteWords = await this.loadCloudFavoriteWords(this.authSession)
-        if (this.favoriteLoadToken === loadToken && this.authLoggedIn) {
+        if (this.favoriteLoadToken === favoriteLoadToken && this.authLoggedIn) {
           this.favoriteWords = favoriteWords
         }
       } catch (error) {
-        if (this.favoriteLoadToken === loadToken && this.authLoggedIn) {
+        if (this.favoriteLoadToken === favoriteLoadToken && this.authLoggedIn) {
           this.favoriteWords = []
           uni.showToast({
             title: '收藏列表加载失败',
@@ -221,11 +228,43 @@ export default {
         }
       }
     },
+    async refreshCloudRecentWords(session, loadToken) {
+      try {
+        const recentWords = await this.loadCloudRecentWords(session)
+        if (this.recentLoadToken === loadToken && this.authLoggedIn) {
+          this.recentWords = recentWords
+        }
+      } catch (error) {
+        if (this.recentLoadToken === loadToken && this.authLoggedIn) {
+          this.recentWords = []
+        }
+      }
+    },
     async loadCloudFavoriteWords(session) {
       const favorites = await listUserFavorites({ session })
       const words = []
       for (let index = 0; index < favorites.length; index += 1) {
         const wordId = String(favorites[index].wordId || '').trim()
+        if (!wordId) continue
+        let word = getCachedPublishedRemoteWordById(wordId)
+        if (!word) {
+          try {
+            word = await fetchWordById(wordId)
+          } catch (error) {
+            word = null
+          }
+        }
+        if (word && word.status === 'published') {
+          words.push(word)
+        }
+      }
+      return words
+    },
+    async loadCloudRecentWords(session) {
+      const recentWords = (await listUserRecentWords({ session })).slice(0, 12)
+      const words = []
+      for (let index = 0; index < recentWords.length; index += 1) {
+        const wordId = String(recentWords[index].wordId || '').trim()
         if (!wordId) continue
         let word = getCachedPublishedRemoteWordById(wordId)
         if (!word) {
@@ -276,7 +315,9 @@ export default {
       clearAuthSession()
       this.authSession = null
       this.favoriteLoadToken += 1
+      this.recentLoadToken += 1
       this.favoriteWords = []
+      this.recentWords = getRecentWords()
       uni.showToast({
         title: '已退出登录',
         icon: 'none'
