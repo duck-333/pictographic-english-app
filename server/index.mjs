@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { createUserSessionToken, requireAdminAuth, requireUserAuth } from './auth.mjs'
 import { createIdentityStore } from './identity-store.mjs'
 import { createUserFavoritesStore } from './user-favorites-store.mjs'
+import { createUserRecentWordsStore } from './user-recent-words-store.mjs'
 import { createUserStore } from './user-store.mjs'
 import { createWechatLoginClient } from './wechat-login.mjs'
 import { createWordStore } from './word-store.mjs'
@@ -12,6 +13,7 @@ const DEFAULT_PORT = 3001
 const DEFAULT_HOST = '0.0.0.0'
 const MAX_BODY_BYTES = 1024 * 1024
 const MAX_FAVORITE_WORD_ID_LENGTH = 191
+const MAX_RECENT_WORD_ID_LENGTH = 191
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
@@ -269,6 +271,73 @@ function sendUserFavoritesError(res, error) {
   })
 }
 
+function createUserRecentWordsRequestError(message, options = {}) {
+  const error = new Error(message)
+  error.code = options.code || 'USER_RECENT_WORDS_REQUEST_ERROR'
+  error.statusCode = Number(options.statusCode || 400)
+  return error
+}
+
+function normalizeRecentWordId(value) {
+  const wordId = String(value || '').trim()
+  if (!wordId) {
+    throw createUserRecentWordsRequestError('Word id is required.', {
+      code: 'WORD_ID_REQUIRED',
+      statusCode: 400
+    })
+  }
+  if (wordId.length > MAX_RECENT_WORD_ID_LENGTH) {
+    throw createUserRecentWordsRequestError('Word id is invalid.', {
+      code: 'WORD_ID_INVALID',
+      statusCode: 400
+    })
+  }
+  return wordId
+}
+
+function getPublicUserRecentWordsError(error) {
+  const rawCode = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+
+  if (rawCode === 'WORD_ID_REQUIRED') {
+    return {
+      statusCode: 400,
+      code: 'WORD_ID_REQUIRED',
+      message: 'Word id is required.'
+    }
+  }
+
+  if (rawCode === 'WORD_ID_INVALID') {
+    return {
+      statusCode: 400,
+      code: 'WORD_ID_INVALID',
+      message: 'Word id is invalid.'
+    }
+  }
+
+  if (rawCode === 'USER_RECENT_WORDS_DB_CONFIG_MISSING' || rawCode === 'USER_RECENT_WORDS_DB_ERROR' || isDatabaseErrorCode(rawCode)) {
+    return {
+      statusCode: 503,
+      code: 'USER_RECENT_WORDS_DB_ERROR',
+      message: 'User recent words database is unavailable.'
+    }
+  }
+
+  return {
+    statusCode: 500,
+    code: 'INTERNAL_SERVER_ERROR',
+    message: 'Internal server error.'
+  }
+}
+
+function sendUserRecentWordsError(res, error) {
+  const publicError = getPublicUserRecentWordsError(error)
+  sendJson(res, publicError.statusCode, {
+    ok: false,
+    code: publicError.code,
+    message: publicError.message
+  })
+}
+
 function sendUserAuthError(res, authResult) {
   sendJson(res, authResult.statusCode, {
     ok: false,
@@ -290,6 +359,7 @@ export function createApiHandler(options = {}) {
   const store = options.store || createWordStore()
   const userStore = options.userStore || createUserStore(options)
   const userFavoritesStore = options.userFavoritesStore || createUserFavoritesStore(options)
+  const userRecentWordsStore = options.userRecentWordsStore || createUserRecentWordsStore(options)
   const identityStore = options.identityStore || createIdentityStore(options)
   const wechatLoginClient = options.wechatLoginClient || createWechatLoginClient(options)
   const now = options.now || (() => new Date())
@@ -534,6 +604,47 @@ export function createApiHandler(options = {}) {
           })
         } catch (error) {
           sendUserFavoritesError(res, error)
+        }
+        return
+      }
+
+      if (req.method === 'GET' && pathname === '/api/user/recent-words') {
+        const authResult = requireUserAuth(req, userAuthOptions)
+        if (!authResult.ok) {
+          sendUserAuthError(res, authResult)
+          return
+        }
+
+        try {
+          const recentWords = await userRecentWordsStore.listRecentWords(authResult.userId)
+          sendJson(res, 200, {
+            ok: true,
+            recentWords,
+            count: recentWords.length
+          })
+        } catch (error) {
+          sendUserRecentWordsError(res, error)
+        }
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/user/recent-words') {
+        const authResult = requireUserAuth(req, userAuthOptions)
+        if (!authResult.ok) {
+          sendUserAuthError(res, authResult)
+          return
+        }
+
+        try {
+          const body = await readJsonBody(req)
+          const wordId = normalizeRecentWordId(body.wordId)
+          const recentWord = await userRecentWordsStore.recordRecentWord(authResult.userId, wordId)
+          sendJson(res, 200, {
+            ok: true,
+            recentWord
+          })
+        } catch (error) {
+          sendUserRecentWordsError(res, error)
         }
         return
       }
