@@ -238,6 +238,86 @@ Phase 2.3 用户权益系统的目标：
 
 订单系统不直接承担“当前是否能看完整词条”的判断；权益系统不直接承担支付网关状态。
 
+## 4.4 Learning Object Access Model
+
+未来权益判断不应只理解为“访问某个单词页面”，而应理解为“用户主动进入某个可独立学习对象”。
+
+Learning Object 可以是：
+
+- 单词。
+- 词根。
+- 字母拆解。
+- 未来其他教学内容。
+
+示例：
+
+```text
+apple（Learning Object）
+  ├── ap
+  ├── pl
+  └── e
+
+pl（Learning Object）
+  ├── p
+  └── l
+```
+
+扣减规则：
+
+- 用户主动搜索并进入 `apple`，`apple` 是 root Learning Object，扣 1 次。
+- 用户在 `apple` 内部展开 `pl`，属于 `apple` 的 `decompose` 关系，不额外扣减。
+- 用户主动搜索并进入 `pl`，`pl` 是 root Learning Object，扣 1 次。
+- 用户从 `apple` 点击关联 `fruit`，`fruit` 成为新的 root Learning Object，需要重新判断权益。
+
+建议未来 `access_context`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `root_learning_object_id` | 用户本次主动进入的学习对象 |
+| `current_learning_object_id` | 当前展示或展开的学习对象 |
+| `relation_type` | `self`、`decompose`、`related`、`recommend` |
+| `access_reason` | `search_enter`、`internal_expand`、`related_click` 等 |
+
+实现原则：
+
+- 不使用 `word_id` 硬编码判断权益。
+- 不写 `apple` / `pl` / `p` 这类特殊规则。
+- 不依赖页面路径判断是否扣减。
+- 不根据页面层级直接推导扣减。
+- 应基于 Learning Object + Relation 判断本次访问是否是新的 root 学习对象。
+
+未来可以扩展：
+
+```text
+learning_objects
+learning_object_relations
+```
+
+`learning_object_relations` 关系类型建议：
+
+| relation_type | 含义 | 是否通常扣减 |
+| --- | --- | --- |
+| `decompose` | 拆解关系，例如 `apple -> pl` | root 内部展开时不额外扣减 |
+| `related` | 关联内容，例如 `apple -> fruit` | 点击进入新对象时重新判断 |
+| `recommend` | 推荐内容 | 点击进入新对象时重新判断 |
+
+本阶段只记录架构方向，不创建数据库，不新增 migration。
+
+## 4.5 不采用永久解锁模型
+
+不建议设计：
+
+- `user_unlocked_words`
+- `word_unlock_records`
+- 任何按单词或学习对象永久解锁的访问表
+
+原因：
+
+- 当前商业规则是访问资格判断，不是词条买断。
+- 会员期间访问过的内容不能在会员过期后继续无限访问。
+- 永久解锁会让会员、免费额度、活动奖励和退款恢复产生复杂冲突。
+- 未来如果确实推出“单独购买某个课程/词条”的商品，应作为独立商品权益重新设计，而不是混入当前完整查词额度模型。
+
 ## 5. 典型业务流程
 
 ### 新用户注册赠送 30 次完整查词额度
@@ -255,11 +335,12 @@ Phase 2.3 用户权益系统的目标：
 - 不使用本地 `searchCount`。
 - 需要幂等，避免同一用户重复初始化多次。
 
-### 查看完整词条消耗 1 次额度
+### 主动进入学习对象消耗 1 次额度
 
 ```text
-小程序请求完整词条
+小程序请求完整学习对象
   -> requireUserAuth()
+  -> 识别 root Learning Object
   -> 查询会员状态
   -> 如果会员有效，允许访问，可不扣次数
   -> 如果非会员，检查 full_word_quota 剩余
@@ -271,7 +352,8 @@ Phase 2.3 用户权益系统的目标：
 
 - 权益判断必须在服务端。
 - 扣减必须原子化。
-- 同一次完整词条访问是否重复扣减，需要产品策略单独确定。例如同一用户同一单词当天只扣一次，或每次打开完整内容都扣一次。
+- 扣减基准是用户主动进入的 root Learning Object，不是页面内展开的每个节点。
+- 同一次完整学习对象访问是否重复扣减，需要产品策略单独确定。例如同一用户同一 root Learning Object 当天只扣一次，或每次主动进入完整内容都扣一次。
 
 ### 分享邀请奖励
 
@@ -379,9 +461,11 @@ Phase 2.3 用户权益系统的目标：
 
 - 审核本 ADR 和计划文档。
 - 确定完整词条的产品定义。
+- 确定 Learning Object 的产品定义：单词、词根、字母拆解是否都可以独立搜索和独立进入。
 - 确定注册赠送次数，例如 30 次。
-- 确定扣减策略：每次完整查看扣一次，还是同一单词某时间窗口内只扣一次。
+- 确定扣减策略：每次主动进入 root Learning Object 扣一次，还是同一 root Learning Object 某时间窗口内只扣一次。
 - 确定会员是否不限次数，以及会员期内是否保留免费额度。
+- 确定哪些 relation 属于内部展开，哪些 relation 属于新学习对象跳转。
 
 ### Phase 2.3-E2：基础权益表和服务端 Store
 
@@ -393,6 +477,7 @@ Phase 2.3 用户权益系统的目标：
 ### Phase 2.3-E3：完整词条访问判定 API
 
 - 设计完整词条访问接口。
+- 设计 `access_context`，明确 root Learning Object、current Learning Object 和 relation type。
 - 服务端判断是否会员或有额度。
 - 原子写入消耗流水并更新当前状态。
 - 返回完整内容或权益不足状态。
@@ -427,6 +512,9 @@ Phase 2.3 用户权益系统的目标：
 - 不让小程序本地自行判断会员或剩余额度。
 - 不只更新 `user_entitlements` 而不写 `entitlement_transactions`。
 - 不把订单支付状态和权益余额混在同一张表里。
+- 不设计 `user_unlocked_words` 或 `word_unlock_records` 作为永久解锁模型。
+- 不用 `word_id` 硬编码、页面路径或 `apple/pl/p` 这类特殊规则判断扣减。
+- 不把内部拆解展开当作新的完整内容访问。
 
 ## 10. 验收方向
 
@@ -434,8 +522,12 @@ Phase 2.3 用户权益系统的目标：
 
 - 新用户只获得一次注册赠送额度。
 - 登录用户完整查看词条时由服务端扣减。
+- 登录用户主动进入 root Learning Object 时由服务端判断并扣减。
+- root Learning Object 内部 `decompose` 展开不重复扣减。
+- `related` / `recommend` 跳转到新 Learning Object 时重新判断权益。
 - 额度不足时服务端拒绝完整内容访问。
 - 会员有效时按产品策略允许访问。
+- 会员过期后不保留会员期间访问过对象的永久解锁。
 - 每一次额度变化都有流水。
 - 幂等键可以防止小程序重试导致重复扣减。
 - 多账号数据隔离。

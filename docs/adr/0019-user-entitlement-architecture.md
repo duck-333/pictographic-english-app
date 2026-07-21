@@ -152,6 +152,176 @@
 - 权益变更可能来自支付回调、后台操作、活动任务或退款。
 - 多设备同时访问需要服务端统一处理并发和原子扣减。
 
+## 学习对象访问模型
+
+项目中的内容不是简单的单词详情页，而是存在层级学习关系。例如：
+
+```text
+apple（学习对象）
+  ├── ap
+  ├── pl
+  └── e
+
+pl（学习对象）
+  ├── p
+  └── l
+```
+
+同一个内容片段在不同上下文中可能承担不同角色：
+
+- 用户搜索 `apple` 后进入 `apple`，`apple` 是用户主动开始学习的对象。
+- 用户在 `apple` 内部展开 `pl`，`pl` 是 `apple` 学习过程中的内部拆解内容。
+- 用户直接搜索 `pl` 后进入 `pl`，`pl` 又是一个独立学习对象。
+
+因此，权益扣减不能根据页面层级、页面路径或某些单词 id 的特殊规则判断，而应根据“用户主动开始学习的对象”判断。
+
+定义：
+
+- 每个可独立搜索并进入学习的内容，都是一个 Learning Object。
+- Learning Object 可以是单词、词根、字母拆解，或未来其他教学内容。
+- Learning Object 之间可以存在拆解、关联、推荐等关系。
+- 权益系统关注本次完整内容访问的 root Learning Object，而不是页面上展示了多少内部节点。
+
+## 权益扣减规则
+
+### 1. 用户主动搜索并进入某个学习对象时扣减
+
+用户主动搜索并进入一个 Learning Object，产生一次完整内容访问，需要消耗一次权益额度。
+
+示例：
+
+```text
+搜索 apple -> 进入 apple -> 扣 1 次
+搜索 pl    -> 进入 pl    -> 扣 1 次
+搜索 p     -> 进入 p     -> 扣 1 次
+```
+
+这里的扣减对象不是固定的 `word_id`，而是本次用户主动开始学习的 Learning Object。
+
+### 2. 当前学习对象内部展开内容不重复扣减
+
+用户进入 `apple` 后已经为 `apple` 的完整学习过程完成一次权益判断和扣减。
+
+在 `apple` 页面内部查看：
+
+```text
+apple
+  ├── ap
+  ├── pl
+  └── e
+```
+
+这些属于 `apple` 学习过程中的内部展开，不额外扣减。
+
+### 3. 关联内容不属于内部展开
+
+关联、推荐、跳转到另一个可独立学习的对象时，需要重新进行权益判断。
+
+示例：
+
+```text
+apple 页面
+  -> 关联 fruit
+  -> 用户点击 fruit
+  -> fruit 是新的 Learning Object
+  -> 重新判断权益
+```
+
+`fruit` 是否在视觉上出现在 `apple` 页面不重要；关键是用户是否进入了新的独立学习对象。
+
+### 4. 不设计永久解锁
+
+禁止把完整访问设计成永久解锁模型，例如：
+
+- `user_unlocked_words`
+- `word_unlock_records`
+- 按词条永久授权的访问表
+
+原因：
+
+- 当前商业规则不是“买断某个词条”，而是按访问资格和会员状态判断。
+- 会员结束后，用户不能继续无限访问会员期间看过的全部完整内容。
+- 永久解锁会让免费额度、会员权益、退款和活动奖励的边界变复杂。
+
+### 5. 会员期间不扣额度，也不产生永久解锁
+
+会员期间：
+
+- 完整内容访问不扣普通额度。
+- 不产生永久解锁记录。
+- 可以记录访问流水或学习事件，但不能把访问过的对象变成永久可访问资产。
+
+会员过期后：
+
+- 重新按照普通权益规则判断。
+- 如果用户仍有免费额度或活动额度，可以继续按额度访问。
+- 如果没有有效权益，则不能访问完整内容。
+
+## `access_context`
+
+权益判断需要显式区分“用户当前主动进入的学习对象”和“当前正在展示的内部内容”。
+
+建议未来服务端概念：
+
+| 字段 | 含义 |
+| --- | --- |
+| `rootLearningObject` | 用户本次主动开始学习的对象 |
+| `currentLearningObject` | 当前正在展示或展开的对象 |
+| `relationType` | 当前对象相对 root 的关系，例如 `self`、`decompose`、`related`、`recommend` |
+| `accessReason` | 访问原因，例如 `search_enter`、`internal_expand`、`related_click` |
+
+情况 A：搜索 `apple`
+
+```json
+{
+  "rootLearningObject": "apple",
+  "currentLearningObject": "apple",
+  "relationType": "self",
+  "accessReason": "search_enter"
+}
+```
+
+结果：主动进入 root 学习对象，扣减。
+
+情况 B：`apple` 内部点击 `pl`
+
+```json
+{
+  "rootLearningObject": "apple",
+  "currentLearningObject": "pl",
+  "relationType": "decompose",
+  "accessReason": "internal_expand"
+}
+```
+
+结果：属于 `apple` 的内部拆解学习过程，不额外扣减。
+
+情况 C：搜索 `pl`
+
+```json
+{
+  "rootLearningObject": "pl",
+  "currentLearningObject": "pl",
+  "relationType": "self",
+  "accessReason": "search_enter"
+}
+```
+
+结果：`pl` 是本次主动进入的 root 学习对象，扣减。
+
+情况 D：从 `apple` 点击关联 `fruit`
+
+```json
+{
+  "rootLearningObject": "fruit",
+  "currentLearningObject": "fruit",
+  "relationType": "self",
+  "accessReason": "related_click"
+}
+```
+
+结果：`fruit` 成为新的 root 学习对象，重新判断权益。
+
 ## 决策
 
 Phase 2.3 用户权益系统应采用独立服务端模型，不复用本地状态、最近学习或收藏表。
@@ -177,6 +347,14 @@ Phase 2.3 用户权益系统应采用独立服务端模型，不复用本地状�
 - 退款或人工恢复。
 
 `entitlement_transactions` 是审计来源，`user_entitlements` 是当前状态快照。不能只保存一个余额数字而没有流水。
+
+权益扣减基准采用 Learning Object Access Model：
+
+- 主动进入 root Learning Object 时进行权益判断。
+- root Learning Object 内部拆解展开不重复扣减。
+- 关联、推荐或跳转到新的 Learning Object 时重新判断。
+- 不使用永久解锁模型。
+- 会员期间不扣普通额度，也不产生永久解锁。
 
 ## 后果
 

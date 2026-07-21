@@ -1,5 +1,22 @@
 # Documentation
 
+### 2026-07-21: Phase 2.3 entitlement learning object access model
+
+Decision:
+- User entitlement checks are based on the user's active root Learning Object, not on simple page visits or visible page hierarchy.
+- A Learning Object is any independently searchable and enterable learning unit, such as a word, root, letter decomposition, or future teaching content.
+- Entering a root Learning Object through search or an equivalent active entry consumes entitlement quota for non-member users.
+- Expanding decomposition content inside the current root Learning Object does not consume additional quota.
+- Clicking related or recommended content enters a new Learning Object and must trigger a new server-side entitlement check.
+- The entitlement model does not use permanent unlock records such as `user_unlocked_words` or `word_unlock_records`.
+- Active membership allows complete-content access without quota deduction, but does not permanently unlock previously viewed Learning Objects.
+- Future implementation should use Learning Object + Relation concepts, not hardcoded `word_id` rules, special cases such as `apple/pl/p`, or page-path checks.
+
+Touched files:
+- `docs/adr/0019-user-entitlement-architecture.md`
+- `docs/modules/user-data/phase-2.3-user-entitlement-plan.md`
+- `Documentation.md`
+
 ### 2026-07-21: production JWT_SECRET fail-closed guard
 
 Decision:
