@@ -1,5 +1,23 @@
 # Documentation
 
+### 2026-07-21: Phase 2.3 entitlement business rules planning
+
+Decision:
+- Phase 2.3 user entitlement business rules are now documented before implementation.
+- Entitlement types are defined as registration bonus quota, monthly membership, and operational grants such as Taobao book purchase membership, share rewards, and admin grants.
+- Registration bonus defaults to 30 complete-content accesses, with configurable expiry and no permanent unlock.
+- Monthly membership allows unlimited complete-content access during the active period, does not consume ordinary quota, and does not create permanent unlocks.
+- Complete-content access continues to use the Learning Object Access Model: active root Learning Object entries require entitlement checks, internal `decompose` expansion does not repeat deduction, and `related` / `recommend` navigation to a new Learning Object requires a new check.
+- Quota deduction must be completed by the server; the mini program must not calculate remaining quota or membership validity locally.
+- Insufficient quota should lead to a locked-content state with membership and free-quota acquisition entries.
+- Taobao book purchase membership is planned as a manual customer-service and admin-grant flow with operation records.
+- Backend entitlement management requirements now include querying current entitlements, viewing entitlement transactions, granting membership, granting quota, and recording operation notes.
+
+Touched files:
+- `docs/adr/0021-user-entitlement-business-rules.md`
+- `docs/modules/user-data/phase-2.3-entitlement-business-plan.md`
+- `Documentation.md`
+
 ### 2026-07-21: Phase 2.3 entitlement learning object access model
 
 Decision:
