@@ -1,5 +1,21 @@
 # Documentation
 
+### 2026-07-21: Phase 2.3 learning data architecture planning
+
+Decision:
+- Phase 2.3 is defined as learning data foundation work, not a user-facing report or dashboard feature.
+- Future account-level learning data should use a layered model: behavior events -> statistical aggregation -> user state.
+- `user_recent_words` remains a recent-list table only and must not be reused for learning counts, mastery, reports, quota, entitlement, or video progress.
+- `user_favorites` remains a favorites asset table only and must not represent learning completion or mastery.
+- Local `pictographic:userState.searchCount` and `pictographic:userState.streakDays` remain device-local lightweight state and must not be directly promoted to trusted account statistics.
+- Future video learning progress should use a dedicated user progress model; word content `videoSegment` / `videoClips` remains content configuration.
+- Phase 2.3 planning currently excludes Mine page statistics, learning reports, streak display, rankings, membership entitlement statistics, AI recommendations, and complex BI.
+
+Touched files:
+- `docs/adr/0018-learning-data-architecture.md`
+- `docs/modules/user-data/phase-2.3-learning-data-plan.md`
+- `Documentation.md`
+
 ### 2026-07-20: Phase 2.2 user recent words cloud integration
 
 Decision:
