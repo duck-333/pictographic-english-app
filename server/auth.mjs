@@ -73,9 +73,38 @@ function getUserSessionTtlMs(options = {}) {
   return Number.isFinite(value) && value > 0 ? value : DEFAULT_USER_SESSION_TTL_MS
 }
 
-function getJwtSecret(options = {}) {
+function createUserAuthConfigError(message) {
+  const error = new Error(message)
+  error.code = 'JWT_SECRET_REQUIRED'
+  return error
+}
+
+export function getUserAuthConfig(options = {}) {
+  const nodeEnv = options.nodeEnv === undefined ? process.env.NODE_ENV : options.nodeEnv
   const configuredSecret = options.jwtSecret === undefined ? process.env.JWT_SECRET : options.jwtSecret
-  return String(configuredSecret || '').trim() || PROCESS_SESSION_SECRET
+  const jwtSecret = String(configuredSecret || '').trim()
+  const production = isProductionNodeEnv(nodeEnv)
+
+  if (production && !jwtSecret) {
+    throw createUserAuthConfigError(
+      'JWT_SECRET is required when NODE_ENV=production. Set JWT_SECRET in the server or PM2 environment before starting the API service.'
+    )
+  }
+
+  return {
+    jwtSecret: jwtSecret || PROCESS_SESSION_SECRET,
+    production,
+    source: jwtSecret ? 'env' : 'development-process-secret'
+  }
+}
+
+export function assertUserAuthConfig(options = {}) {
+  getUserAuthConfig(options)
+  return true
+}
+
+function getJwtSecret(options = {}) {
+  return getUserAuthConfig(options).jwtSecret
 }
 
 function getNowMs(options = {}) {

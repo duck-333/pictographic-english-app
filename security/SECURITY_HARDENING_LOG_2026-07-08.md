@@ -8,6 +8,54 @@
 
 ---
 
+## 2026-07-21 JWT_SECRET 生产启动保护
+
+### 背景
+
+用户登录、收藏云端化、最近学习云端化已经依赖用户 JWT token。进入权益/额度/会员开发前，生产环境不能继续依赖进程内随机 fallback secret。
+
+### 决策
+
+- `NODE_ENV=production` 时，API 启动必须显式配置 `JWT_SECRET`。
+- 如果 `JWT_SECRET` 缺失或为空，`server/index.mjs` 会在监听 HTTP 端口前失败退出。
+- 开发环境仍允许不配置 `JWT_SECRET`，使用进程级临时密钥方便本地测试；该模式下重启后旧 token 失效是预期行为。
+- PM2 部署必须确认进程环境中同时存在 `NODE_ENV=production` 和 `JWT_SECRET`。
+
+### PM2 检查
+
+部署或重启后检查：
+
+```bash
+pm2 describe <process-name>
+```
+
+确认环境变量包含：
+
+```text
+NODE_ENV=production
+JWT_SECRET=<private-stable-secret>
+```
+
+不要把真实 `JWT_SECRET` 写入仓库、文档或截图。
+
+### 验证
+
+本地安全验证应覆盖：
+
+```bash
+npm.cmd run check:production
+```
+
+以及生产缺失密钥时的启动失败：
+
+```bash
+NODE_ENV=production JWT_SECRET= node server/index.mjs
+```
+
+预期结果：进程退出，并显示 `JWT_SECRET is required when NODE_ENV=production`。
+
+---
+
 ## 2026-07-17 生产 API 故障排查与恢复记录
 
 ### 问题现象

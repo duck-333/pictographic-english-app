@@ -1,7 +1,7 @@
 import http from 'node:http'
 import { pathToFileURL } from 'node:url'
 
-import { createUserSessionToken, requireAdminAuth, requireUserAuth } from './auth.mjs'
+import { assertUserAuthConfig, createUserSessionToken, requireAdminAuth, requireUserAuth } from './auth.mjs'
 import { createIdentityStore } from './identity-store.mjs'
 import { createUserFavoritesStore } from './user-favorites-store.mjs'
 import { createUserRecentWordsStore } from './user-recent-words-store.mjs'
@@ -369,6 +369,7 @@ export function createApiHandler(options = {}) {
   }
   const userAuthOptions = {
     jwtSecret: options.jwtSecret,
+    nodeEnv: options.nodeEnv,
     userSessionTtlMs: options.userSessionTtlMs,
     now
   }
@@ -774,7 +775,14 @@ export function startServer(options = {}) {
   const port = Number(options.port || process.env.PORT || DEFAULT_PORT)
   const host = options.host || process.env.HOST || DEFAULT_HOST
   const store = options.store || createWordStore()
-  const server = http.createServer(createApiHandler({ store }))
+  assertUserAuthConfig({
+    jwtSecret: options.jwtSecret,
+    nodeEnv: options.nodeEnv
+  })
+  const server = http.createServer(createApiHandler({
+    ...options,
+    store
+  }))
 
   server.listen(port, host, () => {
     console.log(`Pictographic English API running at http://${host}:${port}`)

@@ -1,5 +1,24 @@
 # Documentation
 
+### 2026-07-21: production JWT_SECRET fail-closed guard
+
+Decision:
+- User session JWT signing now fails closed in production when `JWT_SECRET` is missing or empty.
+- `NODE_ENV=production` requires a private, stable `JWT_SECRET` before the API starts listening.
+- Development can still omit `JWT_SECRET`; the server uses a process-local temporary secret for local testing, so development tokens are intentionally invalid after process restart.
+- `startServer()` validates user auth configuration during startup, before opening the HTTP port.
+- `check:production` now includes a user JWT auth guard check in addition to the existing Admin API Token guard.
+- PM2 deployment must pass `NODE_ENV=production` and `JWT_SECRET` through the process environment. `pm2 describe <process-name>` should be used to confirm the effective environment after restart.
+
+Touched files:
+- `server/auth.mjs`
+- `server/index.mjs`
+- `scripts/check-production-ready.mjs`
+- `.env.example`
+- `server/README.md`
+- `security/SECURITY_HARDENING_LOG_2026-07-08.md`
+- `Documentation.md`
+
 ### 2026-07-21: Phase 2.3 learning data architecture planning
 
 Decision:

@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 
-import { DEFAULT_DEV_ADMIN_API_TOKEN, getAdminApiToken } from '../server/auth.mjs'
+import { DEFAULT_DEV_ADMIN_API_TOKEN, getAdminApiToken, getUserAuthConfig } from '../server/auth.mjs'
 import {
   PRODUCTION_WORD_API_BASE_URL,
   getWordApiBaseUrl
@@ -289,6 +289,38 @@ function checkAdminAuthGuards(errors) {
   }
 }
 
+function checkUserJwtSecretGuard(errors) {
+  let productionMissingSecretError = null
+
+  try {
+    getUserAuthConfig({
+      nodeEnv: 'production',
+      jwtSecret: ''
+    })
+  } catch (error) {
+    productionMissingSecretError = error
+  }
+
+  const productionConfigured = getUserAuthConfig({
+    nodeEnv: 'production',
+    jwtSecret: 'real-production-jwt-secret-for-check'
+  })
+  const developmentMissing = getUserAuthConfig({
+    nodeEnv: 'development',
+    jwtSecret: ''
+  })
+
+  if (!productionMissingSecretError || productionMissingSecretError.code !== 'JWT_SECRET_REQUIRED') {
+    addError(errors, 'production user JWT auth must fail closed when JWT_SECRET is missing.')
+  }
+  if (productionConfigured.jwtSecret !== 'real-production-jwt-secret-for-check') {
+    addError(errors, 'production user JWT auth must use the configured JWT_SECRET.')
+  }
+  if (developmentMissing.source !== 'development-process-secret') {
+    addError(errors, 'development user JWT auth should allow the process-local fallback secret.')
+  }
+}
+
 function checkWordDetailUsesMediaGuard(errors) {
   const sourceText = fs.readFileSync(new URL(`../${WORD_DETAIL_PATH}`, import.meta.url), 'utf8')
   if (!/const\s+ENABLE_VIDEO_MODULE\s*=\s*false/.test(sourceText)) {
@@ -344,6 +376,7 @@ function main() {
   checkIllustrationImageGuards(errors)
   checkApiBaseGuards(errors)
   checkAdminAuthGuards(errors)
+  checkUserJwtSecretGuard(errors)
   checkWordDetailUsesMediaGuard(errors)
   checkHomepageFeaturedGuards(errors)
 
@@ -362,6 +395,7 @@ function main() {
   console.log('- illustration images allow production HTTPS URLs only')
   console.log(`- production runtime uses ${PRODUCTION_WORD_API_BASE_URL}`)
   console.log('- production admin API auth rejects empty/default tokens')
+  console.log('- production user JWT auth requires JWT_SECRET')
   console.log('- homepage featured word uses the public API with published filtering')
 }
 

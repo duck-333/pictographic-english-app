@@ -43,6 +43,20 @@ npm.cmd run dev:api
 
 Production must set a private `ADMIN_API_TOKEN`. If `NODE_ENV=production` and `ADMIN_API_TOKEN` is missing, empty, or `dev-admin-token`, admin write APIs fail closed.
 
+Production user tokens also require a private, stable `JWT_SECRET`. If `NODE_ENV=production` and `JWT_SECRET` is missing or empty, the API exits during startup before listening on the HTTP port. Development can omit `JWT_SECRET`; in that case the API uses a process-local temporary secret for convenience, and tokens become invalid after process restart.
+
+For PM2 deployment, make sure the process environment includes at least:
+
+```js
+env: {
+  NODE_ENV: 'production',
+  JWT_SECRET: 'replace-with-a-private-stable-secret',
+  ADMIN_API_TOKEN: 'replace-with-a-private-admin-token'
+}
+```
+
+After changing PM2 environment variables, restart or reload the process with the updated environment and verify `/api/health`.
+
 ## Admin Unlock Flow
 
 The admin portal is protected by the same minimal Bearer token guard:
@@ -242,7 +256,9 @@ Only published word IDs can be saved. Daily rotation uses the Asia/Shanghai cale
 - The frontend may store a local development token in `localStorage` under `pictographic:adminApiToken`. Do not treat it as a real account session.
 - Do not commit real `.env` files or real `ADMIN_API_TOKEN` values.
 - Production must set `ADMIN_API_TOKEN` to a private, non-default value.
+- Production must set `NODE_ENV=production` and `JWT_SECRET` before starting the API. Missing `JWT_SECRET` fails startup intentionally.
 - Development may use `http://127.0.0.1:3001` or `http://SERVER_IP:3001`.
 - Production must use a filed HTTPS domain configured in the WeChat mini program allowed request domains.
 - `npm.cmd run check:production` blocks local HTTP API bases in production or unknown runtime.
 - `npm.cmd run check:production` also verifies that production admin auth rejects empty/default tokens.
+- `npm.cmd run check:production` also verifies that production user JWT auth rejects missing `JWT_SECRET`.
