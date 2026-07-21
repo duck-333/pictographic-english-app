@@ -11,6 +11,10 @@ const MAX_SOURCE_LENGTH = 64
 const MAX_TRANSACTION_TYPE_LENGTH = 64
 const MAX_OPERATOR_TYPE_LENGTH = 32
 const MAX_REASON_LENGTH = 512
+const REGISTRATION_BONUS_QUOTA = 30
+const REGISTRATION_BONUS_VALID_YEARS = 1
+const REGISTRATION_BONUS_SOURCE = 'registration'
+const REGISTRATION_BONUS_OPERATOR_ID = 'auth-registration'
 
 export const ENTITLEMENT_TRANSACTION_TYPES = Object.freeze({
   REGISTER_BONUS: 'REGISTER_BONUS',
@@ -73,6 +77,16 @@ function createUserEntitlementStoreError(message, options = {}) {
 
 function isDuplicateEntryError(error) {
   return Boolean(error && error.code === 'ER_DUP_ENTRY')
+}
+
+function getRegistrationBonusIdempotencyKey(userId) {
+  return `registration_bonus:${userId}`
+}
+
+function getRegistrationBonusExpiresAt(currentTime) {
+  const expiresAt = new Date(currentTime.getTime())
+  expiresAt.setFullYear(expiresAt.getFullYear() + REGISTRATION_BONUS_VALID_YEARS)
+  return expiresAt
 }
 
 function getDbConfig(options = {}) {
@@ -769,6 +783,22 @@ export function createUserEntitlementStore(options = {}) {
     }
   }
 
+  async function ensureRegistrationBonus(userId) {
+    const normalizedUserId = normalizeUserId(userId)
+    return await grantQuota({
+      userId: normalizedUserId,
+      transactionType: ENTITLEMENT_TRANSACTION_TYPES.REGISTER_BONUS,
+      amount: REGISTRATION_BONUS_QUOTA,
+      source: REGISTRATION_BONUS_SOURCE,
+      sourceId: normalizedUserId,
+      expiresAt: getRegistrationBonusExpiresAt(now()),
+      idempotencyKey: getRegistrationBonusIdempotencyKey(normalizedUserId),
+      operatorType: 'system',
+      operatorId: REGISTRATION_BONUS_OPERATOR_ID,
+      reason: 'Registration bonus complete-content access quota.'
+    })
+  }
+
   async function grantMembership(input = {}) {
     const userId = normalizeUserId(input.userId)
     const membershipType = normalizeRequiredString(input.membershipType, 'Membership type', 'MEMBERSHIP_TYPE_REQUIRED', {
@@ -1032,6 +1062,7 @@ export function createUserEntitlementStore(options = {}) {
   return {
     getUserEntitlement,
     ensureUserEntitlement,
+    ensureRegistrationBonus,
     grantQuota,
     grantMembership,
     consumeQuota

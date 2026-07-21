@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url'
 
 import { assertUserAuthConfig, createUserSessionToken, requireAdminAuth, requireUserAuth } from './auth.mjs'
 import { createIdentityStore } from './identity-store.mjs'
+import { createUserEntitlementStore } from './user-entitlement-store.mjs'
 import { createUserFavoritesStore } from './user-favorites-store.mjs'
 import { createUserRecentWordsStore } from './user-recent-words-store.mjs'
 import { createUserStore } from './user-store.mjs'
@@ -77,6 +78,15 @@ function normalizeRequestId(value) {
     .trim()
     .replace(/[^\w:.-]/g, '')
     .slice(0, 80)
+}
+
+async function ensureRegistrationBonusForUser(user, userEntitlementStore) {
+  if (!user || !userEntitlementStore) return null
+
+  const userId = String(user.id || '').trim()
+  if (!userId) return null
+
+  return await userEntitlementStore.ensureRegistrationBonus(userId)
 }
 
 const SAFE_PHONE_LOGIN_ERROR_MESSAGES = {
@@ -358,6 +368,10 @@ function summarizePublishedWords(words) {
 export function createApiHandler(options = {}) {
   const store = options.store || createWordStore()
   const userStore = options.userStore || createUserStore(options)
+  const shouldCreateDefaultUserEntitlementStore = !options.userEntitlementStore && !options.userStore && !options.identityStore
+  const userEntitlementStore = options.userEntitlementStore || (
+    shouldCreateDefaultUserEntitlementStore ? createUserEntitlementStore(options) : null
+  )
   const userFavoritesStore = options.userFavoritesStore || createUserFavoritesStore(options)
   const userRecentWordsStore = options.userRecentWordsStore || createUserRecentWordsStore(options)
   const identityStore = options.identityStore || createIdentityStore(options)
@@ -445,6 +459,7 @@ export function createApiHandler(options = {}) {
           const body = await readJsonBody(req)
           const wechatIdentity = await wechatLoginClient.code2Session(body.code)
           const user = await userStore.findOrCreateWechatUser(wechatIdentity)
+          await ensureRegistrationBonusForUser(user, userEntitlementStore)
           const session = createUserSessionToken(user.id, userAuthOptions)
 
           sendJson(res, 200, {
@@ -483,6 +498,7 @@ export function createApiHandler(options = {}) {
             unionid: wechatIdentity.unionid,
             phone: phoneIdentity
           })
+          await ensureRegistrationBonusForUser(user, userEntitlementStore)
           const session = createUserSessionToken(user.id, userAuthOptions)
 
           sendJson(res, 200, {
