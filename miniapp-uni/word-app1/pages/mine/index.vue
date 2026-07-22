@@ -40,8 +40,8 @@
 
     <view class="stats-grid">
       <view class="stat-card">
-        <text class="stat-value">{{ state.searchCount || 0 }}</text>
-        <text class="stat-label">查词次数</text>
+        <text class="stat-value">{{ quotaBalanceText }}</text>
+        <text class="stat-label">剩余查词次数</text>
       </view>
       <view class="stat-card">
         <text class="stat-value">{{ favoriteWords.length }}</text>
@@ -54,6 +54,31 @@
       <view class="stat-card">
         <text class="stat-value">{{ state.streakDays || 0 }}</text>
         <text class="stat-label">连续学习</text>
+      </view>
+    </view>
+
+    <view v-if="authLoggedIn" class="section entitlement-card">
+      <view class="section-head">
+        <text class="section-title">学习权益</text>
+        <text class="hint-text">{{ entitlementHint }}</text>
+      </view>
+      <view class="entitlement-grid">
+        <view class="entitlement-item">
+          <text class="entitlement-value">{{ quotaTotalGrantedText }}</text>
+          <text class="entitlement-label">累计获得</text>
+        </view>
+        <view class="entitlement-item">
+          <text class="entitlement-value">{{ quotaTotalConsumedText }}</text>
+          <text class="entitlement-label">已消耗</text>
+        </view>
+        <view class="entitlement-item">
+          <text class="entitlement-value">{{ membershipTypeText }}</text>
+          <text class="entitlement-label">会员类型</text>
+        </view>
+        <view class="entitlement-item">
+          <text class="entitlement-value">{{ membershipStatusText }}</text>
+          <text class="entitlement-label">会员状态</text>
+        </view>
       </view>
     </view>
 
@@ -137,6 +162,7 @@
 import BottomNav from '../../components/BottomNav.vue'
 import { loginWithWechatPhone } from '../../common/auth-api-client.js'
 import { clearAuthSession, getAuthSession } from '../../common/auth-store.js'
+import { getUserEntitlements } from '../../common/user-entitlements-api-client.js'
 import { listUserFavorites } from '../../common/user-favorites-api-client.js'
 import { listUserRecentWords } from '../../common/user-recent-words-api-client.js'
 import { fetchWordById, getCachedPublishedRemoteWordById } from '../../common/word-repository.js'
@@ -157,6 +183,10 @@ export default {
       favoriteWords: [],
       authSession: getAuthSession(),
       authLoading: false,
+      entitlement: null,
+      entitlementLoading: false,
+      entitlementLoadFailed: false,
+      entitlementLoadToken: 0,
       favoriteLoadToken: 0,
       recentLoadToken: 0
     }
@@ -191,6 +221,35 @@ export default {
       return this.authLoggedIn
         ? '学习账号已建立，后续将逐步支持学习记录跟随账号保存。'
         : '登录后，可使用学习账号保存学习进度和学习权益。'
+    },
+    quotaBalanceText() {
+      if (!this.authLoggedIn) return '--'
+      if (!this.entitlement) return this.entitlementLoading ? '...' : '--'
+      return String(this.entitlement.quotaBalance)
+    },
+    quotaTotalGrantedText() {
+      return this.entitlement ? String(this.entitlement.quotaTotalGranted) : '--'
+    },
+    quotaTotalConsumedText() {
+      return this.entitlement ? String(this.entitlement.quotaTotalConsumed) : '--'
+    },
+    membershipTypeText() {
+      const type = this.entitlement ? String(this.entitlement.membershipType || 'none') : 'none'
+      if (type === 'none') return '普通'
+      if (type === 'monthly') return '月会员'
+      return type
+    },
+    membershipStatusText() {
+      const status = this.entitlement ? String(this.entitlement.membershipStatus || 'none') : 'none'
+      if (status === 'active') return '有效'
+      if (status === 'expired') return '已过期'
+      if (status === 'cancelled') return '已取消'
+      return '未开通'
+    },
+    entitlementHint() {
+      if (this.entitlementLoading) return '同步中'
+      if (this.entitlementLoadFailed) return '加载失败'
+      return '账号权益'
     }
   },
   onShow() {
@@ -200,17 +259,23 @@ export default {
     async refreshData() {
       const favoriteLoadToken = this.favoriteLoadToken + 1
       const recentLoadToken = this.recentLoadToken + 1
+      const entitlementLoadToken = this.entitlementLoadToken + 1
       this.favoriteLoadToken = favoriteLoadToken
       this.recentLoadToken = recentLoadToken
+      this.entitlementLoadToken = entitlementLoadToken
       this.state = getUserState()
       this.authSession = getAuthSession()
       if (!this.authLoggedIn) {
+        this.entitlement = null
+        this.entitlementLoading = false
+        this.entitlementLoadFailed = false
         this.recentWords = getRecentWords()
         this.favoriteWords = []
         return
       }
 
       this.recentWords = []
+      this.refreshUserEntitlement(this.authSession, entitlementLoadToken)
       this.refreshCloudRecentWords(this.authSession, recentLoadToken)
 
       try {
@@ -225,6 +290,26 @@ export default {
             title: '收藏列表加载失败',
             icon: 'none'
           })
+        }
+      }
+    },
+    async refreshUserEntitlement(session, loadToken) {
+      this.entitlementLoading = true
+      this.entitlementLoadFailed = false
+      try {
+        const entitlement = await getUserEntitlements({ session })
+        if (this.entitlementLoadToken === loadToken && this.authLoggedIn) {
+          this.entitlement = entitlement
+          this.entitlementLoadFailed = false
+        }
+      } catch (error) {
+        if (this.entitlementLoadToken === loadToken && this.authLoggedIn) {
+          this.entitlement = null
+          this.entitlementLoadFailed = true
+        }
+      } finally {
+        if (this.entitlementLoadToken === loadToken && this.authLoggedIn) {
+          this.entitlementLoading = false
         }
       }
     },
@@ -314,6 +399,10 @@ export default {
     handleLogout() {
       clearAuthSession()
       this.authSession = null
+      this.entitlement = null
+      this.entitlementLoading = false
+      this.entitlementLoadFailed = false
+      this.entitlementLoadToken += 1
       this.favoriteLoadToken += 1
       this.recentLoadToken += 1
       this.favoriteWords = []
@@ -431,6 +520,8 @@ export default {
 
 .stat-value,
 .stat-label,
+.entitlement-value,
+.entitlement-label,
 .section-title,
 .hint-text,
 .word-name,
@@ -478,6 +569,41 @@ export default {
 .hint-text {
   color: #6baed6;
   font-size: 24rpx;
+}
+
+.entitlement-card {
+  padding: 30rpx;
+  border: 2rpx solid #dbeeff;
+  border-radius: 30rpx;
+  background: #ffffff;
+  box-shadow: 0 6rpx 18rpx rgba(14, 58, 92, 0.06);
+}
+
+.entitlement-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+}
+
+.entitlement-item {
+  flex: 0 0 calc(50% - 8rpx);
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 20rpx;
+  border-radius: 20rpx;
+  background: #f7fbff;
+}
+
+.entitlement-value {
+  color: #0e3a5c;
+  font-size: 28rpx;
+  font-weight: 900;
+}
+
+.entitlement-label {
+  margin-top: 6rpx;
+  color: #6b8aa4;
+  font-size: 22rpx;
 }
 
 .word-list {

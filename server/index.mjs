@@ -214,6 +214,76 @@ function sendUserStoreError(res, error) {
   })
 }
 
+function createUserEntitlementRequestError(message, options = {}) {
+  const error = new Error(message)
+  error.code = options.code || 'USER_ENTITLEMENT_REQUEST_ERROR'
+  error.statusCode = Number(options.statusCode || 500)
+  return error
+}
+
+function getPublicUserEntitlementError(error) {
+  const rawCode = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+
+  if (rawCode === 'USER_ENTITLEMENT_DB_CONFIG_MISSING' || rawCode === 'USER_ENTITLEMENT_DB_ERROR' || isDatabaseErrorCode(rawCode)) {
+    return {
+      statusCode: 500,
+      code: 'USER_ENTITLEMENT_DB_ERROR',
+      message: 'User entitlement database is unavailable.'
+    }
+  }
+
+  return {
+    statusCode: 500,
+    code: 'INTERNAL_SERVER_ERROR',
+    message: 'Internal server error.'
+  }
+}
+
+function sendUserEntitlementError(res, error) {
+  const publicError = getPublicUserEntitlementError(error)
+  sendJson(res, publicError.statusCode, {
+    ok: false,
+    code: publicError.code,
+    message: publicError.message
+  })
+}
+
+function toSafeEntitlementPayload(entitlement) {
+  const source = entitlement && typeof entitlement === 'object' ? entitlement : {}
+  return {
+    quotaBalance: Number(source.quotaBalance || 0),
+    quotaTotalGranted: Number(source.quotaTotalGranted || 0),
+    quotaTotalConsumed: Number(source.quotaTotalConsumed || 0),
+    membershipType: String(source.membershipType || 'none'),
+    membershipStatus: String(source.membershipStatus || 'none'),
+    membershipExpireAt: source.membershipExpireAt || null
+  }
+}
+
+async function getOrInitializeUserEntitlement(userId, userEntitlementStore) {
+  if (!userEntitlementStore) {
+    throw createUserEntitlementRequestError('User entitlement store is not available.', {
+      code: 'USER_ENTITLEMENT_STORE_UNAVAILABLE'
+    })
+  }
+
+  const existingEntitlement = await userEntitlementStore.getUserEntitlement(userId)
+  if (existingEntitlement) return existingEntitlement
+
+  const registrationBonusResult = await userEntitlementStore.ensureRegistrationBonus(userId)
+  const initializedEntitlement = registrationBonusResult && registrationBonusResult.entitlement
+    ? registrationBonusResult.entitlement
+    : await userEntitlementStore.getUserEntitlement(userId)
+
+  if (!initializedEntitlement) {
+    throw createUserEntitlementRequestError('User entitlement initialization failed.', {
+      code: 'USER_ENTITLEMENT_INITIALIZATION_FAILED'
+    })
+  }
+
+  return initializedEntitlement
+}
+
 function createUserFavoritesRequestError(message, options = {}) {
   const error = new Error(message)
   error.code = options.code || 'USER_FAVORITES_REQUEST_ERROR'
@@ -559,6 +629,40 @@ export function createApiHandler(options = {}) {
           })
         } catch (error) {
           sendUserStoreError(res, error)
+        }
+        return
+      }
+
+      if (req.method === 'GET' && pathname === '/api/user/entitlements') {
+        const authResult = requireUserAuth(req, userAuthOptions)
+        if (!authResult.ok) {
+          sendJson(res, 401, {
+            ok: false,
+            code: 'UNAUTHORIZED',
+            message: 'Unauthorized'
+          })
+          return
+        }
+
+        try {
+          const profile = await userStore.findUserProfileById(authResult.userId)
+          if (!profile) {
+            sendJson(res, 401, {
+              ok: false,
+              code: 'UNAUTHORIZED',
+              message: 'Unauthorized'
+            })
+            return
+          }
+
+          const entitlement = await getOrInitializeUserEntitlement(authResult.userId, userEntitlementStore)
+          const payload = toSafeEntitlementPayload(entitlement)
+          sendJson(res, 200, {
+            ok: true,
+            ...payload
+          })
+        } catch (error) {
+          sendUserEntitlementError(res, error)
         }
         return
       }
