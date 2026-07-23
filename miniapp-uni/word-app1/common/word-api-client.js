@@ -1,4 +1,5 @@
 import { getWordApiBaseUrl } from './api-config.js'
+import { getAuthSession } from './auth-store.js'
 
 export const WORD_API_TIMEOUT_MS = 7000
 
@@ -17,6 +18,44 @@ function createWordApiError(message, options = {}) {
   error.code = options.code || 'WORD_API_ERROR'
   error.statusCode = Number(options.statusCode || 0)
   return error
+}
+
+function normalizeClientRequestId(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^\w:.-]/g, '')
+    .slice(0, 80)
+}
+
+function getOptionalAuthorization(options = {}) {
+  const session = Object.prototype.hasOwnProperty.call(options, 'session')
+    ? options.session
+    : getAuthSession()
+  const token = session && session.token ? String(session.token).trim() : ''
+  return token ? `Bearer ${token}` : ''
+}
+
+function buildRequestHeaders(options = {}) {
+  const headers = {
+    'Content-Type': 'application/json'
+  }
+  const extraHeaders = options.header && typeof options.header === 'object' && !Array.isArray(options.header)
+    ? options.header
+    : {}
+  Object.keys(extraHeaders).forEach((key) => {
+    headers[key] = extraHeaders[key]
+  })
+
+  if (options.authorization) {
+    headers.Authorization = options.authorization
+  }
+
+  const clientRequestId = normalizeClientRequestId(options.clientRequestId)
+  if (clientRequestId) {
+    headers['X-Client-Request-Id'] = clientRequestId
+  }
+
+  return headers
 }
 
 function requestJson(path, options = {}) {
@@ -51,9 +90,7 @@ function requestJson(path, options = {}) {
       method: options.method || 'GET',
       data: options.data,
       timeout,
-      header: {
-        'Content-Type': 'application/json'
-      },
+      header: buildRequestHeaders(options),
       success: (response) => {
         const statusCode = Number(response.statusCode || 0)
         const data = response.data && typeof response.data === 'object' ? response.data : {}
@@ -62,7 +99,7 @@ function requestJson(path, options = {}) {
           return
         }
         finish(reject, createWordApiError(data.message || `Word API request failed with ${statusCode}`, {
-          code: statusCode === 404 ? 'WORD_NOT_FOUND' : 'WORD_API_RESPONSE_ERROR',
+          code: data.code || (statusCode === 404 ? 'WORD_NOT_FOUND' : 'WORD_API_RESPONSE_ERROR'),
           statusCode
         }))
       },
@@ -96,7 +133,11 @@ export function fetchServerHomepageFeaturedWord(options = {}) {
 export function fetchServerWordById(id, options = {}) {
   const wordId = String(id || '').trim()
   if (!wordId) return Promise.resolve(null)
-  return requestJson(`/api/words/${encodeURIComponent(wordId)}`, options)
+  const authorization = getOptionalAuthorization(options)
+  return requestJson(`/api/words/${encodeURIComponent(wordId)}`, {
+    ...options,
+    authorization
+  })
     .then((data) => data.word || null)
     .catch((error) => {
       if (error && error.code === 'WORD_NOT_FOUND') return null

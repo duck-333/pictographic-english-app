@@ -365,11 +365,11 @@ export function fetchHomepageFeaturedWord() {
     })
 }
 
-export function fetchWordById(id) {
+export function fetchWordById(id, options = {}) {
   if (!getWordApiBaseUrl()) {
     return Promise.resolve(getWordById(id))
   }
-  return fetchServerWordById(id)
+  return fetchServerWordById(id, options)
     .then((word) => {
       if (!word || word.status !== 'published') return null
       cacheRemoteWords([word])

@@ -301,6 +301,16 @@ import { addRecentWord, getPendingWordId, recordLearningActivity, savePendingWor
 
 const ENABLE_VIDEO_MODULE = false
 
+function createWordDetailClientRequestId() {
+  const timePart = Date.now().toString(36)
+  const randomPart = Math.random().toString(36).slice(2, 10)
+  return `worddetail-${timePart}-${randomPart}`
+}
+
+function isQuotaInsufficientError(error) {
+  return Boolean(error && error.code === 'QUOTA_INSUFFICIENT')
+}
+
 function normalizeDisplayText(value) {
   return typeof value === 'string' ? value.trim() : ''
 }
@@ -368,12 +378,14 @@ export default {
       illustrationImageFailed: false,
       loading: true,
       loadErrorMessage: '',
+      wordAccessClientRequestId: '',
       notFoundQuery: '',
       notFoundTitle: '暂未收录这个单词',
       notFoundDescription: '这个单词还没有讲解内容。'
     }
   },
   onLoad(options) {
+    this.wordAccessClientRequestId = createWordDetailClientRequestId()
     this.loadWord(options)
   },
   onUnload() {
@@ -613,12 +625,26 @@ export default {
         if (preferWordLookup) {
           remote = await fetchWordByWord(raw)
         } else {
-          remote = await fetchWordById(raw)
+          remote = await fetchWordById(raw, {
+            clientRequestId: this.wordAccessClientRequestId
+          })
           if (!remote && raw.indexOf('word-') !== 0 && raw.indexOf('node-') !== 0) {
             remote = await fetchWordByWord(raw)
           }
         }
       } catch (error) {
+        if (isQuotaInsufficientError(error)) {
+          this.notFoundTitle = '剩余查词次数不足'
+          this.notFoundDescription = '剩余查词次数不足，请购买会员或获取更多权益。'
+          if (typeof uni !== 'undefined' && uni && typeof uni.showToast === 'function') {
+            uni.showToast({
+              title: '剩余查词次数不足',
+              icon: 'none'
+            })
+          }
+          this.loading = false
+          return
+        }
         this.notFoundTitle = '暂时无法加载词条'
         this.notFoundDescription = '线上词库连接失败，请检查网络后重试。'
         this.loading = false

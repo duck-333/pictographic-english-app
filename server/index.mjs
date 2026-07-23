@@ -1,4 +1,5 @@
 import http from 'node:http'
+import crypto from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 
 import { assertUserAuthConfig, createUserSessionToken, requireAdminAuth, requireUserAuth } from './auth.mjs'
@@ -20,7 +21,7 @@ function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Request-Id',
     'Content-Type': 'application/json; charset=utf-8'
   })
   res.end(JSON.stringify(payload))
@@ -30,7 +31,7 @@ function sendOptions(res) {
   res.writeHead(204, {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Request-Id'
   })
   res.end()
 }
@@ -78,6 +79,44 @@ function normalizeRequestId(value) {
     .trim()
     .replace(/[^\w:.-]/g, '')
     .slice(0, 80)
+}
+
+function getHeaderValue(req, name) {
+  const key = String(name || '').toLowerCase()
+  const value = req && req.headers ? req.headers[key] : ''
+  if (Array.isArray(value)) return String(value[0] || '').trim()
+  return String(value || '').trim()
+}
+
+function hasAuthorizationHeader(req) {
+  return Boolean(getHeaderValue(req, 'authorization'))
+}
+
+function createContentAccessClientRequestId(req, context = {}) {
+  const clientRequestId = normalizeRequestId(getHeaderValue(req, 'x-client-request-id'))
+  if (clientRequestId) {
+    return {
+      clientRequestId,
+      fallback: false
+    }
+  }
+
+  const currentTime = context.now instanceof Date ? context.now : new Date()
+  const fallbackBucket = Math.floor(currentTime.getTime() / 60000).toString(36)
+  console.warn(
+    `content-access missing clientRequestId userId=${context.userId || ''} wordId=${context.wordId || ''}; using fallbackBucket=${fallbackBucket}`
+  )
+  return {
+    clientRequestId: `fallback:${fallbackBucket}`,
+    fallback: true
+  }
+}
+
+function createContentAccessIdempotencyKey(userId, wordId, clientRequestId) {
+  const rawKey = `content_access:${userId}:${wordId}:${clientRequestId}`
+  if (rawKey.length <= 191) return rawKey
+  const digest = crypto.createHash('sha256').update(rawKey).digest('hex')
+  return `content_access:${digest}`
 }
 
 async function ensureRegistrationBonusForUser(user, userEntitlementStore) {
@@ -517,11 +556,81 @@ export function createApiHandler(options = {}) {
           })
           return
         }
-        sendJson(res, 200, {
-          ok: true,
-          word
-        })
-        return
+
+        if (!hasAuthorizationHeader(req)) {
+          sendJson(res, 200, {
+            ok: true,
+            word
+          })
+          return
+        }
+
+        const authResult = requireUserAuth(req, userAuthOptions)
+        if (!authResult.ok) {
+          sendUserAuthError(res, authResult)
+          return
+        }
+
+        try {
+          if (!userEntitlementStore) {
+            throw createUserEntitlementRequestError('User entitlement store is not available.', {
+              code: 'USER_ENTITLEMENT_STORE_UNAVAILABLE'
+            })
+          }
+
+          const profile = await userStore.findUserProfileById(authResult.userId)
+          if (!profile) {
+            sendJson(res, 401, {
+              ok: false,
+              code: 'UNAUTHORIZED',
+              message: 'Unauthorized'
+            })
+            return
+          }
+
+          await userEntitlementStore.ensureRegistrationBonus(authResult.userId)
+          const requestIdResult = createContentAccessClientRequestId(req, {
+            userId: authResult.userId,
+            wordId: word.id,
+            now: now()
+          })
+          const quotaResult = await userEntitlementStore.consumeQuota({
+            userId: authResult.userId,
+            amount: 1,
+            rootLearningObjectId: word.id,
+            currentLearningObjectId: word.id,
+            accessContext: {
+              type: 'root',
+              entry: 'word_detail',
+              clientRequestIdSource: requestIdResult.fallback ? 'server_fallback' : 'client'
+            },
+            idempotencyKey: createContentAccessIdempotencyKey(authResult.userId, word.id, requestIdResult.clientRequestId),
+            source: 'full_content_access',
+            sourceId: word.id,
+            operatorType: 'system',
+            operatorId: 'word-detail-api'
+          })
+
+          if (!quotaResult.allowed) {
+            sendJson(res, 403, {
+              ok: false,
+              code: 'QUOTA_INSUFFICIENT',
+              message: '剩余查词次数不足',
+              remainingQuota: Number(quotaResult.remainingQuota || 0)
+            })
+            return
+          }
+
+          sendJson(res, 200, {
+            ok: true,
+            word,
+            remainingQuota: Number(quotaResult.remainingQuota ?? quotaResult.entitlement?.quotaBalance ?? 0)
+          })
+          return
+        } catch (error) {
+          sendUserEntitlementError(res, error)
+          return
+        }
       }
 
       if (req.method === 'POST' && pathname === '/api/auth/wechat-login') {
