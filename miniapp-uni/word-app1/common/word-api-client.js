@@ -133,7 +133,7 @@ export function fetchServerHomepageFeaturedWord(options = {}) {
 export function fetchServerWordById(id, options = {}) {
   const wordId = String(id || '').trim()
   if (!wordId) return Promise.resolve(null)
-  const authorization = getOptionalAuthorization(options)
+  const authorization = options.accessContent ? getOptionalAuthorization(options) : ''
   return requestJson(`/api/words/${encodeURIComponent(wordId)}`, {
     ...options,
     authorization

@@ -626,7 +626,8 @@ export default {
           remote = await fetchWordByWord(raw)
         } else {
           remote = await fetchWordById(raw, {
-            clientRequestId: this.wordAccessClientRequestId
+            clientRequestId: this.wordAccessClientRequestId,
+            accessContent: true
           })
           if (!remote && raw.indexOf('word-') !== 0 && raw.indexOf('node-') !== 0) {
             remote = await fetchWordByWord(raw)
