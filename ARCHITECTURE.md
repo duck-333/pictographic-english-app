@@ -141,3 +141,57 @@ docs/modules/user-data/user-favorites-cloud-plan.md
 - 后台管理
 - 视频功能
 - 单词数据结构
+
+## 后台额度管理模块设计
+
+日期：2026-07-23
+
+后台额度管理 MVP 用于开发测试阶段和后续运营阶段的用户权益调整。当前目标不是实现支付、会员商品或复杂运营系统，而是让管理员可以基于现有用户权益模型，对指定用户进行额度增加或扣除，并保留完整可审计记录。
+
+### 与现有权益表的关系
+
+当前用户权益系统继续保持两层模型：
+
+```text
+entitlement_transactions = 权益事实流水
+user_entitlements = 当前权益快照
+```
+
+后台额度管理必须复用该模型：
+
+- 管理员增加额度时，写入一条 `entitlement_transactions` 流水，并同步更新 `user_entitlements` 快照。
+- 管理员扣除额度时，写入一条 `entitlement_transactions` 流水，并同步更新 `user_entitlements` 快照。
+- `user_entitlements.quota_balance` 只作为读取优化，不作为管理员操作的唯一事实来源。
+- 不允许无流水地直接修改 `quota_balance` 作为主要方案。
+
+### 管理员操作额度流程
+
+管理员增加额度：
+
+```text
+管理员登录后台
+  -> 查询用户
+  -> 输入增加额度、原因
+  -> 服务端校验管理员身份
+  -> 写 entitlement_transactions: ADMIN_GRANT
+  -> 更新 user_entitlements 快照
+  -> 返回用户最新额度
+```
+
+管理员扣除额度：
+
+```text
+管理员登录后台
+  -> 查询用户
+  -> 输入扣除额度、原因
+  -> 服务端校验管理员身份
+  -> 写 entitlement_transactions: ADMIN_DEDUCT
+  -> 更新 user_entitlements 快照
+  -> 返回用户最新额度
+```
+
+### 管理原则
+
+- 所有后台额度调整都必须记录 `operator_type`、`operator_id` 和 `reason`。
+- 后台只管理用户权益，不直接修改微信登录、收藏、最近学习或内容访问记录。
+- 后续购买会员、充值、活动赠送、兑换码等商业化能力，应继续通过权益流水解释用户权益变化。
