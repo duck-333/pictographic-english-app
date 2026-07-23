@@ -277,3 +277,72 @@ export function saveAdminHomepageFeatured(config, options = {}) {
       return data
     })
 }
+
+function requestAdminJson(path, options = {}) {
+  if (typeof fetch !== 'function') {
+    return Promise.reject(new Error('Admin API is not available in this runtime.'))
+  }
+
+  const requestOptions = {
+    method: options.method || 'GET',
+    headers: buildAdminHeaders(options)
+  }
+  if (Object.prototype.hasOwnProperty.call(options, 'data')) {
+    requestOptions.body = JSON.stringify(options.data || {})
+  }
+
+  return fetch(buildAdminApiUrl(path, options), requestOptions)
+    .then((response) => response.json().catch(() => ({})).then((data) => ({ response, data })))
+    .then(({ response, data }) => {
+      if (!response.ok || data.ok === false) {
+        throw createAdminApiError(response, data)
+      }
+      return data
+    })
+}
+
+export function searchAdminEntitlementUsers(query, options = {}) {
+  const keyword = String(query || '').trim()
+  const suffix = keyword ? `?q=${encodeURIComponent(keyword)}` : ''
+  return requestAdminJson(`/api/admin/entitlements/users${suffix}`, options)
+    .then((data) => ({
+      users: Array.isArray(data.users) ? data.users : [],
+      count: Number(data.count || 0)
+    }))
+}
+
+export function getAdminUserEntitlement(userId, options = {}) {
+  const id = String(userId || '').trim()
+  if (!id) return Promise.reject(new Error('User id is required.'))
+  return requestAdminJson(`/api/admin/entitlements/users/${encodeURIComponent(id)}`, options)
+}
+
+export function grantAdminUserQuota(userId, payload = {}, options = {}) {
+  const id = String(userId || '').trim()
+  if (!id) return Promise.reject(new Error('User id is required.'))
+  return requestAdminJson(`/api/admin/entitlements/users/${encodeURIComponent(id)}/grant`, {
+    ...options,
+    method: 'POST',
+    data: payload
+  })
+}
+
+export function deductAdminUserQuota(userId, payload = {}, options = {}) {
+  const id = String(userId || '').trim()
+  if (!id) return Promise.reject(new Error('User id is required.'))
+  return requestAdminJson(`/api/admin/entitlements/users/${encodeURIComponent(id)}/deduct`, {
+    ...options,
+    method: 'POST',
+    data: payload
+  })
+}
+
+export function listAdminUserEntitlementTransactions(userId, options = {}) {
+  const id = String(userId || '').trim()
+  if (!id) return Promise.reject(new Error('User id is required.'))
+  return requestAdminJson(`/api/admin/entitlements/users/${encodeURIComponent(id)}/transactions`, options)
+    .then((data) => ({
+      transactions: Array.isArray(data.transactions) ? data.transactions : [],
+      count: Number(data.count || 0)
+    }))
+}

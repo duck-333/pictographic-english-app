@@ -599,7 +599,196 @@
 		</view>
 		</view>
 
-		<view v-else class="admin-view dashboard-view">
+		<view v-else-if="activeAdminView === 'entitlements'" class="admin-view entitlement-view">
+			<view class="entitlement-hero panel">
+				<view>
+					<view class="eyebrow entitlement-kicker">Entitlement Management</view>
+					<text class="entitlement-title">用户权益管理</text>
+					<text class="entitlement-subtitle">
+						在现有后台登录体系下查询用户额度、提交管理员调整，并保留权益流水作为审计依据。
+					</text>
+				</view>
+				<view class="entitlement-status-pill">ADMIN_GRANT / ADMIN_DEDUCT</view>
+			</view>
+
+			<view class="entitlement-search-card panel">
+				<view class="entitlement-search-row">
+					<input
+						v-model="entitlementManagement.keyword"
+						class="search-input entitlement-search-input"
+						placeholder="输入手机号或 user_id"
+						confirm-type="search"
+						@confirm="searchEntitlementUsers"
+					/>
+					<button class="search-button" :disabled="entitlementManagement.loading" @click="searchEntitlementUsers">
+						{{ entitlementManagement.loading ? '查询中...' : '查询' }}
+					</button>
+				</view>
+				<text class="entitlement-message">{{ entitlementManagement.message }}</text>
+			</view>
+
+			<view class="entitlement-layout">
+				<view class="panel entitlement-users-panel">
+					<view class="panel-head">
+						<view>
+							<text class="panel-title">用户搜索结果</text>
+							<text class="panel-note">按手机号或 user_id 查询，只能在管理员登录后访问。</text>
+						</view>
+					</view>
+					<view class="entitlement-user-list">
+						<button
+							v-for="user in entitlementManagement.users"
+							:key="user.id"
+							:class="['entitlement-user-row', entitlementManagement.selectedUser && entitlementManagement.selectedUser.id === user.id ? 'active' : '']"
+							@click="selectEntitlementUser(user)"
+						>
+							<view>
+								<text class="entitlement-user-main">user_id: {{ user.id }}</text>
+								<text class="entitlement-user-sub">手机号：{{ user.phoneMasked }}</text>
+							</view>
+							<text class="entitlement-user-status">{{ user.status }}</text>
+						</button>
+						<view v-if="!entitlementManagement.users.length" class="entitlement-empty">
+							输入手机号或 user_id 查询用户。
+						</view>
+					</view>
+				</view>
+
+				<view class="panel entitlement-detail-panel">
+					<view class="panel-head">
+						<view>
+							<text class="panel-title">用户权益详情</text>
+							<text class="panel-note">余额读取 user_entitlements 快照，调整操作由后端生成 entitlement_transactions。</text>
+						</view>
+					</view>
+
+					<view v-if="entitlementManagement.selectedUser" class="entitlement-user-profile">
+						<view class="entitlement-profile-grid">
+							<view>
+								<text class="entitlement-field-label">用户 ID</text>
+								<text class="entitlement-field-value">{{ entitlementManagement.selectedUser.id }}</text>
+							</view>
+							<view>
+								<text class="entitlement-field-label">手机号</text>
+								<text class="entitlement-field-value">{{ entitlementManagement.selectedUser.phoneMasked }}</text>
+							</view>
+							<view>
+								<text class="entitlement-field-label">微信绑定</text>
+								<text class="entitlement-field-value">{{ entitlementManagement.selectedUser.hasWechatBinding ? '已绑定' : '未确认' }}</text>
+							</view>
+							<view>
+								<text class="entitlement-field-label">账号状态</text>
+								<text class="entitlement-field-value">{{ entitlementManagement.selectedUser.status }}</text>
+							</view>
+						</view>
+					</view>
+
+					<view v-if="entitlementManagement.entitlement" class="entitlement-summary-grid">
+						<view class="entitlement-summary-card accent">
+							<text class="entitlement-summary-value">{{ entitlementManagement.entitlement.quotaBalance }}</text>
+							<text class="entitlement-summary-label">当前剩余查词次数</text>
+						</view>
+						<view class="entitlement-summary-card">
+							<text class="entitlement-summary-value">{{ entitlementManagement.entitlement.quotaTotalConsumed }}</text>
+							<text class="entitlement-summary-label">已使用次数</text>
+						</view>
+						<view class="entitlement-summary-card">
+							<text class="entitlement-summary-value">{{ entitlementManagement.entitlement.quotaTotalGranted }}</text>
+							<text class="entitlement-summary-label">累计获得次数</text>
+						</view>
+						<view class="entitlement-summary-card">
+							<text class="entitlement-summary-value">{{ entitlementManagement.entitlement.membershipStatus }}</text>
+							<text class="entitlement-summary-label">权益状态</text>
+						</view>
+					</view>
+					<view v-else class="entitlement-empty detail-empty">
+						选择用户后显示当前权益快照。
+					</view>
+
+					<view class="entitlement-operation-card">
+						<view class="operation-mode-row">
+							<button
+								:class="['operation-mode-button', entitlementManagement.operationType === 'grant' ? 'active' : '']"
+								@click="setEntitlementOperationType('grant')"
+							>
+								增加额度
+							</button>
+							<button
+								:class="['operation-mode-button danger', entitlementManagement.operationType === 'deduct' ? 'active' : '']"
+								@click="setEntitlementOperationType('deduct')"
+							>
+								扣除额度
+							</button>
+						</view>
+						<view class="entitlement-form-grid">
+							<label class="entitlement-form-field">
+								<text>额度次数</text>
+								<input
+									v-model="entitlementManagement.amount"
+									type="number"
+									class="entitlement-form-input"
+									placeholder="请输入正整数"
+								/>
+							</label>
+							<label class="entitlement-form-field reason-field">
+								<text>操作原因</text>
+								<textarea
+									v-model="entitlementManagement.reason"
+									class="entitlement-reason-input"
+									placeholder="例如：测试账号补充额度"
+								/>
+							</label>
+						</view>
+						<button
+							class="publish-button entitlement-submit-button"
+							:disabled="entitlementManagement.adjusting || !entitlementManagement.selectedUser"
+							@click="submitEntitlementAdjustment"
+						>
+							{{ entitlementManagement.adjusting ? '提交中...' : '提交额度调整' }}
+						</button>
+						<text v-if="entitlementManagement.lastResult" class="entitlement-result">{{ entitlementManagement.lastResult }}</text>
+					</view>
+				</view>
+			</view>
+
+			<view class="panel entitlement-transactions-panel">
+				<view class="panel-head">
+					<view>
+						<text class="panel-title">权益流水记录</text>
+						<text class="panel-note">后续接口实现后展示 REGISTER_BONUS、CONTENT_ACCESS、ADMIN_GRANT、ADMIN_DEDUCT 等流水。</text>
+					</view>
+				</view>
+				<view class="entitlement-transaction-table">
+					<view class="entitlement-transaction-row header">
+						<text>时间</text>
+						<text>类型</text>
+						<text>变动</text>
+						<text>余额</text>
+						<text>来源/原因</text>
+						<text>操作人</text>
+					</view>
+					<view
+						v-for="transaction in entitlementManagement.transactions"
+						:key="transaction.id"
+						class="entitlement-transaction-row"
+					>
+						<text>{{ formatAdminDate(transaction.createdAt) }}</text>
+						<text>{{ transaction.transactionType }}</text>
+						<text :class="['transaction-amount', getTransactionAmountClass(transaction)]">
+							{{ formatTransactionAmount(transaction) }}
+						</text>
+						<text>{{ transaction.balanceAfter }}</text>
+						<text>{{ transaction.reason || transaction.source || '未记录' }}</text>
+						<text>{{ transaction.operatorType || 'system' }} {{ transaction.operatorId || '' }}</text>
+					</view>
+					<view v-if="!entitlementManagement.transactions.length" class="entitlement-empty">
+						暂无权益流水。查询用户后会从后端接口加载。
+					</view>
+				</view>
+			</view>
+		</view>
+
+		<view v-else-if="activeAdminView === 'dashboard'" class="admin-view dashboard-view">
 			<view class="dashboard-hero panel">
 				<view>
 					<view class="eyebrow dashboard-kicker">Dashboard Preview</view>
@@ -815,12 +1004,17 @@
 <script>
 import {
 	checkAdminAuth,
+	deductAdminUserQuota,
 	getAdminApiToken,
 	getAdminHomepageFeatured,
+	getAdminUserEntitlement,
+	grantAdminUserQuota,
+	listAdminUserEntitlementTransactions,
 	getPublicWordFromServer,
 	saveAdminApiToken,
 	saveAdminHomepageFeatured,
 	saveAdminWordToServer,
+	searchAdminEntitlementUsers,
 	searchPublicWordsFromServer
 } from '../../common/api-client.js'
 
@@ -918,7 +1112,8 @@ export default {
 			activeAdminView: 'workbench',
 			adminViews: [
 				{ label: '内容上传工作台', value: 'workbench', description: '词条、音频、视频和发布状态管理' },
-				{ label: '后台数据看板', value: 'dashboard', description: '用户、搜索、收藏和行为数据概览' }
+				{ label: '后台数据看板', value: 'dashboard', description: '用户、搜索、收藏和行为数据概览' },
+				{ label: '用户权益管理', value: 'entitlements', description: '用户额度、调整和流水' }
 			],
 			dashboardSummaryCards: [
 				{ label: '今日新增用户', value: '待接入', note: '等待 openid 登录和用户表' },
@@ -953,6 +1148,20 @@ export default {
 				currentWord: null,
 				source: 'empty',
 				search: ''
+			},
+			entitlementManagement: {
+				keyword: '',
+				loading: false,
+				adjusting: false,
+				message: '输入手机号或 user_id 查询用户权益。',
+				users: [],
+				selectedUser: null,
+				entitlement: null,
+				transactions: [],
+				operationType: 'grant',
+				amount: '',
+				reason: '',
+				lastResult: ''
 			},
 			keywordDraft: '',
 			keyword: '',
@@ -1292,9 +1501,226 @@ export default {
 	},
 	methods: {
 		switchAdminView(view) {
-			this.activeAdminView = view === 'dashboard' ? 'dashboard' : 'workbench'
+			const allowedViews = ['workbench', 'dashboard', 'entitlements']
+			this.activeAdminView = allowedViews.indexOf(view) > -1 ? view : 'workbench'
 			if (this.activeAdminView === 'dashboard' && this.adminUnlocked) {
 				this.loadHomepageFeaturedConfig()
+			}
+		},
+		getAdminRequestOptions() {
+			return {
+				adminApiToken: this.adminApiTokenDraft
+			}
+		},
+		normalizeEntitlementUser(user) {
+			const source = user && typeof user === 'object' && !Array.isArray(user) ? user : {}
+			const id = source.id || source.userId || source.user_id || ''
+			const phoneMasked = source.phoneMasked || source.phone_masked || source.maskedPhone || source.masked_phone || source.phone || ''
+			return {
+				id: id ? String(id) : '',
+				phoneMasked: phoneMasked ? String(phoneMasked) : '未提供',
+				status: source.status || source.userStatus || source.user_status || '未知',
+				createdAt: source.createdAt || source.created_at || '',
+				hasWechatBinding: !!(source.hasWechatBinding || source.has_wechat_binding || source.wechatOpenid || source.openid),
+				hasPhoneBinding: !!(source.hasPhoneBinding || source.has_phone_binding || phoneMasked)
+			}
+		},
+		normalizeEntitlementSnapshot(entitlement) {
+			const source = entitlement && typeof entitlement === 'object' && !Array.isArray(entitlement) ? entitlement : {}
+			const quotaBalance = source.quotaBalance !== undefined ? source.quotaBalance : source.quota_balance
+			const quotaTotalGranted = source.quotaTotalGranted !== undefined ? source.quotaTotalGranted : source.quota_total_granted
+			const quotaTotalConsumed = source.quotaTotalConsumed !== undefined ? source.quotaTotalConsumed : source.quota_total_consumed
+			const quotaTotalExpired = source.quotaTotalExpired !== undefined ? source.quotaTotalExpired : source.quota_total_expired
+			return {
+				quotaBalance: Number(quotaBalance || 0),
+				quotaTotalGranted: Number(quotaTotalGranted || 0),
+				quotaTotalConsumed: Number(quotaTotalConsumed || 0),
+				quotaTotalExpired: Number(quotaTotalExpired || 0),
+				membershipType: source.membershipType || source.membership_type || 'none',
+				membershipStatus: source.membershipStatus || source.membership_status || 'none',
+				membershipExpireAt: source.membershipExpireAt || source.membership_expire_at || ''
+			}
+		},
+		normalizeEntitlementTransaction(transaction) {
+			const source = transaction && typeof transaction === 'object' && !Array.isArray(transaction) ? transaction : {}
+			const balanceAfter = source.balanceAfter !== undefined ? source.balanceAfter : source.balance_after
+			return {
+				id: source.id || source.transactionId || source.transaction_id || source.idempotencyKey || source.idempotency_key || '',
+				transactionType: source.transactionType || source.transaction_type || 'UNKNOWN',
+				amount: Number(source.amount || 0),
+				balanceAfter: balanceAfter !== undefined ? balanceAfter : '',
+				source: source.source || '',
+				reason: source.reason || '',
+				operatorType: source.operatorType || source.operator_type || '',
+				operatorId: source.operatorId || source.operator_id || '',
+				createdAt: source.createdAt || source.created_at || ''
+			}
+		},
+		extractEntitlementSnapshot(data) {
+			if (data && data.entitlement) return data.entitlement
+			if (data && data.userEntitlement) return data.userEntitlement
+			return data || {}
+		},
+		formatAdminDate(value) {
+			if (!value) return '未设置'
+			const date = new Date(value)
+			if (Number.isNaN(date.getTime())) return String(value)
+			const year = date.getFullYear()
+			const month = String(date.getMonth() + 1).padStart(2, '0')
+			const day = String(date.getDate()).padStart(2, '0')
+			const hour = String(date.getHours()).padStart(2, '0')
+			const minute = String(date.getMinutes()).padStart(2, '0')
+			return `${year}-${month}-${day} ${hour}:${minute}`
+		},
+		formatTransactionAmount(transaction) {
+			const amount = Number(transaction && transaction.amount || 0)
+			if (amount > 0) return `+${amount}`
+			return String(amount)
+		},
+		getTransactionAmountClass(transaction) {
+			const amount = Number(transaction && transaction.amount || 0)
+			if (amount > 0) return 'positive'
+			if (amount < 0) return 'negative'
+			return 'neutral'
+		},
+		handleEntitlementAdminError(error, fallbackMessage) {
+			if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+				this.handleAdminUnauthorized()
+				return
+			}
+			this.entitlementManagement.message = error && error.message ? error.message : fallbackMessage
+			uni.showModal({
+				title: '用户权益管理失败',
+				content: this.entitlementManagement.message,
+				showCancel: false
+			})
+		},
+		async searchEntitlementUsers() {
+			if (!this.adminUnlocked) {
+				this.handleAdminUnauthorized()
+				return
+			}
+			const keyword = String(this.entitlementManagement.keyword || '').trim()
+			if (!keyword) {
+				this.entitlementManagement.message = '请输入手机号或 user_id 后再查询。'
+				uni.showToast({ title: '请输入查询条件', icon: 'none' })
+				return
+			}
+
+			this.entitlementManagement.loading = true
+			this.entitlementManagement.message = '正在查询用户权益...'
+			this.entitlementManagement.lastResult = ''
+			try {
+				const result = await searchAdminEntitlementUsers(keyword, this.getAdminRequestOptions())
+				const users = Array.isArray(result.users) ? result.users.map((item) => this.normalizeEntitlementUser(item)) : []
+				this.entitlementManagement.users = users
+				this.entitlementManagement.selectedUser = null
+				this.entitlementManagement.entitlement = null
+				this.entitlementManagement.transactions = []
+				if (!users.length) {
+					this.entitlementManagement.message = '未找到匹配用户。'
+					return
+				}
+				this.entitlementManagement.message = `找到 ${users.length} 个匹配用户。`
+				await this.selectEntitlementUser(users[0], { keepLoading: true })
+			} catch (error) {
+				this.handleEntitlementAdminError(error, '用户权益查询失败。')
+			} finally {
+				this.entitlementManagement.loading = false
+			}
+		},
+		async selectEntitlementUser(user, options = {}) {
+			const normalized = this.normalizeEntitlementUser(user)
+			if (!normalized.id) {
+				this.entitlementManagement.message = '用户记录缺少 user_id，无法加载权益。'
+				return
+			}
+			if (!options.keepLoading) {
+				this.entitlementManagement.loading = true
+			}
+			this.entitlementManagement.selectedUser = normalized
+			this.entitlementManagement.entitlement = null
+			this.entitlementManagement.transactions = []
+			this.entitlementManagement.lastResult = ''
+			this.entitlementManagement.message = `正在加载 user_id=${normalized.id} 的权益数据...`
+			try {
+				await this.loadSelectedUserEntitlement()
+				await this.loadSelectedUserEntitlementTransactions()
+				this.entitlementManagement.message = `已加载 user_id=${normalized.id} 的权益数据。`
+			} catch (error) {
+				this.handleEntitlementAdminError(error, '用户权益数据加载失败。')
+			} finally {
+				if (!options.keepLoading) {
+					this.entitlementManagement.loading = false
+				}
+			}
+		},
+		async loadSelectedUserEntitlement() {
+			const user = this.entitlementManagement.selectedUser
+			if (!user || !user.id) return
+			const result = await getAdminUserEntitlement(user.id, this.getAdminRequestOptions())
+			if (result && result.user) {
+				this.entitlementManagement.selectedUser = this.normalizeEntitlementUser(result.user)
+			}
+			this.entitlementManagement.entitlement = this.normalizeEntitlementSnapshot(this.extractEntitlementSnapshot(result))
+		},
+		async loadSelectedUserEntitlementTransactions() {
+			const user = this.entitlementManagement.selectedUser
+			if (!user || !user.id) return
+			const result = await listAdminUserEntitlementTransactions(user.id, this.getAdminRequestOptions())
+			this.entitlementManagement.transactions = Array.isArray(result.transactions)
+				? result.transactions.map((item) => this.normalizeEntitlementTransaction(item))
+				: []
+		},
+		setEntitlementOperationType(type) {
+			this.entitlementManagement.operationType = type === 'deduct' ? 'deduct' : 'grant'
+			this.entitlementManagement.lastResult = ''
+		},
+		async submitEntitlementAdjustment() {
+			if (!this.adminUnlocked) {
+				this.handleAdminUnauthorized()
+				return
+			}
+			const user = this.entitlementManagement.selectedUser
+			if (!user || !user.id) {
+				uni.showToast({ title: '请先选择用户', icon: 'none' })
+				return
+			}
+			const amount = Number(this.entitlementManagement.amount)
+			const reason = String(this.entitlementManagement.reason || '').trim()
+			if (!Number.isFinite(amount) || amount <= 0 || Math.floor(amount) !== amount) {
+				uni.showToast({ title: '请输入正整数额度', icon: 'none' })
+				return
+			}
+			if (!reason) {
+				uni.showToast({ title: '请填写操作原因', icon: 'none' })
+				return
+			}
+
+			this.entitlementManagement.adjusting = true
+			this.entitlementManagement.lastResult = ''
+			const payload = {
+				amount,
+				reason,
+				source: 'admin_portal',
+				operatorType: 'admin'
+			}
+			try {
+				const action = this.entitlementManagement.operationType === 'deduct'
+					? deductAdminUserQuota
+					: grantAdminUserQuota
+				await action(user.id, payload, this.getAdminRequestOptions())
+				const operationText = this.entitlementManagement.operationType === 'deduct' ? '扣除额度' : '增加额度'
+				this.entitlementManagement.lastResult = `${operationText}已提交。`
+				this.entitlementManagement.amount = ''
+				this.entitlementManagement.reason = ''
+				await this.loadSelectedUserEntitlement()
+				await this.loadSelectedUserEntitlementTransactions()
+				uni.showToast({ title: '操作已提交', icon: 'success' })
+			} catch (error) {
+				this.handleEntitlementAdminError(error, '额度调整失败。')
+			} finally {
+				this.entitlementManagement.adjusting = false
 			}
 		},
 		applyHomepageFeaturedResponse(data, options = {}) {
@@ -5320,6 +5746,351 @@ button::after {
 	color: #a65a00;
 	font-size: 13px;
 	font-weight: 800;
+}
+
+.entitlement-view {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.entitlement-hero,
+.entitlement-search-row,
+.entitlement-layout,
+.entitlement-profile-grid,
+.entitlement-summary-grid,
+.operation-mode-row,
+.entitlement-form-grid,
+.entitlement-transaction-row {
+	display: flex;
+}
+
+.entitlement-hero {
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 18px;
+	border: 1px solid rgba(14, 58, 92, 0.08);
+}
+
+.entitlement-kicker {
+	color: #5c8198;
+}
+
+.entitlement-title {
+	display: block;
+	font-size: 28px;
+	font-weight: 900;
+	color: #0e3a5c;
+}
+
+.entitlement-subtitle {
+	display: block;
+	max-width: 820px;
+	margin-top: 8px;
+	color: #66869b;
+	font-size: 14px;
+	line-height: 1.8;
+}
+
+.entitlement-status-pill {
+	flex-shrink: 0;
+	padding: 8px 14px;
+	border-radius: 999px;
+	background: #eef8f2;
+	color: #1f7a45;
+	font-size: 13px;
+	font-weight: 800;
+}
+
+.entitlement-search-card,
+.entitlement-users-panel,
+.entitlement-detail-panel,
+.entitlement-transactions-panel {
+	border: 1px solid rgba(14, 58, 92, 0.08);
+}
+
+.entitlement-search-row {
+	align-items: center;
+	gap: 12px;
+}
+
+.entitlement-search-input {
+	flex: 1;
+	min-width: 0;
+}
+
+.entitlement-message,
+.entitlement-result {
+	display: block;
+	margin-top: 12px;
+	color: #66869b;
+	font-size: 13px;
+}
+
+.entitlement-layout {
+	align-items: flex-start;
+	gap: 16px;
+}
+
+.entitlement-users-panel {
+	width: 320px;
+	flex-shrink: 0;
+}
+
+.entitlement-detail-panel {
+	flex: 1;
+	min-width: 0;
+}
+
+.entitlement-user-list {
+	margin-top: 16px;
+}
+
+.entitlement-user-row {
+	display: flex;
+	width: 100%;
+	margin: 0;
+	padding: 14px;
+	justify-content: space-between;
+	align-items: center;
+	gap: 12px;
+	border: 1px solid #e0eef6;
+	border-radius: 16px;
+	background: #f9fcfe;
+	text-align: left;
+}
+
+.entitlement-user-row + .entitlement-user-row {
+	margin-top: 10px;
+}
+
+.entitlement-user-row.active {
+	border-color: #fe8500;
+	background: #fff8e8;
+	box-shadow: 0 10px 24px rgba(254, 133, 0, 0.12);
+}
+
+.entitlement-user-main,
+.entitlement-user-sub,
+.entitlement-user-status,
+.entitlement-field-label,
+.entitlement-field-value,
+.entitlement-summary-value,
+.entitlement-summary-label {
+	display: block;
+}
+
+.entitlement-user-main {
+	color: #0e3a5c;
+	font-size: 14px;
+	font-weight: 900;
+}
+
+.entitlement-user-sub,
+.entitlement-user-status {
+	margin-top: 4px;
+	color: #7892a3;
+	font-size: 12px;
+}
+
+.entitlement-user-status {
+	margin-top: 0;
+	flex-shrink: 0;
+}
+
+.entitlement-empty {
+	padding: 18px;
+	border: 1px dashed #cfe3ef;
+	border-radius: 16px;
+	background: #f9fcfe;
+	color: #7892a3;
+	font-size: 13px;
+	line-height: 1.6;
+}
+
+.detail-empty {
+	margin-top: 16px;
+}
+
+.entitlement-user-profile {
+	margin-top: 16px;
+	padding: 16px;
+	border: 1px solid #e0eef6;
+	border-radius: 18px;
+	background: #f9fcfe;
+}
+
+.entitlement-profile-grid,
+.entitlement-summary-grid {
+	display: grid;
+	gap: 12px;
+}
+
+.entitlement-profile-grid {
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.entitlement-field-label {
+	color: #7892a3;
+	font-size: 12px;
+}
+
+.entitlement-field-value {
+	margin-top: 6px;
+	color: #12344d;
+	font-size: 14px;
+	font-weight: 800;
+	word-break: break-all;
+}
+
+.entitlement-summary-grid {
+	margin-top: 16px;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.entitlement-summary-card {
+	padding: 18px;
+	border: 1px solid #e0eef6;
+	border-radius: 18px;
+	background: #fff;
+}
+
+.entitlement-summary-card.accent {
+	border-color: rgba(254, 133, 0, 0.26);
+	background: #fff8e8;
+}
+
+.entitlement-summary-value {
+	color: #0e3a5c;
+	font-size: 26px;
+	font-weight: 900;
+}
+
+.entitlement-summary-label {
+	margin-top: 6px;
+	color: #7892a3;
+	font-size: 12px;
+}
+
+.entitlement-operation-card {
+	margin-top: 16px;
+	padding: 16px;
+	border: 1px solid #e0eef6;
+	border-radius: 18px;
+	background: #f9fcfe;
+}
+
+.operation-mode-row {
+	gap: 10px;
+}
+
+.operation-mode-button {
+	margin: 0;
+	padding: 0 18px;
+	border: 1px solid #cfe7f4;
+	border-radius: 999px;
+	background: #fff;
+	color: #315c82;
+	font-size: 14px;
+	line-height: 38px;
+}
+
+.operation-mode-button.active {
+	border-color: #2f9f62;
+	background: #eef8f2;
+	color: #1f7a45;
+	font-weight: 800;
+}
+
+.operation-mode-button.danger.active {
+	border-color: #d8504a;
+	background: #fff0ef;
+	color: #b03934;
+}
+
+.entitlement-form-grid {
+	margin-top: 14px;
+	gap: 12px;
+}
+
+.entitlement-form-field {
+	flex: 1;
+	min-width: 0;
+	color: #315c82;
+	font-size: 13px;
+	font-weight: 800;
+}
+
+.reason-field {
+	flex: 2;
+}
+
+.entitlement-form-input,
+.entitlement-reason-input {
+	box-sizing: border-box;
+	width: 100%;
+	margin-top: 8px;
+	border: 1px solid #cfe3ef;
+	border-radius: 14px;
+	background: #fff;
+	color: #12344d;
+	font-size: 14px;
+}
+
+.entitlement-form-input {
+	height: 42px;
+	padding: 0 14px;
+}
+
+.entitlement-reason-input {
+	min-height: 74px;
+	padding: 12px 14px;
+	line-height: 1.6;
+}
+
+.entitlement-submit-button {
+	margin-top: 14px;
+}
+
+.entitlement-transaction-table {
+	margin-top: 16px;
+	overflow-x: auto;
+}
+
+.entitlement-transaction-row {
+	display: grid;
+	grid-template-columns: 1.2fr 1.2fr 0.7fr 0.7fr 1.5fr 1fr;
+	gap: 12px;
+	align-items: center;
+	min-width: 920px;
+	padding: 12px 14px;
+	border-bottom: 1px solid #e6f0f6;
+	color: #315c82;
+	font-size: 13px;
+}
+
+.entitlement-transaction-row.header {
+	border-radius: 14px;
+	background: #f4f9fc;
+	color: #7892a3;
+	font-size: 12px;
+	font-weight: 900;
+}
+
+.transaction-amount {
+	font-weight: 900;
+}
+
+.transaction-amount.positive {
+	color: #1f7a45;
+}
+
+.transaction-amount.negative {
+	color: #b03934;
+}
+
+.transaction-amount.neutral {
+	color: #7892a3;
 }
 
 .dashboard-notice {
