@@ -498,7 +498,6 @@ export function createUserEntitlementStore(options = {}) {
       typeClause = ' AND transaction_type = ?'
       params.push(transactionType)
     }
-    params.push(limit, offset)
 
     const connection = await getPool().getConnection()
     try {
@@ -509,7 +508,7 @@ export function createUserEntitlementStore(options = {}) {
            FROM ${quoteIdentifier(ENTITLEMENT_TRANSACTIONS_TABLE)}
           WHERE user_id = ?${typeClause}
           ORDER BY created_at DESC, id DESC
-          LIMIT ? OFFSET ?`,
+          LIMIT ${limit} OFFSET ${offset}`,
         params
       )
       return (Array.isArray(rows) ? rows : []).map((row) => mapTransactionRow(row)).filter(Boolean)
