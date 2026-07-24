@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url'
 
 import { assertUserAuthConfig, createUserSessionToken, requireAdminAuth, requireUserAuth } from './auth.mjs'
 import { createIdentityStore } from './identity-store.mjs'
-import { createUserEntitlementStore } from './user-entitlement-store.mjs'
+import { createUserEntitlementStore, ENTITLEMENT_TRANSACTION_TYPES } from './user-entitlement-store.mjs'
 import { createUserFavoritesStore } from './user-favorites-store.mjs'
 import { createUserRecentWordsStore } from './user-recent-words-store.mjs'
 import { createUserStore } from './user-store.mjs'
@@ -297,6 +297,173 @@ function toSafeEntitlementPayload(entitlement) {
     membershipStatus: String(source.membershipStatus || 'none'),
     membershipExpireAt: source.membershipExpireAt || null
   }
+}
+
+function toSafeAdminUserPayload(user) {
+  const source = user && typeof user === 'object' ? user : {}
+  return {
+    id: String(source.id || ''),
+    phoneMasked: String(source.phoneMasked || ''),
+    status: String(source.status || 'active'),
+    createdAt: source.createdAt || null,
+    hasWechatBinding: Boolean(source.hasWechatBinding),
+    hasPhoneBinding: Boolean(source.hasPhoneBinding)
+  }
+}
+
+function toSafeAdminEntitlementPayload(entitlement) {
+  const source = entitlement && typeof entitlement === 'object' ? entitlement : {}
+  return {
+    ...toSafeEntitlementPayload(source),
+    quotaTotalExpired: Number(source.quotaTotalExpired || 0),
+    membershipStartedAt: source.membershipStartedAt || null,
+    createdAt: source.createdAt || null,
+    updatedAt: source.updatedAt || null
+  }
+}
+
+function toSafeAdminEntitlementTransactionPayload(transaction) {
+  const source = transaction && typeof transaction === 'object' ? transaction : {}
+  return {
+    id: source.id === undefined || source.id === null ? '' : String(source.id),
+    transactionId: String(source.transactionId || ''),
+    userId: String(source.userId || ''),
+    transactionType: String(source.transactionType || ''),
+    amount: Number(source.amount || 0),
+    balanceAfter: Number(source.balanceAfter || 0),
+    source: String(source.source || ''),
+    sourceId: source.sourceId === undefined || source.sourceId === null ? null : String(source.sourceId),
+    expiresAt: source.expiresAt || null,
+    grantTransactionId: source.grantTransactionId === undefined || source.grantTransactionId === null ? null : String(source.grantTransactionId),
+    rootLearningObjectId: source.rootLearningObjectId || null,
+    currentLearningObjectId: source.currentLearningObjectId || null,
+    operatorType: String(source.operatorType || 'system'),
+    operatorId: source.operatorId === undefined || source.operatorId === null ? null : String(source.operatorId),
+    reason: source.reason === undefined || source.reason === null ? null : String(source.reason),
+    createdAt: source.createdAt || null
+  }
+}
+
+function createAdminEntitlementRequestError(message, options = {}) {
+  const error = new Error(message)
+  error.code = options.code || 'ADMIN_ENTITLEMENT_REQUEST_ERROR'
+  error.statusCode = Number(options.statusCode || 400)
+  return error
+}
+
+function getPublicAdminEntitlementError(error) {
+  const rawCode = error && error.code ? String(error.code) : 'ADMIN_ENTITLEMENT_ERROR'
+  if (
+    rawCode === 'USER_DB_CONFIG_MISSING' ||
+    rawCode === 'USER_ENTITLEMENT_DB_CONFIG_MISSING' ||
+    rawCode === 'USER_ENTITLEMENT_DB_ERROR' ||
+    rawCode === 'ADMIN_ENTITLEMENT_STORE_UNAVAILABLE' ||
+    isDatabaseErrorCode(rawCode)
+  ) {
+    return {
+      statusCode: 503,
+      code: 'ADMIN_ENTITLEMENT_DB_ERROR',
+      message: 'Admin entitlement database is unavailable.'
+    }
+  }
+
+  const statusCode = normalizeErrorStatusCode(error && error.statusCode)
+  if (statusCode >= 400 && statusCode < 500) {
+    return {
+      statusCode,
+      code: rawCode,
+      message: error && error.message ? error.message : 'Admin entitlement request is invalid.'
+    }
+  }
+
+  return {
+    statusCode: 500,
+    code: 'ADMIN_ENTITLEMENT_ERROR',
+    message: 'Admin entitlement operation failed.'
+  }
+}
+
+function sendAdminEntitlementError(res, error) {
+  const publicError = getPublicAdminEntitlementError(error)
+  sendJson(res, publicError.statusCode, {
+    ok: false,
+    code: publicError.code,
+    message: publicError.message
+  })
+}
+
+function parseAdminEntitlementUserRoute(pathname) {
+  const prefix = '/api/admin/entitlements/users/'
+  if (!pathname.startsWith(prefix)) return null
+  const rawSegments = pathname.slice(prefix.length).split('/').filter(Boolean)
+  if (!rawSegments.length || rawSegments.length > 2) return null
+  try {
+    return {
+      userId: decodeURIComponent(rawSegments[0]),
+      action: rawSegments[1] ? decodeURIComponent(rawSegments[1]) : ''
+    }
+  } catch (error) {
+    return null
+  }
+}
+
+function normalizeAdminQuotaAmount(value) {
+  const amount = Number(value)
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    throw createAdminEntitlementRequestError('Amount must be a positive integer.', {
+      code: 'INVALID_AMOUNT',
+      statusCode: 400
+    })
+  }
+  return amount
+}
+
+function normalizeAdminOperationReason(value) {
+  const reason = String(value || '').trim()
+  if (!reason) {
+    throw createAdminEntitlementRequestError('Operation reason is required.', {
+      code: 'REASON_REQUIRED',
+      statusCode: 400
+    })
+  }
+  if (reason.length > 512) {
+    throw createAdminEntitlementRequestError('Operation reason is too long.', {
+      code: 'REASON_INVALID',
+      statusCode: 400
+    })
+  }
+  return reason
+}
+
+function normalizeAdminOptionalString(value, fallback = '') {
+  return String(value || fallback || '').trim()
+}
+
+function createAdminOperationIdempotencyKey(req, body, operation, userId) {
+  const explicitKey = normalizeRequestId(body && body.idempotencyKey)
+  if (explicitKey) return explicitKey
+  const requestId = normalizeRequestId(getHeaderValue(req, 'x-client-request-id')) || crypto.randomUUID()
+  return `${operation}:${userId}:${requestId}`
+}
+
+function getDefaultAdminQuotaExpiresAt(currentTime) {
+  const expiresAt = new Date(currentTime.getTime())
+  expiresAt.setFullYear(expiresAt.getFullYear() + 1)
+  return expiresAt
+}
+
+function getAdminQuotaGrantExpiresAt(value, currentTime) {
+  if (value === undefined || value === null || value === '') {
+    return getDefaultAdminQuotaExpiresAt(currentTime)
+  }
+  const expiresAt = new Date(value)
+  if (!Number.isFinite(expiresAt.getTime())) {
+    throw createAdminEntitlementRequestError('Quota grant expiry time is invalid.', {
+      code: 'EXPIRES_AT_INVALID',
+      statusCode: 400
+    })
+  }
+  return expiresAt
 }
 
 async function getOrInitializeUserEntitlement(userId, userEntitlementStore) {
@@ -877,6 +1044,159 @@ export function createApiHandler(options = {}) {
           sendUserRecentWordsError(res, error)
         }
         return
+      }
+
+      if (req.method === 'GET' && pathname === '/api/admin/entitlements/users') {
+        const authResult = requireAdminAuth(req, adminAuthOptions)
+        if (!authResult.ok) {
+          sendJson(res, authResult.statusCode, {
+            ok: false,
+            message: 'Unauthorized'
+          })
+          return
+        }
+
+        try {
+          const query = requestUrl.searchParams.get('q') || ''
+          const users = await userStore.searchAdminUsers(query, {
+            phoneHashSecret: options.phoneHashSecret,
+            phoneHashVersion: options.phoneHashVersion
+          })
+          sendJson(res, 200, {
+            ok: true,
+            count: users.length,
+            users: users.map((user) => toSafeAdminUserPayload(user))
+          })
+        } catch (error) {
+          sendAdminEntitlementError(res, error)
+        }
+        return
+      }
+
+      const adminEntitlementUserRoute = parseAdminEntitlementUserRoute(pathname)
+      if (adminEntitlementUserRoute) {
+        const authResult = requireAdminAuth(req, adminAuthOptions)
+        if (!authResult.ok) {
+          sendJson(res, authResult.statusCode, {
+            ok: false,
+            message: 'Unauthorized'
+          })
+          return
+        }
+
+        try {
+          const userId = adminEntitlementUserRoute.userId
+          const action = adminEntitlementUserRoute.action
+          const profile = await userStore.findUserProfileById(userId)
+          if (!profile) {
+            sendJson(res, 404, {
+              ok: false,
+              code: 'USER_NOT_FOUND',
+              message: 'User not found.'
+            })
+            return
+          }
+
+          if (req.method === 'GET' && action === '') {
+            const entitlement = await getOrInitializeUserEntitlement(userId, userEntitlementStore)
+            sendJson(res, 200, {
+              ok: true,
+              user: toSafeAdminUserPayload(profile),
+              entitlement: toSafeAdminEntitlementPayload(entitlement)
+            })
+            return
+          }
+
+          if (req.method === 'GET' && action === 'transactions') {
+            if (!userEntitlementStore) {
+              throw createAdminEntitlementRequestError('User entitlement store is not available.', {
+                code: 'ADMIN_ENTITLEMENT_STORE_UNAVAILABLE',
+                statusCode: 503
+              })
+            }
+
+            const transactions = await userEntitlementStore.listUserTransactions(userId, {
+              limit: requestUrl.searchParams.get('limit') || 50,
+              offset: requestUrl.searchParams.get('offset') || 0,
+              transactionType: requestUrl.searchParams.get('type') || ''
+            })
+            sendJson(res, 200, {
+              ok: true,
+              count: transactions.length,
+              transactions: transactions.map((transaction) => toSafeAdminEntitlementTransactionPayload(transaction))
+            })
+            return
+          }
+
+          if (req.method === 'POST' && action === 'grant') {
+            if (!userEntitlementStore) {
+              throw createAdminEntitlementRequestError('User entitlement store is not available.', {
+                code: 'ADMIN_ENTITLEMENT_STORE_UNAVAILABLE',
+                statusCode: 503
+              })
+            }
+
+            const body = await readJsonBody(req)
+            const amount = normalizeAdminQuotaAmount(body.amount)
+            const reason = normalizeAdminOperationReason(body.reason)
+            const result = await userEntitlementStore.grantQuota({
+              userId,
+              transactionType: ENTITLEMENT_TRANSACTION_TYPES.ADMIN_GRANT,
+              amount,
+              source: normalizeAdminOptionalString(body.source, 'admin_portal'),
+              sourceId: normalizeAdminOptionalString(body.sourceId),
+              expiresAt: getAdminQuotaGrantExpiresAt(body.expiresAt, now()),
+              idempotencyKey: createAdminOperationIdempotencyKey(req, body, 'admin_grant', userId),
+              operatorType: 'admin',
+              operatorId: normalizeAdminOptionalString(body.operatorId, 'admin-api-token'),
+              reason,
+              metadata: {
+                adminOperation: 'grant'
+              }
+            })
+            sendJson(res, 200, {
+              ok: true,
+              transaction: toSafeAdminEntitlementTransactionPayload(result.transaction),
+              entitlement: toSafeAdminEntitlementPayload(result.entitlement)
+            })
+            return
+          }
+
+          if (req.method === 'POST' && action === 'deduct') {
+            if (!userEntitlementStore || typeof userEntitlementStore.deductQuota !== 'function') {
+              throw createAdminEntitlementRequestError('User entitlement store is not available.', {
+                code: 'ADMIN_ENTITLEMENT_STORE_UNAVAILABLE',
+                statusCode: 503
+              })
+            }
+
+            const body = await readJsonBody(req)
+            const amount = normalizeAdminQuotaAmount(body.amount)
+            const reason = normalizeAdminOperationReason(body.reason)
+            const result = await userEntitlementStore.deductQuota({
+              userId,
+              amount,
+              source: normalizeAdminOptionalString(body.source, 'admin_portal'),
+              sourceId: normalizeAdminOptionalString(body.sourceId),
+              idempotencyKey: createAdminOperationIdempotencyKey(req, body, 'admin_deduct', userId),
+              operatorType: 'admin',
+              operatorId: normalizeAdminOptionalString(body.operatorId, 'admin-api-token'),
+              reason,
+              metadata: {
+                adminOperation: 'deduct'
+              }
+            })
+            sendJson(res, 200, {
+              ok: true,
+              transaction: toSafeAdminEntitlementTransactionPayload(result.transaction),
+              entitlement: toSafeAdminEntitlementPayload(result.entitlement)
+            })
+            return
+          }
+        } catch (error) {
+          sendAdminEntitlementError(res, error)
+          return
+        }
       }
 
       if (req.method === 'GET' && pathname === '/api/admin/homepage-featured') {

@@ -21,6 +21,7 @@ export const ENTITLEMENT_TRANSACTION_TYPES = Object.freeze({
   CONTENT_ACCESS: 'CONTENT_ACCESS',
   SHARE_REWARD: 'SHARE_REWARD',
   ADMIN_GRANT: 'ADMIN_GRANT',
+  ADMIN_DEDUCT: 'ADMIN_DEDUCT',
   TAOBAO_BOOK_MEMBERSHIP_GRANT: 'TAOBAO_BOOK_MEMBERSHIP_GRANT',
   MEMBERSHIP_ACTIVATED: 'MEMBERSHIP_ACTIVATED',
   REFUND_RESTORE: 'REFUND_RESTORE',
@@ -48,6 +49,10 @@ const MEMBERSHIP_TRANSACTION_TYPES = new Set([
 
 const CONTENT_ACCESS_TRANSACTION_TYPES = new Set([
   ENTITLEMENT_TRANSACTION_TYPES.CONTENT_ACCESS
+])
+
+const QUOTA_DEDUCT_TRANSACTION_TYPES = new Set([
+  ENTITLEMENT_TRANSACTION_TYPES.ADMIN_DEDUCT
 ])
 
 const QUOTA_GRANT_SOURCE_TO_TRANSACTION_TYPE = new Map([
@@ -205,6 +210,18 @@ function normalizePositiveInteger(value, fieldName, code) {
   const amount = Number(value)
   if (!Number.isSafeInteger(amount) || amount <= 0) {
     throw createUserEntitlementStoreError(`${fieldName} must be a positive integer.`, {
+      code,
+      statusCode: 400
+    })
+  }
+  return amount
+}
+
+function normalizeNonNegativeInteger(value, fieldName, code, options = {}) {
+  const fallback = Number(options.fallback || 0)
+  const amount = value === undefined || value === null || value === '' ? fallback : Number(value)
+  if (!Number.isSafeInteger(amount) || amount < 0) {
+    throw createUserEntitlementStoreError(`${fieldName} must be a non-negative integer.`, {
       code,
       statusCode: 400
     })
@@ -463,6 +480,42 @@ export function createUserEntitlementStore(options = {}) {
     )
     const row = Array.isArray(rows) && rows.length ? rows[0] : null
     return mapTransactionRow(row)
+  }
+
+  async function listUserTransactions(userId, options = {}) {
+    const normalizedUserId = normalizeUserId(userId)
+    const limit = Math.min(
+      normalizeNonNegativeInteger(options.limit, 'Transaction list limit', 'TRANSACTION_LIST_LIMIT_INVALID', {
+        fallback: 50
+      }) || 50,
+      100
+    )
+    const offset = normalizeNonNegativeInteger(options.offset, 'Transaction list offset', 'TRANSACTION_LIST_OFFSET_INVALID')
+    const transactionType = normalizeString(options.transactionType).toUpperCase()
+    const params = [normalizedUserId]
+    let typeClause = ''
+    if (transactionType) {
+      typeClause = ' AND transaction_type = ?'
+      params.push(transactionType)
+    }
+    params.push(limit, offset)
+
+    const connection = await getPool().getConnection()
+    try {
+      const [rows] = await connection.execute(
+        `SELECT id, transaction_id, user_id, transaction_type, amount, balance_after, source, source_id,
+                expires_at, grant_transaction_id, root_learning_object_id, current_learning_object_id,
+                access_context_json, idempotency_key, operator_type, operator_id, reason, metadata_json, created_at
+           FROM ${quoteIdentifier(ENTITLEMENT_TRANSACTIONS_TABLE)}
+          WHERE user_id = ?${typeClause}
+          ORDER BY created_at DESC, id DESC
+          LIMIT ? OFFSET ?`,
+        params
+      )
+      return (Array.isArray(rows) ? rows : []).map((row) => mapTransactionRow(row)).filter(Boolean)
+    } finally {
+      connection.release()
+    }
   }
 
   async function listQuotaGrantSources(connection, userId, currentTime, options = {}) {
@@ -783,6 +836,112 @@ export function createUserEntitlementStore(options = {}) {
     }
   }
 
+  async function deductQuota(input = {}) {
+    const userId = normalizeUserId(input.userId)
+    const amount = normalizePositiveInteger(input.amount, 'Quota deduct amount', 'QUOTA_DEDUCT_AMOUNT_INVALID')
+    const source = normalizeSource(input.source)
+    const sourceId = normalizeSourceId(input.sourceId)
+    const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey)
+    const operatorType = normalizeOperatorType(input.operatorType)
+    const operatorId = normalizeOperatorId(input.operatorId)
+    const reason = normalizeReason(input.reason)
+    const metadata = normalizeJsonObject(input.metadata, 'Metadata', 'METADATA_INVALID')
+
+    const connection = await getPool().getConnection()
+    try {
+      await connection.beginTransaction()
+
+      const existingTransaction = await findTransactionByIdempotencyKey(connection, idempotencyKey)
+      if (existingTransaction) {
+        assertIdempotentTransaction(existingTransaction, QUOTA_DEDUCT_TRANSACTION_TYPES, userId)
+        await connection.commit()
+        return {
+          deducted: false,
+          idempotent: true,
+          transaction: existingTransaction,
+          entitlement: await findUserEntitlement(connection, userId)
+        }
+      }
+
+      let entitlement = await ensureUserEntitlementInTransaction(connection, userId)
+      const currentTime = now()
+      entitlement = await expireQuotaGrantSources(connection, userId, entitlement, currentTime)
+      if (entitlement.quotaBalance < amount) {
+        throw createUserEntitlementStoreError('Quota balance is not enough for admin deduction.', {
+          code: 'QUOTA_NOT_ENOUGH',
+          statusCode: 400
+        })
+      }
+
+      const quotaSources = await listQuotaGrantSources(connection, userId, currentTime)
+      const allocationResult = allocateQuotaSources(quotaSources, amount)
+      if (allocationResult.allocatedAmount < amount) {
+        throw createUserEntitlementStoreError('Quota grant sources are not enough for admin deduction.', {
+          code: 'QUOTA_SOURCE_NOT_ENOUGH',
+          statusCode: 409
+        })
+      }
+
+      const balanceAfter = entitlement.quotaBalance - amount
+      const transactionId = normalizeTransactionId(input.transactionId)
+      const grantTransactionId = allocationResult.allocations[0].grantTransactionId
+      const metadataJson = normalizeJson({
+        ...(metadata || {}),
+        quotaDeductStrategy: 'FIFO_BY_EXPIRES_AT',
+        deductedAllocations: allocationResult.allocations
+      }, 'Metadata', 'METADATA_INVALID')
+      const transactionInsertId = await insertTransaction(connection, {
+        transactionId,
+        userId,
+        transactionType: ENTITLEMENT_TRANSACTION_TYPES.ADMIN_DEDUCT,
+        amount: -amount,
+        balanceAfter,
+        source,
+        sourceId,
+        expiresAt: null,
+        grantTransactionId,
+        idempotencyKey,
+        operatorType,
+        operatorId,
+        reason,
+        metadataJson
+      })
+
+      await connection.execute(
+        `UPDATE ${quoteIdentifier(USER_ENTITLEMENTS_TABLE)}
+            SET quota_balance = ?,
+                last_transaction_id = ?
+          WHERE user_id = ?`,
+        [balanceAfter, transactionInsertId, userId]
+      )
+
+      const updatedEntitlement = await findUserEntitlement(connection, userId)
+      const transaction = await findTransactionByIdempotencyKey(connection, idempotencyKey)
+      await connection.commit()
+      return {
+        deducted: true,
+        idempotent: false,
+        transaction,
+        entitlement: updatedEntitlement
+      }
+    } catch (error) {
+      await connection.rollback()
+      if (isDuplicateEntryError(error)) {
+        const existing = await getEntitlementAndTransactionAfterDuplicate(connection, idempotencyKey)
+        assertIdempotentTransaction(existing.transaction, QUOTA_DEDUCT_TRANSACTION_TYPES, userId)
+        return {
+          deducted: false,
+          idempotent: true,
+          transaction: existing.transaction,
+          entitlement: existing.entitlement
+        }
+      }
+      throw error
+    } finally {
+      connection.release()
+    }
+  }
+
   async function ensureRegistrationBonus(userId) {
     const normalizedUserId = normalizeUserId(userId)
     return await grantQuota({
@@ -1061,10 +1220,12 @@ export function createUserEntitlementStore(options = {}) {
 
   return {
     getUserEntitlement,
+    listUserTransactions,
     ensureUserEntitlement,
     ensureRegistrationBonus,
     grantQuota,
     grantMembership,
+    deductQuota,
     consumeQuota
   }
 }

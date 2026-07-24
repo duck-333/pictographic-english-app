@@ -1,5 +1,7 @@
 import mysql from 'mysql2/promise'
 
+import { hashPhone } from './identity-store.mjs'
+
 const DEFAULT_DB_HOST = '127.0.0.1'
 const DEFAULT_DB_PORT = 3306
 const DEFAULT_DB_NAME = 'baxiaota'
@@ -38,6 +40,26 @@ function getDbConfig(options = {}) {
 
 function quoteIdentifier(value) {
   return `\`${String(value).replace(/`/g, '``')}\``
+}
+
+function formatDate(value) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return value.toISOString()
+  }
+
+  const text = normalizeString(value)
+  if (!text) return null
+
+  const parsed = new Date(text)
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : text
+}
+
+function isLikelyUserId(value) {
+  return /^\d+$/.test(normalizeString(value))
+}
+
+function shouldAttemptPhoneHashSearch(value) {
+  return normalizeString(value).replace(/\D/g, '').length >= 7
 }
 
 function isRequiredWithoutDefault(column) {
@@ -255,8 +277,14 @@ export function createUserStore(options = {}) {
 
     const connection = await getPool().getConnection()
     try {
+      const userColumns = await getTableColumns(connection, USERS_TABLE)
+      const statusExpression = userColumns.status ? 'status' : `'active'`
+      const createdAtExpression = userColumns.created_at ? 'created_at' : 'NULL'
       const [userRows] = await connection.execute(
-        `SELECT id FROM ${quoteIdentifier(USERS_TABLE)} WHERE id = ? LIMIT 1`,
+        `SELECT id, ${statusExpression} AS status, ${createdAtExpression} AS created_at
+           FROM ${quoteIdentifier(USERS_TABLE)}
+          WHERE id = ?
+          LIMIT 1`,
         [normalizedUserId]
       )
       const userRow = Array.isArray(userRows) && userRows.length ? userRows[0] : null
@@ -277,6 +305,8 @@ export function createUserStore(options = {}) {
 
       return {
         id: String(userRow.id),
+        status: normalizeString(userRow.status) || 'active',
+        createdAt: formatDate(userRow.created_at),
         hasWechatBinding,
         hasPhoneBinding: Boolean(phoneRow),
         phoneMasked
@@ -286,8 +316,109 @@ export function createUserStore(options = {}) {
     }
   }
 
+  async function findUserProfilesByIds(connection, userIds) {
+    const ids = Array.from(new Set((Array.isArray(userIds) ? userIds : []).map((id) => normalizeString(id)).filter(Boolean)))
+    if (!ids.length) return []
+
+    const userColumns = await getTableColumns(connection, USERS_TABLE)
+    const statusExpression = userColumns.status ? 'u.status' : `'active'`
+    const createdAtExpression = userColumns.created_at ? 'u.created_at' : 'NULL'
+    const placeholders = ids.map(() => '?').join(', ')
+    const [rows] = await connection.execute(
+      `SELECT u.id,
+              ${statusExpression} AS status,
+              ${createdAtExpression} AS created_at,
+              EXISTS(
+                SELECT 1
+                  FROM ${quoteIdentifier(WECHAT_BINDINGS_TABLE)} wb
+                 WHERE wb.user_id = u.id
+                 LIMIT 1
+              ) AS has_wechat_binding,
+              (
+                SELECT pb.phone_masked
+                  FROM ${quoteIdentifier(PHONE_BINDINGS_TABLE)} pb
+                 WHERE pb.user_id = u.id
+                   AND pb.status = ?
+                 ORDER BY pb.id DESC
+                 LIMIT 1
+              ) AS phone_masked
+         FROM ${quoteIdentifier(USERS_TABLE)} u
+        WHERE u.id IN (${placeholders})
+        LIMIT 50`,
+      ['active', ...ids]
+    )
+
+    const profileById = new Map()
+    ;(Array.isArray(rows) ? rows : []).forEach((row) => {
+      if (!row || row.id === undefined || row.id === null) return
+      const phoneMasked = normalizeString(row.phone_masked)
+      profileById.set(String(row.id), {
+        id: String(row.id),
+        status: normalizeString(row.status) || 'active',
+        createdAt: formatDate(row.created_at),
+        hasWechatBinding: Boolean(Number(row.has_wechat_binding || 0)),
+        hasPhoneBinding: Boolean(phoneMasked),
+        phoneMasked
+      })
+    })
+
+    return ids.map((id) => profileById.get(String(id))).filter(Boolean)
+  }
+
+  async function searchAdminUsers(query, options = {}) {
+    const keyword = normalizeString(query)
+    if (!keyword) {
+      throw createUserStoreError('Search query is required.', {
+        code: 'ADMIN_USER_SEARCH_QUERY_REQUIRED',
+        statusCode: 400
+      })
+    }
+
+    const connection = await getPool().getConnection()
+    try {
+      const userIds = []
+
+      if (isLikelyUserId(keyword)) {
+        userIds.push(keyword)
+      }
+
+      if (shouldAttemptPhoneHashSearch(keyword)) {
+        let phoneHash = ''
+        try {
+          phoneHash = hashPhone(keyword, {
+            secret: options.phoneHashSecret === undefined ? process.env.PHONE_HASH_SECRET : options.phoneHashSecret,
+            hashVersion: options.phoneHashVersion
+          }).phoneHash
+        } catch (error) {
+          // Phone search is best-effort and depends on PHONE_HASH_SECRET. User id search remains available.
+        }
+
+        if (phoneHash) {
+          const [phoneRows] = await connection.execute(
+            `SELECT user_id
+               FROM ${quoteIdentifier(PHONE_BINDINGS_TABLE)}
+              WHERE phone_hash = ?
+                AND status = ?
+              LIMIT 20`,
+            [phoneHash, 'active']
+          )
+          ;(Array.isArray(phoneRows) ? phoneRows : []).forEach((row) => {
+            if (row && row.user_id !== undefined && row.user_id !== null) {
+              userIds.push(String(row.user_id))
+            }
+          })
+        }
+      }
+
+      return await findUserProfilesByIds(connection, userIds)
+    } finally {
+      connection.release()
+    }
+  }
+
   return {
     findOrCreateWechatUser,
-    findUserProfileById
+    findUserProfileById,
+    searchAdminUsers
   }
 }
