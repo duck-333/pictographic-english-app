@@ -301,6 +301,13 @@ function requestAdminJson(path, options = {}) {
     })
 }
 
+function buildQueryString(params = {}) {
+  const pairs = Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '')
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value).trim())}`)
+  return pairs.length ? `?${pairs.join('&')}` : ''
+}
+
 export function searchAdminEntitlementUsers(query, options = {}) {
   const keyword = String(query || '').trim()
   const suffix = keyword ? `?q=${encodeURIComponent(keyword)}` : ''
@@ -340,7 +347,12 @@ export function deductAdminUserQuota(userId, payload = {}, options = {}) {
 export function listAdminUserEntitlementTransactions(userId, options = {}) {
   const id = String(userId || '').trim()
   if (!id) return Promise.reject(new Error('User id is required.'))
-  return requestAdminJson(`/api/admin/entitlements/users/${encodeURIComponent(id)}/transactions`, options)
+  const suffix = buildQueryString({
+    limit: options.limit,
+    offset: options.offset,
+    type: options.transactionType || options.type
+  })
+  return requestAdminJson(`/api/admin/entitlements/users/${encodeURIComponent(id)}/transactions${suffix}`, options)
     .then((data) => ({
       transactions: Array.isArray(data.transactions) ? data.transactions : [],
       count: Number(data.count || 0)

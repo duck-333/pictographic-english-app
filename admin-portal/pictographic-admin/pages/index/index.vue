@@ -754,9 +754,16 @@
 			<view class="panel entitlement-transactions-panel">
 				<view class="panel-head">
 					<view>
-						<text class="panel-title">权益流水记录</text>
-						<text class="panel-note">后续接口实现后展示 REGISTER_BONUS、CONTENT_ACCESS、ADMIN_GRANT、ADMIN_DEDUCT 等流水。</text>
+						<text class="panel-title">最近权益流水</text>
+						<text class="panel-note">默认显示最近 5 条权益流水，完整记录请进入流水详情页查看。</text>
 					</view>
+					<button
+						class="secondary-button entitlement-detail-link"
+						:disabled="!entitlementManagement.selectedUser"
+						@click="openEntitlementTransactionsPage"
+					>
+						查看流水详情
+					</button>
 				</view>
 				<view class="entitlement-transaction-table">
 					<view class="entitlement-transaction-row header">
@@ -768,7 +775,7 @@
 						<text>操作人</text>
 					</view>
 					<view
-						v-for="transaction in entitlementManagement.transactions"
+						v-for="transaction in recentEntitlementTransactions"
 						:key="transaction.id"
 						class="entitlement-transaction-row"
 					>
@@ -781,7 +788,7 @@
 						<text>{{ transaction.reason || transaction.source || '未记录' }}</text>
 						<text>{{ transaction.operatorType || 'system' }} {{ transaction.operatorId || '' }}</text>
 					</view>
-					<view v-if="!entitlementManagement.transactions.length" class="entitlement-empty">
+					<view v-if="!recentEntitlementTransactions.length" class="entitlement-empty">
 						暂无权益流水。查询用户后会从后端接口加载。
 					</view>
 				</view>
@@ -1319,6 +1326,9 @@ export default {
 				? `${this.batchActionText}（${this.selectedBatchCount}）`
 				: this.batchActionText
 		},
+		recentEntitlementTransactions() {
+			return this.entitlementManagement.transactions.slice(0, 5)
+		},
 		stats() {
 			return {
 				total: this.words.length,
@@ -1667,10 +1677,24 @@ export default {
 		async loadSelectedUserEntitlementTransactions() {
 			const user = this.entitlementManagement.selectedUser
 			if (!user || !user.id) return
-			const result = await listAdminUserEntitlementTransactions(user.id, this.getAdminRequestOptions())
+			const result = await listAdminUserEntitlementTransactions(user.id, {
+				...this.getAdminRequestOptions(),
+				limit: 5,
+				offset: 0
+			})
 			this.entitlementManagement.transactions = Array.isArray(result.transactions)
 				? result.transactions.map((item) => this.normalizeEntitlementTransaction(item))
 				: []
+		},
+		openEntitlementTransactionsPage() {
+			const user = this.entitlementManagement.selectedUser
+			if (!user || !user.id) {
+				uni.showToast({ title: '请先选择用户', icon: 'none' })
+				return
+			}
+			uni.navigateTo({
+				url: `/pages/entitlement-transactions/index?userId=${encodeURIComponent(user.id)}`
+			})
 		},
 		setEntitlementOperationType(type) {
 			this.entitlementManagement.operationType = type === 'deduct' ? 'deduct' : 'grant'
