@@ -165,6 +165,7 @@ function checkMediaGuards(errors) {
     ['https://example.com/videos/study.mp4', false, true],
     ['not a media url', false, true],
     ['ftp://cdn.pictographic-english.test/videos/study.mp4', false, false],
+    ['https://1426953650.vod-qcloud.com/b3d6bd8bvodcq1426953650/a48f15bb5145403727215241845/7jDrhuKZkhgA.mp4', true, false],
     ['https://cdn.pictographic-english.test/videos/study.mp4', true, false]
   ]
 
@@ -187,6 +188,20 @@ function checkMediaGuards(errors) {
   const missingEnvLocalPreviewAllowed = isPlayableMediaUrl('http://127.0.0.1:8787/videos/study.mp4')
   if (missingEnvLocalPreviewAllowed) {
     addError(errors, 'media guard must fail closed and block local preview bridge URLs when NODE_ENV is missing.')
+  }
+
+  const originalUrlConstructor = globalThis.URL
+  try {
+    globalThis.URL = undefined
+    const vodPlayableWithoutGlobalUrl = isPlayableMediaUrl(
+      'https://1426953650.vod-qcloud.com/b3d6bd8bvodcq1426953650/a48f15bb5145403727215241845/7jDrhuKZkhgA.mp4',
+      { production: true }
+    )
+    if (!vodPlayableWithoutGlobalUrl) {
+      addError(errors, 'media guard must allow Tencent VOD HTTPS URLs when the mini program runtime has no global URL constructor.')
+    }
+  } finally {
+    globalThis.URL = originalUrlConstructor
   }
 }
 
@@ -323,8 +338,8 @@ function checkUserJwtSecretGuard(errors) {
 
 function checkWordDetailUsesMediaGuard(errors) {
   const sourceText = fs.readFileSync(new URL(`../${WORD_DETAIL_PATH}`, import.meta.url), 'utf8')
-  if (!/const\s+ENABLE_VIDEO_MODULE\s*=\s*false/.test(sourceText)) {
-    addError(errors, `${WORD_DETAIL_PATH}: second-release text-only build must keep the video module disabled.`)
+  if (!/const\s+ENABLE_VIDEO_MODULE\s*=\s*true/.test(sourceText)) {
+    addError(errors, `${WORD_DETAIL_PATH}: production build must keep the video module enabled.`)
   }
   if (!/hasPlayableVideo\(\)\s*\{[\s\S]*?return\s+isPlayableMediaUrl\(this\.activeVideoUrl\)\s*&&\s*this\.activeClipHasValidRange[\s\S]*?\}/.test(sourceText)) {
     addError(errors, `${WORD_DETAIL_PATH}: hasPlayableVideo must use the shared production media guard for activeVideoUrl.`)

@@ -299,7 +299,7 @@ import { addUserFavorite, listUserFavorites, removeUserFavorite } from '../../co
 import { recordUserRecentWord } from '../../common/user-recent-words-api-client.js'
 import { addRecentWord, getPendingWordId, recordLearningActivity, savePendingWordId } from '../../common/user-store.js'
 
-const ENABLE_VIDEO_MODULE = false
+const ENABLE_VIDEO_MODULE = true
 
 function createWordDetailClientRequestId() {
   const timePart = Date.now().toString(36)
@@ -366,6 +366,7 @@ export default {
       activeClipIndex: 0,
       clipCurrentTime: 0,
       clipIsPlaying: false,
+      clipIsStarting: false,
       enforcingClipBoundary: false,
       pausedAtClipEnd: false,
       clipPlaybackToken: 0,
@@ -714,6 +715,7 @@ export default {
       this.activeClipIndex = 0
       this.clipCurrentTime = 0
       this.clipIsPlaying = false
+      this.clipIsStarting = false
       this.enforcingClipBoundary = false
       this.pausedAtClipEnd = false
       this.pendingClipAutoplay = false
@@ -871,6 +873,7 @@ export default {
       this.activeClipIndex = index
       this.clipCurrentTime = 0
       this.clipIsPlaying = false
+      this.clipIsStarting = false
       this.enforcingClipBoundary = false
       this.pausedAtClipEnd = false
       this.pendingClipAutoplay = false
@@ -902,10 +905,13 @@ export default {
       this.pausedAtClipEnd = false
       this.enforcingClipBoundary = true
       this.clipCurrentTime = this.activeVideoStart
+      this.clipIsStarting = true
       context.seek(this.activeVideoStart)
       this.scheduleClipPlayback(120, () => {
         this.enforcingClipBoundary = false
         context.play()
+        this.clipIsStarting = false
+        this.clipIsPlaying = true
       })
     },
     toggleActiveClipPlayback() {
@@ -913,7 +919,7 @@ export default {
         this.showVideoTip()
         return
       }
-      if (this.clipIsPlaying) {
+      if (this.clipIsPlaying || this.clipIsStarting || this.clipPlaybackTimer) {
         this.pauseActiveClip()
         return
       }
@@ -937,10 +943,13 @@ export default {
       this.pausedAtClipEnd = false
       this.enforcingClipBoundary = true
       this.clipCurrentTime = targetTime
+      this.clipIsStarting = true
       context.seek(targetTime)
       this.scheduleClipPlayback(120, () => {
         this.enforcingClipBoundary = false
         context.play()
+        this.clipIsStarting = false
+        this.clipIsPlaying = true
       })
     },
     getClampedClipTime(time) {
@@ -960,6 +969,7 @@ export default {
       if (!this.clipIsSeeking) {
         this.resumeAfterSeeking = this.clipIsPlaying
         this.clearClipPlaybackTimer()
+        this.clipIsStarting = false
         const context = this.getVideoContext()
         if (context) {
           context.pause()
@@ -986,13 +996,17 @@ export default {
       this.pausedAtClipEnd = targetTime >= this.effectiveVideoEnd - 0.15
       this.enforcingClipBoundary = true
       this.clipCurrentTime = targetTime
+      this.clipIsStarting = shouldAutoplay
       context.seek(targetTime)
       this.scheduleClipPlayback(120, () => {
         this.enforcingClipBoundary = false
         if (shouldAutoplay) {
           context.play()
+          this.clipIsStarting = false
+          this.clipIsPlaying = true
           return
         }
+        this.clipIsStarting = false
         context.pause()
       })
     },
@@ -1005,6 +1019,7 @@ export default {
       this.clipIsSeeking = false
       this.resumeAfterSeeking = false
       this.clipIsPlaying = false
+      this.clipIsStarting = false
       this.clearClipPlaybackTimer()
       const context = this.getVideoContext()
       if (context) {
@@ -1147,6 +1162,7 @@ export default {
       this.pausedAtClipEnd = true
       this.clipCurrentTime = this.effectiveVideoEnd
       this.clipIsPlaying = false
+      this.clipIsStarting = false
       const context = this.getVideoContext()
       if (context) {
         context.pause()
@@ -1157,17 +1173,22 @@ export default {
         this.playActiveClipFromStart()
         return
       }
+      this.clipIsStarting = false
       this.clipIsPlaying = true
       this.pausedAtClipEnd = false
     },
     handleVideoPause() {
+      this.clipIsStarting = false
       this.clipIsPlaying = false
     },
     handleVideoEnded() {
+      this.clipIsStarting = false
       this.clipIsPlaying = false
       this.pausedAtClipEnd = true
     },
     handleVideoError() {
+      this.clipIsStarting = false
+      this.clipIsPlaying = false
       uni.showToast({
         title: '视频暂时无法播放，请检查视频地址或小程序合法域名配置',
         icon: 'none'

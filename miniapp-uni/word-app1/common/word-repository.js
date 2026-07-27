@@ -62,12 +62,23 @@ function normalizeMediaUrl(url) {
 
 function parseMediaUrl(url) {
   const value = normalizeMediaUrl(url)
-  if (!value || typeof URL === 'undefined') return null
-  try {
-    return new URL(value)
-  } catch (error) {
-    return null
+  const protocolMatch = value.match(/^([a-z][a-z0-9+.-]*:)/i)
+  if (!value || !protocolMatch) return null
+
+  const protocol = protocolMatch[1].toLowerCase()
+  const rest = value.slice(protocol.length)
+  if (!rest.startsWith('//')) {
+    return protocol === 'cloud:' ? { protocol, hostname: '' } : null
   }
+
+  const authority = rest.slice(2).split(/[/?#]/)[0]
+  if (!authority) return null
+  const withoutUserInfo = authority.split('@').pop() || ''
+  const hostname = withoutUserInfo.startsWith('[')
+    ? withoutUserInfo.slice(1, withoutUserInfo.indexOf(']') > -1 ? withoutUserInfo.indexOf(']') : undefined)
+    : withoutUserInfo.split(':')[0]
+
+  return hostname ? { protocol, hostname } : null
 }
 
 function normalizeHostname(hostname) {
