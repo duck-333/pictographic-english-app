@@ -180,19 +180,19 @@
             id="lessonVideo"
             :key="activeVideoKey"
             class="lesson-video"
-            :src="activeVideoUrl"
-            :initial-time="activeVideoStart"
-            :controls="false"
-            :show-center-play-btn="false"
-            :show-play-btn="false"
-            :show-progress="false"
-            :show-fullscreen-btn="false"
+            :src="currentVideoUrl"
+            :initial-time="currentVideoInitialTime"
+            :controls="isFullVideoMode"
+            :show-center-play-btn="isFullVideoMode"
+            :show-play-btn="isFullVideoMode"
+            :show-progress="isFullVideoMode"
+            :show-fullscreen-btn="isFullVideoMode"
             :show-mute-btn="false"
-            :enable-progress-gesture="false"
-            :enable-play-gesture="false"
-            :vslide-gesture="false"
-            :vslide-gesture-in-fullscreen="false"
-            @tap="toggleActiveClipPlayback"
+            :enable-progress-gesture="isFullVideoMode"
+            :enable-play-gesture="isFullVideoMode"
+            :vslide-gesture="isFullVideoMode"
+            :vslide-gesture-in-fullscreen="isFullVideoMode"
+            @tap="handleVideoTap"
             @loadedmetadata="handleVideoLoadedMetadata"
             @canplay="handleVideoCanPlay"
             @error="handleVideoError"
@@ -201,7 +201,7 @@
             @timeupdate="handleVideoTimeUpdate"
             @ended="handleVideoEnded"
           ></video>
-          <view class="segment-control-panel">
+          <view v-if="!isFullVideoMode" class="segment-control-panel">
             <button class="segment-play-button" hover-class="button-pressed" @tap.stop="toggleActiveClipPlayback">
               <view v-if="clipIsPlaying" class="pause-bars">
                 <view class="pause-bar"></view>
@@ -233,8 +233,15 @@
             </view>
           </view>
           <view class="full-video-lock">
-            <text class="lock-title">暂无更多讲解内容</text>
-            <text class="lock-text">当前讲解片段时长 {{ clipDurationText }}。</text>
+            <button
+              v-if="hasPlayableFullVideo"
+              class="full-video-button"
+              hover-class="button-pressed"
+              @tap.stop="toggleFullVideoPlayback"
+            >
+              {{ fullVideoButtonText }}
+            </button>
+            <text class="lock-text">{{ fullVideoHintText }}</text>
           </view>
         </view>
         <view v-else class="video-placeholder" @tap="showVideoTip">
@@ -364,9 +371,11 @@ export default {
       activePartMeaning: '',
       showFullDesc: true,
       activeClipIndex: 0,
+      videoPlaybackMode: 'clip',
       clipCurrentTime: 0,
       clipIsPlaying: false,
       clipIsStarting: false,
+      fullVideoIsPlaying: false,
       enforcingClipBoundary: false,
       pausedAtClipEnd: false,
       clipPlaybackToken: 0,
@@ -503,11 +512,20 @@ export default {
       return this.videoClips[this.activeClipIndex] || this.videoClips[0] || {}
     },
     activeVideoKey() {
-      return this.activeVideoUrl || 'no-video'
+      return `${this.videoPlaybackMode}-${this.currentVideoUrl || 'no-video'}`
     },
     activeVideoUrl() {
       const video = this.activeVideo || {}
       return video.videoUrl || video.url || ''
+    },
+    isFullVideoMode() {
+      return this.videoPlaybackMode === 'full'
+    },
+    currentVideoUrl() {
+      return this.activeVideoUrl
+    },
+    currentVideoInitialTime() {
+      return this.isFullVideoMode ? 0 : this.activeVideoStart
     },
     activeVideoTitle() {
       if (!this.hasVideoData) {
@@ -575,8 +593,22 @@ export default {
     hasPlayableVideo() {
       return isPlayableMediaUrl(this.activeVideoUrl) && this.activeClipHasValidRange
     },
+    hasPlayableFullVideo() {
+      return this.hasVideoData && isPlayableMediaUrl(this.activeVideoUrl)
+    },
+    fullVideoButtonText() {
+      if (!this.isFullVideoMode) return '播放完整讲解视频'
+      return this.fullVideoIsPlaying ? '暂停完整讲解视频' : '继续完整讲解视频'
+    },
+    fullVideoHintText() {
+      if (!this.hasPlayableFullVideo) return `当前讲解片段时长 ${this.clipDurationText}。`
+      return this.isFullVideoMode
+        ? '正在播放完整讲解视频，可使用原生控件拖动进度或全屏观看。'
+        : '播放当前片段对应的完整 VOD 文件。'
+    },
     videoStatusText() {
       if (!this.hasVideoData) return '暂无视频'
+      if (this.isFullVideoMode) return '完整讲解'
       if (!this.activeClipHasValidRange) return '片段待配置'
       return this.hasPlayableVideo ? '讲解片段' : '暂不可播放'
     },
@@ -713,9 +745,11 @@ export default {
       this.activePartMeaning = ''
       this.showFullDesc = true
       this.activeClipIndex = 0
+      this.videoPlaybackMode = 'clip'
       this.clipCurrentTime = 0
       this.clipIsPlaying = false
       this.clipIsStarting = false
+      this.fullVideoIsPlaying = false
       this.enforcingClipBoundary = false
       this.pausedAtClipEnd = false
       this.pendingClipAutoplay = false
@@ -871,9 +905,11 @@ export default {
 
       const previousUrl = this.activeVideoUrl
       this.activeClipIndex = index
+      this.videoPlaybackMode = 'clip'
       this.clipCurrentTime = 0
       this.clipIsPlaying = false
       this.clipIsStarting = false
+      this.fullVideoIsPlaying = false
       this.enforcingClipBoundary = false
       this.pausedAtClipEnd = false
       this.pendingClipAutoplay = false
@@ -898,6 +934,8 @@ export default {
       })
     },
     playActiveClipFromStart() {
+      this.videoPlaybackMode = 'clip'
+      this.fullVideoIsPlaying = false
       const context = this.getVideoContext()
       if (!context || !this.hasPlayableVideo) return
       this.clipIsSeeking = false
@@ -934,7 +972,59 @@ export default {
       }
       this.resumeActiveClip()
     },
+    handleVideoTap() {
+      if (this.isFullVideoMode) return
+      this.toggleActiveClipPlayback()
+    },
+    playFullVideoFromStart() {
+      if (!this.hasPlayableFullVideo) {
+        this.showVideoTip()
+        return
+      }
+      this.clearClipPlaybackTimer()
+      this.videoPlaybackMode = 'full'
+      this.clipIsPlaying = false
+      this.clipIsStarting = false
+      this.fullVideoIsPlaying = false
+      this.pendingClipAutoplay = false
+      this.clipIsSeeking = false
+      this.resumeAfterSeeking = false
+      this.pausedAtClipEnd = false
+      this.enforcingClipBoundary = false
+
+      this.$nextTick(() => {
+        const context = this.getVideoContext()
+        if (!context) return
+        context.seek(0)
+        setTimeout(() => {
+          if (!this.isFullVideoMode) return
+          context.play()
+          this.fullVideoIsPlaying = true
+        }, 120)
+      })
+    },
+    toggleFullVideoPlayback() {
+      if (!this.hasPlayableFullVideo) {
+        this.showVideoTip()
+        return
+      }
+      if (!this.isFullVideoMode) {
+        this.playFullVideoFromStart()
+        return
+      }
+      const context = this.getVideoContext()
+      if (!context) return
+      if (this.fullVideoIsPlaying) {
+        this.fullVideoIsPlaying = false
+        context.pause()
+        return
+      }
+      context.play()
+      this.fullVideoIsPlaying = true
+    },
     resumeActiveClip() {
+      this.videoPlaybackMode = 'clip'
+      this.fullVideoIsPlaying = false
       const context = this.getVideoContext()
       if (!context || !this.hasPlayableVideo) return
       const targetTime = this.getClampedClipTime(this.clipCurrentTime || this.activeVideoStart)
@@ -1011,10 +1101,18 @@ export default {
       })
     },
     getVideoContext() {
-      if (!this.hasPlayableVideo) return null
+      if (!this.hasPlayableVideo && !this.hasPlayableFullVideo) return null
       return uni.createVideoContext('lessonVideo', this)
     },
     pauseActiveClip() {
+      if (this.isFullVideoMode) {
+        this.fullVideoIsPlaying = false
+        const context = this.getVideoContext()
+        if (context) {
+          context.pause()
+        }
+        return
+      }
       this.pendingClipAutoplay = false
       this.clipIsSeeking = false
       this.resumeAfterSeeking = false
@@ -1110,6 +1208,12 @@ export default {
     handleVideoLoadedMetadata() {
       const context = this.getVideoContext()
       if (!context) return
+      if (this.isFullVideoMode) {
+        this.enforcingClipBoundary = false
+        this.clipIsPlaying = false
+        this.clipIsStarting = false
+        return
+      }
       this.clipCurrentTime = this.activeVideoStart
       this.clipIsPlaying = false
       this.enforcingClipBoundary = true
@@ -1121,11 +1225,13 @@ export default {
       }, 180)
     },
     handleVideoCanPlay() {
+      if (this.isFullVideoMode) return
       if (!this.pendingClipAutoplay) return
       this.pendingClipAutoplay = false
       this.playActiveClipFromStart()
     },
     handleVideoTimeUpdate(event) {
+      if (this.isFullVideoMode) return
       if (!this.hasPlayableVideo) return
       const detail = event && event.detail ? event.detail : {}
       const currentTime = Number(detail.currentTime || 0)
@@ -1169,6 +1275,12 @@ export default {
       }
     },
     handleVideoPlay() {
+      if (this.isFullVideoMode) {
+        this.fullVideoIsPlaying = true
+        this.clipIsStarting = false
+        this.clipIsPlaying = false
+        return
+      }
       if (this.pausedAtClipEnd || this.clipCurrentTime < this.activeVideoStart - 0.4) {
         this.playActiveClipFromStart()
         return
@@ -1178,10 +1290,18 @@ export default {
       this.pausedAtClipEnd = false
     },
     handleVideoPause() {
+      if (this.isFullVideoMode) {
+        this.fullVideoIsPlaying = false
+        return
+      }
       this.clipIsStarting = false
       this.clipIsPlaying = false
     },
     handleVideoEnded() {
+      if (this.isFullVideoMode) {
+        this.fullVideoIsPlaying = false
+        return
+      }
       this.clipIsStarting = false
       this.clipIsPlaying = false
       this.pausedAtClipEnd = true
@@ -1189,6 +1309,7 @@ export default {
     handleVideoError() {
       this.clipIsStarting = false
       this.clipIsPlaying = false
+      this.fullVideoIsPlaying = false
       uni.showToast({
         title: '视频暂时无法播放，请检查视频地址或小程序合法域名配置',
         icon: 'none'
@@ -1906,6 +2027,25 @@ export default {
   color: #ffeba2;
   font-size: 23rpx;
   font-weight: 800;
+}
+
+.full-video-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 64rpx;
+  margin: 0;
+  padding: 0 24rpx;
+  border-radius: 18rpx;
+  background: #ffeba2;
+  color: #0e3a5c;
+  font-size: 24rpx;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.full-video-button::after {
+  border: 0;
 }
 
 .lock-text {
