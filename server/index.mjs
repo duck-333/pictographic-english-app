@@ -4,11 +4,12 @@ import { pathToFileURL } from 'node:url'
 
 import { assertUserAuthConfig, createUserSessionToken, requireAdminAuth, requireUserAuth } from './auth.mjs'
 import { createIdentityStore } from './identity-store.mjs'
-import { createUserEntitlementStore, ENTITLEMENT_TRANSACTION_TYPES } from './user-entitlement-store.mjs'
+import { createUserEntitlementStore, ENTITLEMENT_REASONS, ENTITLEMENT_TRANSACTION_TYPES } from './user-entitlement-store.mjs'
 import { createUserFavoritesStore } from './user-favorites-store.mjs'
 import { createUserRecentWordsStore } from './user-recent-words-store.mjs'
 import { createUserStore } from './user-store.mjs'
 import { createWechatLoginClient } from './wechat-login.mjs'
+import { toBasicWord, toFullWord } from './word-access-policy.mjs'
 import { createWordStore } from './word-store.mjs'
 
 const DEFAULT_PORT = 3001
@@ -690,7 +691,7 @@ export function createApiHandler(options = {}) {
         })
         sendJson(res, 200, {
           ok: true,
-          word: featured.word,
+          word: featured.word ? toBasicWord(featured.word) : null,
           source: featured.source
         })
         return
@@ -706,7 +707,7 @@ export function createApiHandler(options = {}) {
         sendJson(res, 200, {
           ok: true,
           count: words.length,
-          words
+          words: words.map((word) => toBasicWord(word))
         })
         return
       }
@@ -725,9 +726,13 @@ export function createApiHandler(options = {}) {
         }
 
         if (!hasAuthorizationHeader(req)) {
+          const basicWord = toBasicWord(word, {
+            reason: 'LOGIN_REQUIRED'
+          })
           sendJson(res, 200, {
             ok: true,
-            word
+            word: basicWord,
+            access: basicWord.access
           })
           return
         }
@@ -779,19 +784,40 @@ export function createApiHandler(options = {}) {
           })
 
           if (!quotaResult.allowed) {
-            sendJson(res, 403, {
-              ok: false,
+            const remainingQuota = Number(quotaResult.remainingQuota || 0)
+            const basicWord = toBasicWord(word, {
+              reason: 'QUOTA_INSUFFICIENT',
+              remainingQuota
+            })
+            sendJson(res, 200, {
+              ok: true,
               code: 'QUOTA_INSUFFICIENT',
               message: '剩余查词次数不足',
-              remainingQuota: Number(quotaResult.remainingQuota || 0)
+              word: basicWord,
+              access: basicWord.access,
+              remainingQuota
             })
             return
           }
 
+          const remainingQuota = Number(quotaResult.remainingQuota ?? quotaResult.entitlement?.quotaBalance ?? 0)
+          const membershipActive = quotaResult.reason === ENTITLEMENT_REASONS.MEMBERSHIP_ACTIVE
+          const charged = quotaResult.reason === ENTITLEMENT_REASONS.QUOTA_CONSUMED
+          const fullWord = toFullWord(word, {
+            charged,
+            chargeAmount: charged ? 1 : 0,
+            remainingQuota,
+            membershipActive,
+            membershipType: quotaResult.membershipType || quotaResult.entitlement?.membershipType,
+            membershipExpireAt: quotaResult.membershipExpireAt || quotaResult.entitlement?.membershipExpireAt
+          })
           sendJson(res, 200, {
             ok: true,
-            word,
-            remainingQuota: Number(quotaResult.remainingQuota ?? quotaResult.entitlement?.quotaBalance ?? 0)
+            word: fullWord,
+            access: fullWord.access,
+            charged,
+            membershipActive,
+            remainingQuota
           })
           return
         } catch (error) {
