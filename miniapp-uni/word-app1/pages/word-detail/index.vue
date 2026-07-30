@@ -46,7 +46,7 @@
         </view>
         <text class="meaning">{{ word.meaning }}</text>
         <text v-if="word.bookPage" class="book-page">书中索引：第 {{ word.bookPage }} 页</text>
-        <view class="hero-actions">
+        <view v-if="canAccessFullContent" class="hero-actions">
           <button
             v-if="hasVideoData"
             class="hero-video-button"
@@ -69,213 +69,225 @@
         </view>
       </view>
 
-      <scroll-view class="learning-tabs" scroll-x :show-scrollbar="false">
-        <button
-          v-for="tab in learningTabs"
-          :key="tab.targetId"
-          class="learning-tab"
-          :class="{ highlight: tab.highlight }"
-          hover-class="tab-pressed"
-          :data-target-id="tab.targetId"
-          @tap="scrollToLearningSection"
-        >
-          <text class="learning-tab-label">{{ tab.label }}</text>
-          <text v-if="tab.hint" class="learning-tab-hint">{{ tab.hint }}</text>
+      <view v-if="showAccessLock" class="access-lock-card card">
+        <text class="access-lock-eyebrow">{{ accessLockEyebrow }}</text>
+        <text class="access-lock-title">{{ accessLockTitle }}</text>
+        <text class="access-lock-desc">{{ accessLockDescription }}</text>
+        <text v-if="isQuotaInsufficientAccess" class="access-lock-quota">剩余次数0</text>
+        <button class="access-lock-button" hover-class="button-pressed" @tap="handleAccessLockAction">
+          {{ accessLockActionText }}
         </button>
-      </scroll-view>
-
-      <view v-if="word.parts && word.parts.length" id="section-breakdown" class="section card">
-        <text class="section-eyebrow">象形拆解</text>
-        <view class="parts">
-          <block v-for="part in displayParts" :key="part.text">
-            <view
-              class="part-chip"
-              :class="{ selected: expandedPart === part.text }"
-              :style="part.chipStyle"
-              hover-class="chip-pressed"
-              :data-part-text="part.text"
-              :data-target-id="part.targetId || ''"
-              @tap="handlePartTap"
-            >
-              <text class="part-text" :style="part.textStyle">{{ part.text }}</text>
-              <text class="part-meaning">{{ part.meaning }}</text>
-              <text v-if="part.targetId" class="part-action">点进</text>
-            </view>
-            <text v-if="part.showPlus" class="plus">+</text>
-          </block>
-        </view>
-        <view v-if="expandedPart" class="part-detail">
-          <text class="part-detail-title">{{ expandedPart }}</text>
-          <text class="part-detail-text">{{ activePartMeaning }}</text>
-          <text class="part-detail-link">该部分暂无关联词条。</text>
-        </view>
       </view>
 
-      <view v-else id="section-breakdown" class="section card">
-        <text class="section-eyebrow">节点说明</text>
-        <text class="desc">{{ word.tip }}</text>
-      </view>
-
-      <view id="section-imagery" class="section card">
-        <view class="title-row">
-          <text class="section-title">完整意象</text>
-          <text v-if="fullImageryText" class="mini-action" hover-class="text-pressed" @tap="toggleDesc">{{ showFullDesc ? '收起' : '展开' }}</text>
-        </view>
-        <text v-if="fullImageryText" class="desc" :class="{ folded: !showFullDesc }">{{ fullImageryText }}</text>
-        <text v-else class="desc imagery-empty">暂无完整意象说明。</text>
-      </view>
-
-      <view v-if="hasIllustrationImage" id="section-illustration" class="section card">
-        <text class="section-title">示意图</text>
-        <view v-if="!illustrationImageFailed" class="illustration-image-wrap" hover-class="image-pressed" @tap="previewIllustrationImage">
-          <image
-            class="illustration-image"
-            :src="illustrationImage.url"
-            mode="widthFix"
-            :lazy-load="true"
-            @error="handleIllustrationImageError"
-          />
-        </view>
-        <text v-else class="illustration-error">图片暂时无法加载。</text>
-        <text v-if="illustrationImageCaption" class="illustration-caption">{{ illustrationImageCaption }}</text>
-      </view>
-
-      <view v-if="displayExamples.length" id="section-examples" class="section card">
-        <text class="section-title">例句</text>
-        <view>
-          <view v-for="item in displayExamples" :key="item.key" class="example">
-            <text v-if="item.english" class="example-en">{{ item.english }}</text>
-            <text v-if="item.chinese" class="example-cn">{{ item.chinese }}</text>
-          </view>
-        </view>
-      </view>
-
-      <view v-if="relatedWords.length" id="section-related" class="section card">
-        <text class="section-title">同族词</text>
-        <view class="related-list">
-          <view
-            v-for="item in relatedWords"
-            :key="item.id"
-            class="related-chip"
-            hover-class="chip-pressed"
-            :data-id="item.id"
-            @tap="openDetailFromEvent"
+      <block v-if="canAccessFullContent">
+        <scroll-view class="learning-tabs" scroll-x :show-scrollbar="false">
+          <button
+            v-for="tab in learningTabs"
+            :key="tab.targetId"
+            class="learning-tab"
+            :class="{ highlight: tab.highlight }"
+            hover-class="tab-pressed"
+            :data-target-id="tab.targetId"
+            @tap="scrollToLearningSection"
           >
-            <text class="related-word">{{ item.word }}</text>
-            <text class="related-level">{{ item.level }}</text>
+            <text class="learning-tab-label">{{ tab.label }}</text>
+            <text v-if="tab.hint" class="learning-tab-hint">{{ tab.hint }}</text>
+          </button>
+        </scroll-view>
+
+        <view v-if="word.parts && word.parts.length" id="section-breakdown" class="section card">
+          <text class="section-eyebrow">象形拆解</text>
+          <view class="parts">
+            <block v-for="part in displayParts" :key="part.text">
+              <view
+                class="part-chip"
+                :class="{ selected: expandedPart === part.text }"
+                :style="part.chipStyle"
+                hover-class="chip-pressed"
+                :data-part-text="part.text"
+                :data-target-id="part.targetId || ''"
+                @tap="handlePartTap"
+              >
+                <text class="part-text" :style="part.textStyle">{{ part.text }}</text>
+                <text class="part-meaning">{{ part.meaning }}</text>
+                <text v-if="part.targetId" class="part-action">点进</text>
+              </view>
+              <text v-if="part.showPlus" class="plus">+</text>
+            </block>
+          </view>
+          <view v-if="expandedPart" class="part-detail">
+            <text class="part-detail-title">{{ expandedPart }}</text>
+            <text class="part-detail-text">{{ activePartMeaning }}</text>
+            <text class="part-detail-link">该部分暂无关联词条。</text>
           </view>
         </view>
-      </view>
 
-      <view v-if="hasVideoData" id="section-video" class="section video-card">
-        <view class="video-head">
+        <view v-else id="section-breakdown" class="section card">
+          <text class="section-eyebrow">节点说明</text>
+          <text class="desc">{{ word.tip }}</text>
+        </view>
+
+        <view id="section-imagery" class="section card">
+          <view class="title-row">
+            <text class="section-title">完整意象</text>
+            <text v-if="fullImageryText" class="mini-action" hover-class="text-pressed" @tap="toggleDesc">{{ showFullDesc ? '收起' : '展开' }}</text>
+          </view>
+          <text v-if="fullImageryText" class="desc" :class="{ folded: !showFullDesc }">{{ fullImageryText }}</text>
+          <text v-else class="desc imagery-empty">暂无完整意象说明。</text>
+        </view>
+
+        <view v-if="hasIllustrationImage" id="section-illustration" class="section card">
+          <text class="section-title">示意图</text>
+          <view v-if="!illustrationImageFailed" class="illustration-image-wrap" hover-class="image-pressed" @tap="previewIllustrationImage">
+            <image
+              class="illustration-image"
+              :src="illustrationImage.url"
+              mode="widthFix"
+              :lazy-load="true"
+              @error="handleIllustrationImageError"
+            />
+          </view>
+          <text v-else class="illustration-error">图片暂时无法加载。</text>
+          <text v-if="illustrationImageCaption" class="illustration-caption">{{ illustrationImageCaption }}</text>
+        </view>
+
+        <view v-if="displayExamples.length" id="section-examples" class="section card">
+          <text class="section-title">例句</text>
           <view>
-            <text class="video-title">{{ activeVideoTitle }}</text>
-            <text class="video-meta">{{ activeVideoMeta }}</text>
-          </view>
-          <text class="video-status">{{ videoStatusText }}</text>
-        </view>
-        <view v-if="hasPlayableVideo" class="segment-player">
-          <video
-            id="lessonVideo"
-            :key="activeVideoKey"
-            class="lesson-video"
-            :src="currentVideoUrl"
-            :initial-time="currentVideoInitialTime"
-            :controls="isFullVideoMode"
-            :show-center-play-btn="isFullVideoMode"
-            :show-play-btn="isFullVideoMode"
-            :show-progress="isFullVideoMode"
-            :show-fullscreen-btn="isFullVideoMode"
-            :show-mute-btn="false"
-            :enable-progress-gesture="isFullVideoMode"
-            :enable-play-gesture="isFullVideoMode"
-            :vslide-gesture="isFullVideoMode"
-            :vslide-gesture-in-fullscreen="isFullVideoMode"
-            @tap="handleVideoTap"
-            @loadedmetadata="handleVideoLoadedMetadata"
-            @canplay="handleVideoCanPlay"
-            @error="handleVideoError"
-            @play="handleVideoPlay"
-            @pause="handleVideoPause"
-            @timeupdate="handleVideoTimeUpdate"
-            @ended="handleVideoEnded"
-          ></video>
-          <view v-if="!isFullVideoMode" class="segment-control-panel">
-            <button class="segment-play-button" hover-class="button-pressed" @tap.stop="toggleActiveClipPlayback">
-              <view v-if="clipIsPlaying" class="pause-bars">
-                <view class="pause-bar"></view>
-                <view class="pause-bar"></view>
-              </view>
-              <view v-else class="play-triangle small"></view>
-            </button>
-            <view class="segment-progress-wrap">
-              <view class="segment-progress-head">
-                <text class="segment-progress-title">{{ clipIsPlaying ? '正在播放当前片段' : '当前讲解片段' }}</text>
-                <text class="segment-progress-time">{{ clipProgressText }}</text>
-              </view>
-              <slider
-                class="segment-slider"
-                :min="0"
-                :max="activeClipDuration"
-                :value="clipSliderValue"
-                :step="1"
-                activeColor="#fe8500"
-                backgroundColor="rgba(255, 255, 255, 0.18)"
-                block-color="#ffeba2"
-                block-size="18"
-                @changing="handleClipSliderChanging"
-                @change="handleClipSliderChange"
-              />
-              <view class="segment-progress-bar">
-                <view class="segment-progress-fill" :style="{ width: clipProgressPercent }"></view>
-              </view>
+            <view v-for="item in displayExamples" :key="item.key" class="example">
+              <text v-if="item.english" class="example-en">{{ item.english }}</text>
+              <text v-if="item.chinese" class="example-cn">{{ item.chinese }}</text>
             </view>
           </view>
-          <view class="full-video-lock">
-            <button
-              v-if="hasPlayableFullVideo"
-              class="full-video-button"
-              hover-class="button-pressed"
-              @tap.stop="toggleFullVideoPlayback"
+        </view>
+
+        <view v-if="relatedWords.length" id="section-related" class="section card">
+          <text class="section-title">同族词</text>
+          <view class="related-list">
+            <view
+              v-for="item in relatedWords"
+              :key="item.id"
+              class="related-chip"
+              hover-class="chip-pressed"
+              :data-id="item.id"
+              @tap="openDetailFromEvent"
             >
-              {{ fullVideoButtonText }}
-            </button>
-            <text class="lock-text">{{ fullVideoHintText }}</text>
-          </view>
-        </view>
-        <view v-else class="video-placeholder" @tap="showVideoTip">
-          <view class="play-button">
-            <view class="play-triangle"></view>
-          </view>
-          <text class="video-placeholder-text">{{ videoPlaceholderText }}</text>
-        </view>
-        <view v-if="displayVideoClips.length" class="clip-list">
-          <view
-            v-for="clip in displayVideoClips"
-            :key="clip.clipId"
-            class="clip-item"
-            :class="{ active: clip.active }"
-            hover-class="clip-pressed"
-            :data-index="clip.index"
-            @tap="selectVideoClip"
-          >
-            <view class="clip-main">
-              <text class="clip-title">{{ clip.displayTitle }}</text>
-              <text class="clip-focus">{{ clip.focus }}</text>
-              <text class="clip-note">{{ clip.note }}</text>
-            </view>
-            <view class="clip-side">
-              <text class="clip-part">{{ clip.targetPart }}</text>
-              <text class="clip-time">{{ clip.rangeText }}</text>
+              <text class="related-word">{{ item.word }}</text>
+              <text class="related-level">{{ item.level }}</text>
             </view>
           </view>
         </view>
-        <view v-else class="clip-empty">
-          <text class="clip-empty-title">暂无视频讲解</text>
-          <text class="clip-empty-text">暂无更多讲解内容。</text>
+
+        <view v-if="hasVideoData" id="section-video" class="section video-card">
+          <view class="video-head">
+            <view>
+              <text class="video-title">{{ activeVideoTitle }}</text>
+              <text class="video-meta">{{ activeVideoMeta }}</text>
+            </view>
+            <text class="video-status">{{ videoStatusText }}</text>
+          </view>
+          <view v-if="hasPlayableVideo" class="segment-player">
+            <video
+              id="lessonVideo"
+              :key="activeVideoKey"
+              class="lesson-video"
+              :src="currentVideoUrl"
+              :initial-time="currentVideoInitialTime"
+              :controls="isFullVideoMode"
+              :show-center-play-btn="isFullVideoMode"
+              :show-play-btn="isFullVideoMode"
+              :show-progress="isFullVideoMode"
+              :show-fullscreen-btn="isFullVideoMode"
+              :show-mute-btn="false"
+              :enable-progress-gesture="isFullVideoMode"
+              :enable-play-gesture="isFullVideoMode"
+              :vslide-gesture="isFullVideoMode"
+              :vslide-gesture-in-fullscreen="isFullVideoMode"
+              @tap="handleVideoTap"
+              @loadedmetadata="handleVideoLoadedMetadata"
+              @canplay="handleVideoCanPlay"
+              @error="handleVideoError"
+              @play="handleVideoPlay"
+              @pause="handleVideoPause"
+              @timeupdate="handleVideoTimeUpdate"
+              @ended="handleVideoEnded"
+            ></video>
+            <view v-if="!isFullVideoMode" class="segment-control-panel">
+              <button class="segment-play-button" hover-class="button-pressed" @tap.stop="toggleActiveClipPlayback">
+                <view v-if="clipIsPlaying" class="pause-bars">
+                  <view class="pause-bar"></view>
+                  <view class="pause-bar"></view>
+                </view>
+                <view v-else class="play-triangle small"></view>
+              </button>
+              <view class="segment-progress-wrap">
+                <view class="segment-progress-head">
+                  <text class="segment-progress-title">{{ clipIsPlaying ? '正在播放当前片段' : '当前讲解片段' }}</text>
+                  <text class="segment-progress-time">{{ clipProgressText }}</text>
+                </view>
+                <slider
+                  class="segment-slider"
+                  :min="0"
+                  :max="activeClipDuration"
+                  :value="clipSliderValue"
+                  :step="1"
+                  activeColor="#fe8500"
+                  backgroundColor="rgba(255, 255, 255, 0.18)"
+                  block-color="#ffeba2"
+                  block-size="18"
+                  @changing="handleClipSliderChanging"
+                  @change="handleClipSliderChange"
+                />
+                <view class="segment-progress-bar">
+                  <view class="segment-progress-fill" :style="{ width: clipProgressPercent }"></view>
+                </view>
+              </view>
+            </view>
+            <view class="full-video-lock">
+              <button
+                v-if="hasPlayableFullVideo"
+                class="full-video-button"
+                hover-class="button-pressed"
+                @tap.stop="toggleFullVideoPlayback"
+              >
+                {{ fullVideoButtonText }}
+              </button>
+              <text class="lock-text">{{ fullVideoHintText }}</text>
+            </view>
+          </view>
+          <view v-else class="video-placeholder" @tap="showVideoTip">
+            <view class="play-button">
+              <view class="play-triangle"></view>
+            </view>
+            <text class="video-placeholder-text">{{ videoPlaceholderText }}</text>
+          </view>
+          <view v-if="displayVideoClips.length" class="clip-list">
+            <view
+              v-for="clip in displayVideoClips"
+              :key="clip.clipId"
+              class="clip-item"
+              :class="{ active: clip.active }"
+              hover-class="clip-pressed"
+              :data-index="clip.index"
+              @tap="selectVideoClip"
+            >
+              <view class="clip-main">
+                <text class="clip-title">{{ clip.displayTitle }}</text>
+                <text class="clip-focus">{{ clip.focus }}</text>
+                <text class="clip-note">{{ clip.note }}</text>
+              </view>
+              <view class="clip-side">
+                <text class="clip-part">{{ clip.targetPart }}</text>
+                <text class="clip-time">{{ clip.rangeText }}</text>
+              </view>
+            </view>
+          </view>
+          <view v-else class="clip-empty">
+            <text class="clip-empty-title">暂无视频讲解</text>
+            <text class="clip-empty-text">暂无更多讲解内容。</text>
+          </view>
         </view>
-      </view>
+      </block>
     </view>
 
     <view v-else class="empty-state">
@@ -635,6 +647,47 @@ export default {
     },
     hasPronunciationAudio() {
       return this.isPlayableAudioUrl(this.pronunciationAudioUrl)
+    },
+    accessInfo() {
+      const access = this.word && this.word.access
+      return access && typeof access === 'object' && !Array.isArray(access) ? access : {}
+    },
+    accessReason() {
+      return String(this.accessInfo.reason || '').trim()
+    },
+    canAccessFullContent() {
+      if (!this.word) return false
+      return this.accessInfo.canAccessFull === true
+    },
+    showAccessLock() {
+      return Boolean(this.word && !this.canAccessFullContent)
+    },
+    isLoginRequiredAccess() {
+      return this.accessReason === 'LOGIN_REQUIRED'
+    },
+    isQuotaInsufficientAccess() {
+      return this.accessReason === 'QUOTA_INSUFFICIENT'
+    },
+    accessLockEyebrow() {
+      return this.isLoginRequiredAccess ? '完整学习内容' : '学习权益'
+    },
+    accessLockTitle() {
+      if (this.isLoginRequiredAccess) return '登录后可获得30次完整学习机会'
+      if (this.isQuotaInsufficientAccess) return '完整学习次数已用完'
+      return '完整学习内容暂未解锁'
+    },
+    accessLockDescription() {
+      if (this.isLoginRequiredAccess) {
+        return '登录后可查看象形拆解、完整意象、视频片段和完整讲解视频。'
+      }
+      if (this.isQuotaInsufficientAccess) {
+        return '开通会员或获取更多次数后，可以继续查看完整学习内容。'
+      }
+      return '当前账号暂时无法查看完整学习内容。'
+    },
+    accessLockActionText() {
+      if (this.isLoginRequiredAccess) return '去登录'
+      return '开通会员或获取更多次数'
     }
   },
   methods: {
@@ -655,16 +708,15 @@ export default {
 
       let remote = null
       try {
-        if (preferWordLookup) {
+        remote = await fetchWordById(raw, {
+          clientRequestId: this.wordAccessClientRequestId,
+          accessContent: true
+        })
+        if (!remote && preferWordLookup) {
           remote = await fetchWordByWord(raw)
-        } else {
-          remote = await fetchWordById(raw, {
-            clientRequestId: this.wordAccessClientRequestId,
-            accessContent: true
-          })
-          if (!remote && raw.indexOf('word-') !== 0 && raw.indexOf('node-') !== 0) {
-            remote = await fetchWordByWord(raw)
-          }
+        }
+        if (!remote && !preferWordLookup && raw.indexOf('word-') !== 0 && raw.indexOf('node-') !== 0) {
+          remote = await fetchWordByWord(raw)
         }
       } catch (error) {
         if (isQuotaInsufficientError(error)) {
@@ -796,6 +848,12 @@ export default {
       } finally {
         this.favoriteLoading = false
       }
+    },
+    handleAccessLockAction() {
+      if (this.word && this.word.id) {
+        savePendingWordId(this.word.id)
+      }
+      this.goMine()
     },
     handlePartTap(event) {
       const dataset = event && event.currentTarget ? event.currentTarget.dataset : {}
@@ -1623,6 +1681,62 @@ export default {
   border-bottom-width: 8rpx;
   border-left-width: 12rpx;
   border-left-color: #ffeba2;
+}
+
+.access-lock-card {
+  margin-top: 24rpx;
+  padding: 30rpx;
+  border: 2rpx solid rgba(107, 174, 214, 0.22);
+}
+
+.access-lock-eyebrow,
+.access-lock-title,
+.access-lock-desc,
+.access-lock-quota {
+  display: block;
+}
+
+.access-lock-eyebrow {
+  color: #6baed6;
+  font-size: 24rpx;
+  font-weight: 800;
+}
+
+.access-lock-title {
+  margin-top: 10rpx;
+  color: #0e3a5c;
+  font-size: 32rpx;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.access-lock-desc {
+  margin-top: 14rpx;
+  color: #486a80;
+  font-size: 25rpx;
+  line-height: 1.65;
+}
+
+.access-lock-quota {
+  margin-top: 12rpx;
+  color: #bd5a22;
+  font-size: 24rpx;
+  font-weight: 800;
+}
+
+.access-lock-button {
+  margin: 22rpx 0 0;
+  min-height: 76rpx;
+  border-radius: 999rpx;
+  background: #0e3a5c;
+  color: #ffffff;
+  font-size: 26rpx;
+  font-weight: 900;
+  line-height: 76rpx;
+}
+
+.access-lock-button::after {
+  border: 0;
 }
 
 .learning-tabs {

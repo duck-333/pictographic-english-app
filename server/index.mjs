@@ -93,23 +93,30 @@ function hasAuthorizationHeader(req) {
   return Boolean(getHeaderValue(req, 'authorization'))
 }
 
-function createContentAccessClientRequestId(req, context = {}) {
-  const clientRequestId = normalizeRequestId(getHeaderValue(req, 'x-client-request-id'))
-  if (clientRequestId) {
+function createContentAccessClientRequestId(req) {
+  const rawClientRequestId = getHeaderValue(req, 'x-client-request-id')
+  if (!rawClientRequestId) {
     return {
-      clientRequestId,
-      fallback: false
+      ok: false,
+      statusCode: 400,
+      code: 'CLIENT_REQUEST_ID_REQUIRED',
+      message: 'X-Client-Request-Id is required for full content access.'
     }
   }
 
-  const currentTime = context.now instanceof Date ? context.now : new Date()
-  const fallbackBucket = Math.floor(currentTime.getTime() / 60000).toString(36)
-  console.warn(
-    `content-access missing clientRequestId userId=${context.userId || ''} wordId=${context.wordId || ''}; using fallbackBucket=${fallbackBucket}`
-  )
+  const clientRequestId = normalizeRequestId(rawClientRequestId)
+  if (!clientRequestId) {
+    return {
+      ok: false,
+      statusCode: 400,
+      code: 'CLIENT_REQUEST_ID_INVALID',
+      message: 'X-Client-Request-Id is invalid.'
+    }
+  }
+
   return {
-    clientRequestId: `fallback:${fallbackBucket}`,
-    fallback: true
+    ok: true,
+    clientRequestId
   }
 }
 
@@ -760,12 +767,17 @@ export function createApiHandler(options = {}) {
             return
           }
 
+          const requestIdResult = createContentAccessClientRequestId(req)
+          if (!requestIdResult.ok) {
+            sendJson(res, requestIdResult.statusCode, {
+              ok: false,
+              code: requestIdResult.code,
+              message: requestIdResult.message
+            })
+            return
+          }
+
           await userEntitlementStore.ensureRegistrationBonus(authResult.userId)
-          const requestIdResult = createContentAccessClientRequestId(req, {
-            userId: authResult.userId,
-            wordId: word.id,
-            now: now()
-          })
           const quotaResult = await userEntitlementStore.consumeQuota({
             userId: authResult.userId,
             amount: 1,
@@ -774,7 +786,7 @@ export function createApiHandler(options = {}) {
             accessContext: {
               type: 'root',
               entry: 'word_detail',
-              clientRequestIdSource: requestIdResult.fallback ? 'server_fallback' : 'client'
+              clientRequestIdSource: 'client'
             },
             idempotencyKey: createContentAccessIdempotencyKey(authResult.userId, word.id, requestIdResult.clientRequestId),
             source: 'full_content_access',

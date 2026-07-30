@@ -138,7 +138,16 @@ export function fetchServerWordById(id, options = {}) {
     ...options,
     authorization
   })
-    .then((data) => data.word || null)
+    .then((data) => {
+      const word = data.word || null
+      if (word && data.access) {
+        return {
+          ...word,
+          access: data.access
+        }
+      }
+      return word
+    })
     .catch((error) => {
       if (error && error.code === 'WORD_NOT_FOUND') return null
       throw error
