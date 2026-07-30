@@ -140,6 +140,51 @@ const ACTIVE_DEV_PREVIEW_WORDS = selectDevPreviewWordsForRuntime(DEV_PREVIEW_WOR
 const SOURCE_WORDS = mergePreviewWords(LOCAL_WORDS, ACTIVE_DEV_PREVIEW_WORDS)
 let REMOTE_WORD_RECORDS = []
 
+export const WORD_REPOSITORY_CACHE_VERSION = 2
+export const WORD_REPOSITORY_CACHE_VERSION_KEY = 'pictographic:wordRepositoryCacheVersion'
+
+const LEGACY_REMOTE_WORD_CACHE_KEYS = [
+  'pictographic:remoteWords',
+  'pictographic:remoteWordRecords',
+  'pictographic:wordRepositoryCache',
+  'pictographic:wordRepositoryRemoteWords',
+  'pictographic:publishedRemoteWords'
+]
+
+function hasUniStorageMethod(method) {
+  return typeof uni !== 'undefined' && uni && typeof uni[method] === 'function'
+}
+
+function removeStorageKey(key) {
+  if (!hasUniStorageMethod('removeStorageSync')) return
+  try {
+    uni.removeStorageSync(key)
+  } catch (error) {}
+}
+
+function ensureWordRepositoryCacheVersion() {
+  if (!hasUniStorageMethod('getStorageSync') || !hasUniStorageMethod('setStorageSync')) return
+
+  let currentVersion = ''
+  try {
+    currentVersion = String(uni.getStorageSync(WORD_REPOSITORY_CACHE_VERSION_KEY) || '')
+  } catch (error) {
+    currentVersion = ''
+  }
+
+  if (currentVersion === String(WORD_REPOSITORY_CACHE_VERSION)) return
+
+  // Only word content caches are discarded here; user/login storage uses separate keys.
+  LEGACY_REMOTE_WORD_CACHE_KEYS.forEach((key) => removeStorageKey(key))
+  REMOTE_WORD_RECORDS = []
+
+  try {
+    uni.setStorageSync(WORD_REPOSITORY_CACHE_VERSION_KEY, WORD_REPOSITORY_CACHE_VERSION)
+  } catch (error) {}
+}
+
+ensureWordRepositoryCacheVersion()
+
 export const CONTENT_REPOSITORY_MODE = ACTIVE_DEV_PREVIEW_WORDS.length
   ? 'local-preview-bridge'
   : getWordApiBaseUrl()
@@ -170,10 +215,14 @@ function normalizeRemoteDisplayWord(word) {
   const normalized = normalizeWordRecord(source)
   const rawId = String(source.id || '').trim()
   const rawWord = String(source.word || '').trim()
+  const access = source.access && typeof source.access === 'object' && !Array.isArray(source.access)
+    ? { ...source.access }
+    : null
   return {
     ...normalized,
     id: rawId || normalized.id,
-    word: rawWord || normalized.word
+    word: rawWord || normalized.word,
+    ...(access ? { access } : {})
   }
 }
 
@@ -262,7 +311,8 @@ function cloneWord(word) {
     pronunciationAudio: clonePronunciationAudio(word.pronunciationAudio),
     audioUrl: word.audioUrl || '',
     videoSegment: word.videoSegment ? { ...word.videoSegment } : {},
-    videoClips: Array.isArray(word.videoClips) ? word.videoClips.map((clip) => cloneVideoClip(clip)) : []
+    videoClips: Array.isArray(word.videoClips) ? word.videoClips.map((clip) => cloneVideoClip(clip)) : [],
+    ...(word.access && typeof word.access === 'object' && !Array.isArray(word.access) ? { access: { ...word.access } } : {})
   }
 }
 
