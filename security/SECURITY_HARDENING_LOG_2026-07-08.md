@@ -643,3 +643,89 @@ curl https://baxiaota.com/api/health
 ```text
 生产环境基础恢复能力验证通过。
 ```
+
+## 2026-07-31 access-control 正式切换与服务器收尾记录
+
+### 新版本与正式代理
+
+- 新版本目录：
+
+  ```text
+  /home/ubuntu/pictographic-english-app-release-20260729-access-control
+  ```
+
+- 新版 PM2 进程：
+
+  ```text
+  pictographic-english-api-access-control-candidate
+  ```
+
+- 新版监听端口：
+
+  ```text
+  3002
+  ```
+
+- Nginx 当前正式代理：
+
+  ```text
+  /api/ -> http://127.0.0.1:3002
+  ```
+
+### 正式切换前验证
+
+- 新版在 3002 端口独立启动测试通过。
+- `/api/health` 返回 HTTP 200。
+- `wordCount` 为 61。
+- 新版成功连接正式 MySQL。
+- 用户权限管理接口查询正常。
+- 数据库切换前备份成功。
+- Nginx 原配置已备份。
+- 小程序体验版 1.0.6 真机验收通过。
+- 登录、查词、扣次数、收藏、最近浏览、后台权益管理均正常。
+
+### 稳定观察结果
+
+- 新服务连续运行超过 25 小时。
+- PM2 重启次数为 0。
+- PM2 `error.log` 无异常。
+- MySQL 和 PM2 最近 24 小时无错误。
+- Nginx、公网接口和本机 3002 健康检查均正常。
+- 公网无法直接访问 3001、3002、3306。
+- MySQL 仅监听 `127.0.0.1:3306`。
+
+### 旧服务处理
+
+- 旧 PM2 进程 `pictographic-english-api-module3` 已停止。
+- 旧端口 3001 已关闭。
+- 公网在旧服务停止后仍正常返回 HTTP 200。
+- 旧 PM2 进程已删除。
+
+### 最终状态
+
+- PM2 中只保留新服务。
+- 已执行 `pm2 save`。
+- `/home/ubuntu/.pm2/dump.pm2` 中只保存 1 个进程。
+- `pm2-ubuntu` 为 enabled 和 active。
+- 服务器重启后不会恢复旧服务。
+- 新进程名称虽然仍带 `candidate`，但仅为显示名称，不影响运行、安全或开机恢复，暂不为改名而重启正式服务。
+
+### 相关备份
+
+- 数据库备份：
+
+  ```text
+  /home/ubuntu/backups/before-access-control-20260730-081955.sql
+  ```
+
+- Nginx 配置备份：
+
+  ```text
+  /etc/nginx/sites-available/baxiaota.com.before-access-control-20260730-163839
+  ```
+
+### 当前结论
+
+```text
+access-control 新版本已正式承接生产流量，旧服务已完成下线清理，PM2、Nginx、MySQL、端口防护和开机恢复状态均已验证正常。
+```
