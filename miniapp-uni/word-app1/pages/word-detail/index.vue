@@ -186,36 +186,45 @@
             </view>
             <text class="video-status">{{ videoStatusText }}</text>
           </view>
-          <view
-            v-if="shouldRenderLessonVideo"
-            class="segment-player"
-            :class="{ 'full-video-player': isFullVideoMode }"
-          >
-            <video
-              id="lessonVideo"
-              :key="activeVideoKey"
-              class="lesson-video"
-              :src="currentVideoUrl"
-              :initial-time="currentVideoInitialTime"
-              :controls="isFullVideoMode"
-              :show-center-play-btn="isFullVideoMode"
-              :show-play-btn="isFullVideoMode"
-              :show-progress="isFullVideoMode"
-              :show-fullscreen-btn="isFullVideoMode"
-              :show-mute-btn="false"
-              :enable-progress-gesture="isFullVideoMode"
-              :enable-play-gesture="isFullVideoMode"
-              :vslide-gesture="isFullVideoMode"
-              :vslide-gesture-in-fullscreen="isFullVideoMode"
-              @tap="handleVideoTap"
-              @loadedmetadata="handleVideoLoadedMetadata"
-              @canplay="handleVideoCanPlay"
-              @error="handleVideoError"
-              @play="handleVideoPlay"
-              @pause="handleVideoPause"
-              @timeupdate="handleVideoTimeUpdate"
-              @ended="handleVideoEnded"
-            ></video>
+          <view v-if="hasPlayableVideo" class="segment-player">
+            <view class="lesson-video-wrap">
+              <video
+                id="lessonVideo"
+                :key="activeVideoKey"
+                class="lesson-video"
+                :src="currentVideoUrl"
+                :initial-time="currentVideoInitialTime"
+                :controls="isFullVideoMode"
+                :show-center-play-btn="isFullVideoMode"
+                :show-play-btn="isFullVideoMode"
+                :show-progress="isFullVideoMode"
+                :show-fullscreen-btn="isFullVideoMode"
+                :show-mute-btn="false"
+                :enable-progress-gesture="isFullVideoMode"
+                :enable-play-gesture="isFullVideoMode"
+                :vslide-gesture="isFullVideoMode"
+                :vslide-gesture-in-fullscreen="isFullVideoMode"
+                @tap="handleVideoTap"
+                @loadedmetadata="handleVideoLoadedMetadata"
+                @canplay="handleVideoCanPlay"
+                @error="handleVideoError"
+                @play="handleVideoPlay"
+                @pause="handleVideoPause"
+                @timeupdate="handleVideoTimeUpdate"
+                @ended="handleVideoEnded"
+              >
+                <cover-view
+                  v-if="shouldShowFullVideoPrompt"
+                  class="full-video-prompt"
+                  @tap.stop="playFullVideoFromPrompt"
+                >
+                  <cover-view class="full-video-prompt-button" @tap.stop="playFullVideoFromPrompt">
+                    观看完整讲解视频
+                  </cover-view>
+                  <cover-view class="full-video-prompt-note">{{ fullVideoHintText }}</cover-view>
+                </cover-view>
+              </video>
+            </view>
             <view v-if="!isFullVideoMode" class="segment-control-panel">
               <button class="segment-play-button" hover-class="button-pressed" @tap.stop="toggleActiveClipPlayback">
                 <view v-if="clipIsPlaying" class="pause-bars">
@@ -278,23 +287,6 @@
           <view v-else class="clip-empty">
             <text class="clip-empty-title">暂无视频讲解</text>
             <text class="clip-empty-text">暂无更多讲解内容。</text>
-          </view>
-          <view v-if="hasPlayableFullVideo && !isFullVideoMode" class="full-video-section">
-            <view class="full-video-section-head">
-              <text class="full-video-section-title">完整讲解视频</text>
-              <text class="full-video-section-meta">从 0 秒观看完整讲解</text>
-            </view>
-            <view class="full-video-preview" hover-class="full-video-preview-pressed" @tap.stop="playFullVideoFromStart">
-              <view class="full-video-preview-mark">
-                <view class="play-triangle"></view>
-              </view>
-              <view class="full-video-overlay">
-                <button class="full-video-overlay-button" hover-class="button-pressed" @tap.stop="playFullVideoFromStart">
-                  观看完整讲解视频
-                </button>
-                <text class="full-video-overlay-note">{{ fullVideoHintText }}</text>
-              </view>
-            </view>
           </view>
         </view>
       </block>
@@ -398,6 +390,7 @@ export default {
       clipIsPlaying: false,
       clipIsStarting: false,
       fullVideoIsPlaying: false,
+      showFullVideoPrompt: false,
       enforcingClipBoundary: false,
       pausedAtClipEnd: false,
       clipPlaybackToken: 0,
@@ -534,7 +527,7 @@ export default {
       return this.videoClips[this.activeClipIndex] || this.videoClips[0] || {}
     },
     activeVideoKey() {
-      return `${this.videoPlaybackMode}-${this.currentVideoUrl || 'no-video'}`
+      return this.currentVideoUrl || 'no-video'
     },
     activeVideoUrl() {
       const video = this.activeVideo || {}
@@ -615,11 +608,11 @@ export default {
     hasPlayableVideo() {
       return isPlayableMediaUrl(this.activeVideoUrl) && this.activeClipHasValidRange
     },
-    shouldRenderLessonVideo() {
-      return this.hasPlayableVideo || (this.isFullVideoMode && this.hasPlayableFullVideo)
-    },
     hasPlayableFullVideo() {
       return this.hasVideoData && isPlayableMediaUrl(this.activeVideoUrl)
+    },
+    shouldShowFullVideoPrompt() {
+      return this.showFullVideoPrompt === true && this.hasPlayableFullVideo === true && this.videoPlaybackMode === 'clip'
     },
     fullVideoHintText() {
       if (!this.hasPlayableFullVideo) return `当前讲解片段时长 ${this.clipDurationText}。`
@@ -809,6 +802,7 @@ export default {
       this.clipIsPlaying = false
       this.clipIsStarting = false
       this.fullVideoIsPlaying = false
+      this.showFullVideoPrompt = false
       this.enforcingClipBoundary = false
       this.pausedAtClipEnd = false
       this.pendingClipAutoplay = false
@@ -975,6 +969,7 @@ export default {
       this.clipIsPlaying = false
       this.clipIsStarting = false
       this.fullVideoIsPlaying = false
+      this.showFullVideoPrompt = false
       this.enforcingClipBoundary = false
       this.pausedAtClipEnd = false
       this.pendingClipAutoplay = false
@@ -1001,6 +996,7 @@ export default {
     playActiveClipFromStart() {
       this.videoPlaybackMode = 'clip'
       this.fullVideoIsPlaying = false
+      this.showFullVideoPrompt = false
       const context = this.getVideoContext()
       if (!context || !this.hasPlayableVideo) return
       this.clipIsSeeking = false
@@ -1041,11 +1037,34 @@ export default {
       if (this.isFullVideoMode) return
       this.toggleActiveClipPlayback()
     },
+    playFullVideoFromPrompt() {
+      if (!this.shouldShowFullVideoPrompt) return
+      this.playFullVideoFromStart()
+    },
+    finishActiveClipPlayback() {
+      if (this.isFullVideoMode || !this.hasPlayableVideo) return
+      if (this.pausedAtClipEnd && this.showFullVideoPrompt) return
+
+      const context = this.getVideoContext()
+      this.clearClipPlaybackTimer()
+      this.pausedAtClipEnd = true
+      this.clipCurrentTime = this.effectiveVideoEnd
+      this.clipIsPlaying = false
+      this.clipIsStarting = false
+      this.clipIsSeeking = false
+      this.resumeAfterSeeking = false
+      this.enforcingClipBoundary = false
+      if (context) {
+        context.pause()
+      }
+      this.showFullVideoPrompt = this.hasPlayableFullVideo
+    },
     playFullVideoFromStart() {
       if (!this.hasPlayableFullVideo) {
         this.showVideoTip()
         return
       }
+      this.showFullVideoPrompt = false
       const previousContext = this.getVideoContext()
       if (previousContext) {
         previousContext.pause()
@@ -1075,6 +1094,7 @@ export default {
     resumeActiveClip() {
       this.videoPlaybackMode = 'clip'
       this.fullVideoIsPlaying = false
+      this.showFullVideoPrompt = false
       const context = this.getVideoContext()
       if (!context || !this.hasPlayableVideo) return
       const targetTime = this.getClampedClipTime(this.clipCurrentTime || this.activeVideoStart)
@@ -1106,6 +1126,7 @@ export default {
     handleClipSliderChanging(event) {
       if (!this.hasPlayableVideo) return
       const value = this.getClipSliderEventValue(event)
+      this.showFullVideoPrompt = false
       if (!this.clipIsSeeking) {
         this.resumeAfterSeeking = this.clipIsPlaying
         this.clearClipPlaybackTimer()
@@ -1130,6 +1151,7 @@ export default {
       const offset = Math.min(Math.max(Number(offsetSeconds || 0), 0), this.activeClipDuration)
       const targetTime = this.getClampedClipTime(this.activeVideoStart + offset)
       const shouldAutoplay = Boolean(options.autoplay && targetTime < this.effectiveVideoEnd - 0.15)
+      this.showFullVideoPrompt = false
       this.clearClipPlaybackTimer()
       this.clipIsSeeking = false
       this.resumeAfterSeeking = false
@@ -1308,6 +1330,7 @@ export default {
       if (this.pausedAtClipEnd) {
         if (currentTime < this.effectiveVideoEnd - 0.5) {
           this.pausedAtClipEnd = false
+          this.showFullVideoPrompt = false
         } else {
           return
         }
@@ -1315,20 +1338,14 @@ export default {
 
       if (currentTime < this.effectiveVideoEnd - 0.15) return
 
-      this.pausedAtClipEnd = true
-      this.clipCurrentTime = this.effectiveVideoEnd
-      this.clipIsPlaying = false
-      this.clipIsStarting = false
-      const context = this.getVideoContext()
-      if (context) {
-        context.pause()
-      }
+      this.finishActiveClipPlayback()
     },
     handleVideoPlay() {
       if (this.isFullVideoMode) {
         this.fullVideoIsPlaying = true
         this.clipIsStarting = false
         this.clipIsPlaying = false
+        this.showFullVideoPrompt = false
         return
       }
       if (this.pausedAtClipEnd || this.clipCurrentTime < this.activeVideoStart - 0.4) {
@@ -1338,6 +1355,7 @@ export default {
       this.clipIsStarting = false
       this.clipIsPlaying = true
       this.pausedAtClipEnd = false
+      this.showFullVideoPrompt = false
     },
     handleVideoPause() {
       if (this.isFullVideoMode) {
@@ -1350,20 +1368,25 @@ export default {
     handleVideoEnded() {
       if (this.isFullVideoMode) {
         this.fullVideoIsPlaying = false
+        this.showFullVideoPrompt = false
         return
       }
       this.clipIsStarting = false
       this.clipIsPlaying = false
-      this.pausedAtClipEnd = true
+      this.finishActiveClipPlayback()
     },
     handleVideoError() {
+      const keepFinishedClipPrompt = this.videoPlaybackMode === 'clip' && this.pausedAtClipEnd && this.hasPlayableFullVideo
       this.clipIsStarting = false
       this.clipIsPlaying = false
       this.fullVideoIsPlaying = false
-      uni.showToast({
-        title: '视频暂时无法播放，请检查视频地址或小程序合法域名配置',
-        icon: 'none'
-      })
+      this.showFullVideoPrompt = keepFinishedClipPrompt
+      if (!keepFinishedClipPrompt) {
+        uni.showToast({
+          title: '视频暂时无法播放，请检查视频地址或小程序合法域名配置',
+          icon: 'none'
+        })
+      }
     },
     openDetailFromEvent(event) {
       const dataset = event && event.currentTarget ? event.currentTarget.dataset : {}
@@ -1990,14 +2013,11 @@ export default {
 }
 
 .video-card {
-  display: flex;
-  flex-direction: column;
   border-radius: 32rpx;
   background: #0e3a5c;
 }
 
 .video-head {
-  order: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2026,22 +2046,63 @@ export default {
   font-weight: 800;
 }
 
-.lesson-video {
-  width: 100%;
-  height: 360rpx;
+.lesson-video-wrap {
+  position: relative;
   margin-top: 24rpx;
   border-radius: 24rpx;
   overflow: hidden;
   background: #08263d;
 }
 
+.lesson-video {
+  display: block;
+  width: 100%;
+  height: 360rpx;
+  border-radius: 24rpx;
+  overflow: hidden;
+  background: #08263d;
+}
+
 .segment-player {
-  order: 1;
   margin-top: 24rpx;
 }
 
-.segment-player.full-video-player {
-  order: 3;
+.full-video-prompt {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32rpx;
+  background: rgba(24, 27, 31, 0.7);
+}
+
+.full-video-prompt-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 72rpx;
+  padding: 0 34rpx;
+  border-radius: 18rpx;
+  background: #ffeba2;
+  color: #0e3a5c;
+  font-size: 26rpx;
+  font-weight: 900;
+  line-height: 72rpx;
+}
+
+.full-video-prompt-note {
+  display: block;
+  margin-top: 14rpx;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 22rpx;
+  line-height: 1.45;
+  text-align: center;
 }
 
 .segment-control-panel {
@@ -2125,7 +2186,6 @@ export default {
 }
 
 .video-placeholder {
-  order: 1;
   display: flex;
   align-items: center;
   gap: 22rpx;
@@ -2143,7 +2203,6 @@ export default {
 }
 
 .clip-list {
-  order: 2;
   display: flex;
   flex-direction: column;
   gap: 16rpx;
@@ -2218,108 +2277,10 @@ export default {
 }
 
 .clip-empty {
-  order: 2;
   margin-top: 24rpx;
   padding: 24rpx;
   border-radius: 24rpx;
   background: rgba(255, 255, 255, 0.08);
-  text-align: center;
-}
-
-.full-video-section {
-  order: 3;
-  margin-top: 24rpx;
-}
-
-.full-video-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18rpx;
-  margin-bottom: 14rpx;
-}
-
-.full-video-section-title,
-.full-video-section-meta,
-.full-video-overlay-note {
-  display: block;
-}
-
-.full-video-section-title {
-  color: #ffffff;
-  font-size: 26rpx;
-  font-weight: 900;
-}
-
-.full-video-section-meta {
-  flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.58);
-  font-size: 22rpx;
-}
-
-.full-video-preview {
-  position: relative;
-  min-height: 300rpx;
-  overflow: hidden;
-  border: 2rpx solid rgba(255, 255, 255, 0.1);
-  border-radius: 24rpx;
-  background: #08263d;
-}
-
-.full-video-preview-pressed {
-  opacity: 0.9;
-}
-
-.full-video-preview-mark {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 104rpx;
-  height: 104rpx;
-  margin-left: -52rpx;
-  margin-top: -52rpx;
-  border-radius: 999rpx;
-  background: rgba(255, 235, 162, 0.16);
-}
-
-.full-video-overlay {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 32rpx;
-  background: rgba(30, 34, 39, 0.68);
-}
-
-.full-video-overlay-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 72rpx;
-  margin: 0;
-  padding: 0 34rpx;
-  border-radius: 18rpx;
-  background: #ffeba2;
-  color: #0e3a5c;
-  font-size: 26rpx;
-  font-weight: 900;
-  line-height: 1.2;
-}
-
-.full-video-overlay-button::after {
-  border: 0;
-}
-
-.full-video-overlay-note {
-  margin-top: 14rpx;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 22rpx;
-  line-height: 1.45;
   text-align: center;
 }
 
