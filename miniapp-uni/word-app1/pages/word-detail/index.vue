@@ -186,7 +186,11 @@
             </view>
             <text class="video-status">{{ videoStatusText }}</text>
           </view>
-          <view v-if="hasPlayableVideo" class="segment-player">
+          <view
+            v-if="shouldRenderLessonVideo"
+            class="segment-player"
+            :class="{ 'full-video-player': isFullVideoMode }"
+          >
             <video
               id="lessonVideo"
               :key="activeVideoKey"
@@ -243,17 +247,6 @@
                 </view>
               </view>
             </view>
-            <view class="full-video-lock">
-              <button
-                v-if="hasPlayableFullVideo"
-                class="full-video-button"
-                hover-class="button-pressed"
-                @tap.stop="toggleFullVideoPlayback"
-              >
-                {{ fullVideoButtonText }}
-              </button>
-              <text class="lock-text">{{ fullVideoHintText }}</text>
-            </view>
           </view>
           <view v-else class="video-placeholder" @tap="showVideoTip">
             <view class="play-button">
@@ -285,6 +278,23 @@
           <view v-else class="clip-empty">
             <text class="clip-empty-title">暂无视频讲解</text>
             <text class="clip-empty-text">暂无更多讲解内容。</text>
+          </view>
+          <view v-if="hasPlayableFullVideo && !isFullVideoMode" class="full-video-section">
+            <view class="full-video-section-head">
+              <text class="full-video-section-title">完整讲解视频</text>
+              <text class="full-video-section-meta">从 0 秒观看完整讲解</text>
+            </view>
+            <view class="full-video-preview" hover-class="full-video-preview-pressed" @tap.stop="playFullVideoFromStart">
+              <view class="full-video-preview-mark">
+                <view class="play-triangle"></view>
+              </view>
+              <view class="full-video-overlay">
+                <button class="full-video-overlay-button" hover-class="button-pressed" @tap.stop="playFullVideoFromStart">
+                  观看完整讲解视频
+                </button>
+                <text class="full-video-overlay-note">{{ fullVideoHintText }}</text>
+              </view>
+            </view>
           </view>
         </view>
       </block>
@@ -605,18 +615,15 @@ export default {
     hasPlayableVideo() {
       return isPlayableMediaUrl(this.activeVideoUrl) && this.activeClipHasValidRange
     },
+    shouldRenderLessonVideo() {
+      return this.hasPlayableVideo || (this.isFullVideoMode && this.hasPlayableFullVideo)
+    },
     hasPlayableFullVideo() {
       return this.hasVideoData && isPlayableMediaUrl(this.activeVideoUrl)
     },
-    fullVideoButtonText() {
-      if (!this.isFullVideoMode) return '播放完整讲解视频'
-      return this.fullVideoIsPlaying ? '暂停完整讲解视频' : '继续完整讲解视频'
-    },
     fullVideoHintText() {
       if (!this.hasPlayableFullVideo) return `当前讲解片段时长 ${this.clipDurationText}。`
-      return this.isFullVideoMode
-        ? '正在播放完整讲解视频，可使用原生控件拖动进度或全屏观看。'
-        : '播放当前片段对应的完整 VOD 文件。'
+      return '观看当前片段对应的完整讲解视频。'
     },
     videoStatusText() {
       if (!this.hasVideoData) return '暂无视频'
@@ -1039,6 +1046,10 @@ export default {
         this.showVideoTip()
         return
       }
+      const previousContext = this.getVideoContext()
+      if (previousContext) {
+        previousContext.pause()
+      }
       this.clearClipPlaybackTimer()
       this.videoPlaybackMode = 'full'
       this.clipIsPlaying = false
@@ -1060,25 +1071,6 @@ export default {
           this.fullVideoIsPlaying = true
         }, 120)
       })
-    },
-    toggleFullVideoPlayback() {
-      if (!this.hasPlayableFullVideo) {
-        this.showVideoTip()
-        return
-      }
-      if (!this.isFullVideoMode) {
-        this.playFullVideoFromStart()
-        return
-      }
-      const context = this.getVideoContext()
-      if (!context) return
-      if (this.fullVideoIsPlaying) {
-        this.fullVideoIsPlaying = false
-        context.pause()
-        return
-      }
-      context.play()
-      this.fullVideoIsPlaying = true
     },
     resumeActiveClip() {
       this.videoPlaybackMode = 'clip'
@@ -1998,11 +1990,14 @@ export default {
 }
 
 .video-card {
+  display: flex;
+  flex-direction: column;
   border-radius: 32rpx;
   background: #0e3a5c;
 }
 
 .video-head {
+  order: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2041,7 +2036,12 @@ export default {
 }
 
 .segment-player {
+  order: 1;
   margin-top: 24rpx;
+}
+
+.segment-player.full-video-player {
+  order: 3;
 }
 
 .segment-control-panel {
@@ -2124,52 +2124,8 @@ export default {
   transition: width 0.16s ease;
 }
 
-.full-video-lock {
-  margin-top: 14rpx;
-  padding: 16rpx 18rpx;
-  border: 2rpx solid rgba(255, 235, 162, 0.18);
-  border-radius: 22rpx;
-  background: rgba(8, 38, 61, 0.46);
-}
-
-.lock-title,
-.lock-text {
-  display: block;
-}
-
-.lock-title {
-  color: #ffeba2;
-  font-size: 23rpx;
-  font-weight: 800;
-}
-
-.full-video-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 64rpx;
-  margin: 0;
-  padding: 0 24rpx;
-  border-radius: 18rpx;
-  background: #ffeba2;
-  color: #0e3a5c;
-  font-size: 24rpx;
-  font-weight: 900;
-  line-height: 1.2;
-}
-
-.full-video-button::after {
-  border: 0;
-}
-
-.lock-text {
-  margin-top: 6rpx;
-  color: rgba(255, 255, 255, 0.62);
-  font-size: 21rpx;
-  line-height: 1.45;
-}
-
 .video-placeholder {
+  order: 1;
   display: flex;
   align-items: center;
   gap: 22rpx;
@@ -2187,6 +2143,7 @@ export default {
 }
 
 .clip-list {
+  order: 2;
   display: flex;
   flex-direction: column;
   gap: 16rpx;
@@ -2261,10 +2218,108 @@ export default {
 }
 
 .clip-empty {
+  order: 2;
   margin-top: 24rpx;
   padding: 24rpx;
   border-radius: 24rpx;
   background: rgba(255, 255, 255, 0.08);
+  text-align: center;
+}
+
+.full-video-section {
+  order: 3;
+  margin-top: 24rpx;
+}
+
+.full-video-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-bottom: 14rpx;
+}
+
+.full-video-section-title,
+.full-video-section-meta,
+.full-video-overlay-note {
+  display: block;
+}
+
+.full-video-section-title {
+  color: #ffffff;
+  font-size: 26rpx;
+  font-weight: 900;
+}
+
+.full-video-section-meta {
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 22rpx;
+}
+
+.full-video-preview {
+  position: relative;
+  min-height: 300rpx;
+  overflow: hidden;
+  border: 2rpx solid rgba(255, 255, 255, 0.1);
+  border-radius: 24rpx;
+  background: #08263d;
+}
+
+.full-video-preview-pressed {
+  opacity: 0.9;
+}
+
+.full-video-preview-mark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 104rpx;
+  height: 104rpx;
+  margin-left: -52rpx;
+  margin-top: -52rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 235, 162, 0.16);
+}
+
+.full-video-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32rpx;
+  background: rgba(30, 34, 39, 0.68);
+}
+
+.full-video-overlay-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 72rpx;
+  margin: 0;
+  padding: 0 34rpx;
+  border-radius: 18rpx;
+  background: #ffeba2;
+  color: #0e3a5c;
+  font-size: 26rpx;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.full-video-overlay-button::after {
+  border: 0;
+}
+
+.full-video-overlay-note {
+  margin-top: 14rpx;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 22rpx;
+  line-height: 1.45;
   text-align: center;
 }
 
