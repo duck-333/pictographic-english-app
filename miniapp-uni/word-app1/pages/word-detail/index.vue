@@ -471,7 +471,7 @@ export default {
           index,
           active: index === this.activeClipIndex,
           clipId: clip.clipId || `clip-${index + 1}`,
-          displayTitle: clip.segmentTitle || clip.title || `片段 ${index + 1}`,
+          displayTitle: clip.title || clip.segmentTitle || `片段 ${index + 1}`,
           focus: clip.focus || '讲解焦点待补充',
           targetPart: clip.targetPart || '整体',
           note: clip.note || '这个片段暂时没有补充说明。',
@@ -543,8 +543,8 @@ export default {
       if (!this.hasVideoData) {
         return '暂无视频讲解'
       }
-      return this.word && (this.activeVideo.segmentTitle || this.activeVideo.title || this.word.videoTitle)
-        ? (this.activeVideo.segmentTitle || this.activeVideo.title || this.word.videoTitle)
+      return this.word && (this.activeVideo.title || this.activeVideo.segmentTitle || this.word.videoTitle)
+        ? (this.activeVideo.title || this.activeVideo.segmentTitle || this.word.videoTitle)
         : '讲解视频'
     },
     activeVideoStart() {
