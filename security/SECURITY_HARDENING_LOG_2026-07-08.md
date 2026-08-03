@@ -729,3 +729,83 @@ curl https://baxiaota.com/api/health
 ```text
 access-control 新版本已正式承接生产流量，旧服务已完成下线清理，PM2、Nginx、MySQL、端口防护和开机恢复状态均已验证正常。
 ```
+
+## 2026-08-03 MySQL 自动备份与恢复验证
+
+### 数据库备份配置
+
+- 已创建 MySQL 自动备份脚本：
+
+  ```text
+  /home/ubuntu/scripts/mysql-backup.sh
+  ```
+
+- 备份目标目录：
+
+  ```text
+  /home/ubuntu/backups/mysql
+  ```
+
+- 备份数据库：`baxiaota`。
+- 使用数据库账号：`app_user`。
+- 已配置 cron 定时任务：每天 03:00 自动执行数据库备份。
+- 备份保留策略：删除超过 30 天的旧备份。
+
+### 备份验证
+
+实际验证流程：
+
+1. 手动执行备份脚本。
+2. 成功生成备份文件：
+
+   ```text
+   baxiaota_2026-08-03.sql
+   ```
+
+3. 创建临时恢复数据库：
+
+   ```text
+   baxiaota_restore_test
+   ```
+
+4. 导入备份文件进行恢复测试。
+5. 验证恢复结果。
+
+恢复后的数据库包含：
+
+- `entitlement_transactions`
+- `user_entitlements`
+- `user_favorites`
+- `user_phone_bindings`
+- `user_recent_words`
+- `users`
+- `wechat_user_bindings`
+
+同时确认 `users` 表存在数据，共 4 条记录。
+
+6. 验证完成后删除恢复测试数据库 `baxiaota_restore_test`。
+
+### 当前服务器状态
+
+- 系统磁盘：
+  - 设备：`/dev/vda2`
+  - 总容量：约 69 GB
+  - 已使用：约 9.7 GB
+  - 使用率：15%
+- 数据库备份目录：
+  - 路径：`/home/ubuntu/backups`
+  - 当前占用：约 19 MB
+- PM2 日志目录：
+  - 路径：`~/.pm2/logs`
+  - 当前占用：约 48 KB
+
+### 安全结论
+
+当前生产环境已具备基础数据库灾备能力：
+
+- 自动备份已启用。
+- 备份文件可正常生成。
+- 备份文件已完成恢复测试。
+- 数据库恢复流程验证通过。
+
+备注：本次仅记录运维安全措施，不涉及代码逻辑调整。
