@@ -1382,6 +1382,11 @@ export function createUserEntitlementStore(options = {}) {
 
       const allGrants = await listUserMembershipGrants(connection, userId, { forUpdate: true })
       const membershipStartedAt = allGrants.length ? allGrants[0].effectiveStartAt : schedule.effectiveStartAt
+      const membershipStartedAtDate = normalizeDate(
+        membershipStartedAt,
+        'Membership start time',
+        'MEMBERSHIP_STARTED_AT_INVALID'
+      )
       // Compatibility value: "monthly" means exactly 30x24 hours in stage 1, never a calendar month.
       const [snapshotUpdate] = await connection.execute(
         `UPDATE ${quoteIdentifier(USER_ENTITLEMENTS_TABLE)}
@@ -1391,7 +1396,7 @@ export function createUserEntitlementStore(options = {}) {
                 membership_expire_at = ?,
                 last_transaction_id = ?
           WHERE user_id = ?`,
-        ['monthly', 'active', membershipStartedAt, new Date(schedule.membershipExpireAt), transactionInsertId, userId]
+        ['monthly', 'active', membershipStartedAtDate, new Date(schedule.membershipExpireAt), transactionInsertId, userId]
       )
       assertSingleRowUpdate(snapshotUpdate, 'membership grant entitlement snapshot')
 
