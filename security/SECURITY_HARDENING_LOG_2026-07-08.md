@@ -809,3 +809,170 @@ access-control 新版本已正式承接生产流量，旧服务已完成下线�
 - 数据库恢复流程验证通过。
 
 备注：本次仅记录运维安全措施，不涉及代码逻辑调整。
+
+## 2026-08-04～2026-08-06 后台鉴权、会员权益与数据库备份修复记录
+
+记录日期：2026-08-06（服务器本地时间）
+
+### 后台鉴权恢复
+
+- 实际运行的 PM2 进程为 `pictographic-english-api-access-control`。
+- 服务入口为 `/home/ubuntu/pictographic-english-app-release-20260729-access-control/server/index.mjs`，监听端口为 `3002`。
+- 旧进程 `pictographic-english-api-full` 已不存在。
+- 管理后台使用 Admin API Token 鉴权，并通过 `GET /api/admin/auth/check` 校验。
+- 新 PM2 进程最初缺少 `ADMIN_API_TOKEN`，导致后台登录失败。
+- 已生成新的随机 Admin API Token，注入 PM2 环境并执行 `pm2 save`，后台登录随后恢复正常。
+- 本记录不包含 Admin API Token 的实际值。
+
+### PM2 环境变量恢复与持久化
+
+已检查、恢复并保存以下运行所需变量：
+
+- `DB_HOST`
+- `DB_PORT`
+- `DB_NAME`
+- `DB_USER`
+- `DB_PASSWORD`
+- `WECHAT_MINIAPP_APPID`
+- `WECHAT_MINIAPP_SECRET`
+- `JWT_SECRET`
+- `USER_SESSION_TTL_MS`
+- `PHONE_HASH_SECRET`
+
+已确认的非敏感配置如下：
+
+- `DB_HOST=127.0.0.1`
+- `DB_PORT=3306`
+- `DB_NAME=baxiaota`
+- `DB_USER=app_user`
+- `USER_SESSION_TTL_MS=2592000000`，即 30 天。
+
+其余敏感变量仅记录名称，不记录实际值。恢复 `PHONE_HASH_SECRET` 后，管理后台按手机号查询用户的能力恢复正常。手机号绑定信息保存在 `user_phone_bindings` 表中，使用 `phone_hash` 和 `phone_masked`，不保存明文手机号。
+
+### 数据库与用户数据核查
+
+- 核查数据库：`baxiaota`。
+- `users` 表共有 4 条记录，当前用户 ID 为 `4`、`5`、`6`、`7`。
+- 已核查的相关表包括：
+  - `users`
+  - `wechat_user_bindings`
+  - `user_phone_bindings`
+  - `user_entitlements`
+  - `entitlement_transactions`
+  - `user_favorites`
+  - `user_recent_words`
+- 本次核查未删除或重建任何数据。
+- `users.id` 类型为 `BIGINT`；`user_entitlements.user_id` 和 `entitlement_transactions.user_id` 类型为 `BIGINT UNSIGNED`。
+- 当前用户 ID 均为正数，不存在负数或 `0`。
+- 上述字段存在历史类型不完全一致的情况，本次未调整表结构。
+
+### 会员赠送故障一：缺少 membership_grants 迁移
+
+- 管理员赠送 30 天会员首次失败的根因是生产数据库缺少 `membership_grants` 表。
+- 执行迁移前已完成数据库备份，并确认备份非空且包含 `Dump completed` 完成标记。
+- 已审查项目内的规范迁移脚本，核对字段类型、唯一约束、索引、FIFO 叠加逻辑和安全边界。
+- 已创建 `membership_grants` 表，过程中未执行 `DROP`、`TRUNCATE`、`DELETE` 或 `REPLACE`，未修改已有用户与权益数据。
+- 迁移后确认：
+  - `membership_grants` 表存在，初始记录数为 `0`。
+  - 表包含主键、3 个唯一索引和 3 个普通索引。
+  - 既有业务表记录数保持不变。
+
+### 会员赠送故障二：MySQL DATETIME 写入格式
+
+- 第二次失败错误为 `ER_TRUNCATED_WRONG_VALUE`，错误号 `1292`，SQL State 为 `22007`。
+- 根因是 ISO 时间字符串（格式如 `YYYY-MM-DDTHH:mm:ss.sssZ`）被直接写入 MySQL `DATETIME` 字段 `membership_started_at`。
+- 已在写入前通过 `normalizeDate()` 将开始时间转换为 `Date`，并使用 `membershipStartedAtDate` 作为 SQL 参数。
+- 无效日期会抛出明确业务错误 `MEMBERSHIP_STARTED_AT_INVALID`。
+- 已验证失败事务会完整回滚，不留下 `membership_grants` 或权益流水记录。
+- 修改线上文件前已创建带时间戳的回滚备份。
+- 修复后已通过 `node --check`，重启 PM2，并完成端口 `3002` 健康检查。
+
+### 30 天会员最终验收
+
+- 管理员固定赠送 30 天会员成功。
+- `membership_grants` 产生一条 `admin_gift / granted / 30天` 记录。
+- `user_entitlements` 更新为 `membership_type=monthly`、`membership_status=active`。
+- `entitlement_transactions` 产生 `transaction_type=MEMBERSHIP_GRANT`、`amount=0` 的流水。
+- 用户原有查词次数余额保持不变。
+- 小程序刷新后可识别并展示会员状态。
+- 有效会员访问完整词条时不会扣减查词次数。
+- 会员开始时间与到期时间相差 `30 × 24` 小时。
+- 失败事务可能已消耗 `AUTO_INCREMENT` 序号，因此出现序号间隙属于正常现象，不代表存在隐藏记录。
+
+### 本地代码与 Git 收口
+
+- 功能开发分支：`feature/membership-entitlements-mvp`。
+- 功能提交标题：`feat: complete user entitlement management and 30-day membership grants`。
+- Pull Request：`#16`。
+- 已合并到 `master`，合并提交为 `7f9cc42`。
+- GitHub 检查已通过，合并过程无冲突。
+- 本地 `master` 已同步，归档前工作区为干净状态。
+
+本次合并内容包括：
+
+- 管理后台用户权益查询、额度增加与扣除。
+- 管理员固定赠送 30 天会员。
+- `membership_grants` 数据库迁移。
+- `membership_started_at` 的 DATETIME 写入修复。
+- 小程序会员状态展示。
+- 有效会员查词免扣次数。
+- 会员 MVP、迁移、DATETIME 回归测试及生产检查精确白名单。
+
+已知基线问题：`npm check` 在 `scripts/test-server-word-api-link.mjs:466` 对空 `illustrationImage` 执行 `Object.keys()` 时失败；该问题已在干净 `master` 上复现，属于既有基线，本次未修改。
+
+### MySQL 自动备份加固
+
+当前 cron 任务为：
+
+```cron
+0 3 * * * /home/ubuntu/scripts/mysql-backup.sh >> /home/ubuntu/backups/mysql/backup.log 2>&1
+```
+
+该任务每天 `03:00` 自动执行。
+
+原备份脚本存在以下问题：
+
+- 定义了 `DB_USER`，但 `mysqldump` 未显式使用对应认证配置。
+- 未启用 `set -e`，命令失败后仍可能继续执行。
+- 失败时仍可能输出完成提示。
+- 直接写入最终备份文件，可能留下不完整文件。
+- 未检查文件非空及 `Dump completed` 完成标记。
+
+认证与权限已加固：
+
+- MySQL 客户端认证文件为 `/home/ubuntu/.my.cnf`。
+- 使用 `[client]`、`user=app_user`、`host=localhost` 配置；本文不记录密码。
+- `/home/ubuntu/.my.cnf` 权限已由 `644` 调整为 `600`。
+
+新备份脚本已采用以下措施：
+
+- 启用 `set -Eeuo pipefail` 和 `umask 077`。
+- 使用 `--defaults-extra-file` 读取客户端认证配置。
+- 使用 `--single-transaction`、`--quick` 和 `--no-tablespaces`。
+- 先写入临时文件，失败时清理临时文件。
+- 检查备份文件非空及 `Dump completed` 完成标记。
+- 验证通过后原子移动为最终文件。
+- 删除超过 30 天的旧备份。
+- 备份脚本权限为 `700`。
+- 原脚本已创建带时间戳的备份，权限为 `600`。
+
+加固后验收结果：
+
+- 新备份生成成功，文件约 `121 KB`，权限为 `600`。
+- 文件末尾包含 `Dump completed`。
+- 备份内容包含 `membership_grants`。
+- 执行后未残留临时文件。
+- `/home/ubuntu/backups/mysql` 目录权限为 `700`。
+- 历史 `.sql` 备份文件权限均为 `600`。
+- `backup.log` 权限为 `600`。
+
+### 后续人工检查项
+
+以下事项仅作为后续建议，本次未执行：
+
+1. 次日 `03:00` 后检查 `backup.log`、新备份文件、文件非空状态及 `Dump completed` 完成标记。
+2. 后续单独修复 `scripts/test-server-word-api-link.mjs:466` 对空 `illustrationImage` 的既有基线问题。
+3. 后续部署应从已合并的 `master` 构建，避免覆盖 DATETIME 修复。
+4. 在至少一个稳定版本运行完成前，不删除迁移前数据库备份、线上 `user-entitlement-store` 回滚备份和旧 MySQL 备份脚本备份。
+
+备注：本章节仅归档已经完成的安全、部署与验收操作；未修改业务代码、配置或服务器。
