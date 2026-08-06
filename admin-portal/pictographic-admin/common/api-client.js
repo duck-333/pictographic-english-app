@@ -334,6 +334,16 @@ export function grantAdminUserQuota(userId, payload = {}, options = {}) {
   })
 }
 
+export function grantAdminUserMembership(userId, payload = {}, options = {}) {
+  const id = String(userId || '').trim()
+  if (!id) return Promise.reject(new Error('User id is required.'))
+  return requestAdminJson(`/api/admin/entitlements/users/${encodeURIComponent(id)}/membership-grant`, {
+    ...options,
+    method: 'POST',
+    data: payload
+  })
+}
+
 export function deductAdminUserQuota(userId, payload = {}, options = {}) {
   const id = String(userId || '').trim()
   if (!id) return Promise.reject(new Error('User id is required.'))

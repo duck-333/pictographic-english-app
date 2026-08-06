@@ -295,7 +295,14 @@ function sendUserEntitlementError(res, error) {
   })
 }
 
-function toSafeEntitlementPayload(entitlement) {
+function isMembershipActiveAt(entitlement, currentTime = new Date()) {
+  const source = entitlement && typeof entitlement === 'object' ? entitlement : {}
+  const expireAt = source.membershipExpireAt ? new Date(source.membershipExpireAt) : null
+  return source.membershipStatus === 'active' &&
+    Boolean(expireAt && Number.isFinite(expireAt.getTime()) && expireAt.getTime() > currentTime.getTime())
+}
+
+function toSafeEntitlementPayload(entitlement, currentTime = new Date()) {
   const source = entitlement && typeof entitlement === 'object' ? entitlement : {}
   return {
     quotaBalance: Number(source.quotaBalance || 0),
@@ -303,7 +310,8 @@ function toSafeEntitlementPayload(entitlement) {
     quotaTotalConsumed: Number(source.quotaTotalConsumed || 0),
     membershipType: String(source.membershipType || 'none'),
     membershipStatus: String(source.membershipStatus || 'none'),
-    membershipExpireAt: source.membershipExpireAt || null
+    membershipExpireAt: source.membershipExpireAt || null,
+    membershipActive: isMembershipActiveAt(source, currentTime)
   }
 }
 
@@ -319,14 +327,27 @@ function toSafeAdminUserPayload(user) {
   }
 }
 
-function toSafeAdminEntitlementPayload(entitlement) {
+function toSafeAdminEntitlementPayload(entitlement, currentTime = new Date()) {
   const source = entitlement && typeof entitlement === 'object' ? entitlement : {}
   return {
-    ...toSafeEntitlementPayload(source),
+    ...toSafeEntitlementPayload(source, currentTime),
     quotaTotalExpired: Number(source.quotaTotalExpired || 0),
     membershipStartedAt: source.membershipStartedAt || null,
     createdAt: source.createdAt || null,
     updatedAt: source.updatedAt || null
+  }
+}
+
+function toSafeAdminMembershipGrantPayload(grant) {
+  const source = grant && typeof grant === 'object' ? grant : {}
+  return {
+    grantId: source.grantId === undefined || source.grantId === null ? '' : String(source.grantId),
+    idempotent: Boolean(source.idempotent),
+    effectiveStartAt: source.effectiveStartAt || null,
+    effectiveEndAt: source.effectiveEndAt || null,
+    membershipType: String(source.membershipType || 'monthly'),
+    membershipStatus: String(source.membershipStatus || 'active'),
+    membershipExpireAt: source.membershipExpireAt || null
   }
 }
 
@@ -443,6 +464,24 @@ function normalizeAdminOperationReason(value) {
   return reason
 }
 
+function normalizeAdminMembershipOperationId(value) {
+  const operationId = normalizeRequestId(value)
+  if (!operationId) {
+    throw createAdminEntitlementRequestError('Membership operation id is required.', {
+      code: 'MEMBERSHIP_OPERATION_ID_REQUIRED',
+      statusCode: 400
+    })
+  }
+  return operationId
+}
+
+function createAdminMembershipGrantKeys(operationId) {
+  return {
+    sourceId: `admin_membership_gift:${operationId}`,
+    idempotencyKey: `admin_membership_grant:${operationId}`
+  }
+}
+
 function normalizeAdminOptionalString(value, fallback = '') {
   return String(value || fallback || '').trim()
 }
@@ -496,6 +535,24 @@ async function getOrInitializeUserEntitlement(userId, userEntitlementStore) {
   }
 
   return initializedEntitlement
+}
+
+async function findMembershipGrantTransaction(userEntitlementStore, userId, idempotencyKey) {
+  const pageSize = 100
+  for (let offset = 0; offset < 10000; offset += pageSize) {
+    const transactions = await userEntitlementStore.listUserTransactions(userId, {
+      limit: pageSize,
+      offset,
+      transactionType: ENTITLEMENT_TRANSACTION_TYPES.MEMBERSHIP_GRANT
+    })
+    const match = transactions.find((transaction) => transaction.idempotencyKey === idempotencyKey)
+    if (match) return match
+    if (transactions.length < pageSize) break
+  }
+  throw createAdminEntitlementRequestError('Membership grant transaction could not be loaded.', {
+    code: 'MEMBERSHIP_GRANT_TRANSACTION_MISSING',
+    statusCode: 500
+  })
 }
 
 function createUserFavoritesRequestError(message, options = {}) {
@@ -970,7 +1027,7 @@ export function createApiHandler(options = {}) {
           }
 
           const entitlement = await getOrInitializeUserEntitlement(authResult.userId, userEntitlementStore)
-          const payload = toSafeEntitlementPayload(entitlement)
+          const payload = toSafeEntitlementPayload(entitlement, now())
           sendJson(res, 200, {
             ok: true,
             ...payload
@@ -1140,7 +1197,7 @@ export function createApiHandler(options = {}) {
             sendJson(res, 200, {
               ok: true,
               user: toSafeAdminUserPayload(profile),
-              entitlement: toSafeAdminEntitlementPayload(entitlement)
+              entitlement: toSafeAdminEntitlementPayload(entitlement, now())
             })
             return
           }
@@ -1196,6 +1253,59 @@ export function createApiHandler(options = {}) {
               ok: true,
               transaction: toSafeAdminEntitlementTransactionPayload(result.transaction),
               entitlement: toSafeAdminEntitlementPayload(result.entitlement)
+            })
+            return
+          }
+
+          if (req.method === 'POST' && action === 'membership-grant') {
+            if (!userEntitlementStore || typeof userEntitlementStore.grantMembershipDuration !== 'function') {
+              throw createAdminEntitlementRequestError('User entitlement store is not available.', {
+                code: 'ADMIN_ENTITLEMENT_STORE_UNAVAILABLE',
+                statusCode: 503
+              })
+            }
+
+            const body = await readJsonBody(req)
+            const customDurationFields = ['days', 'duration', 'durationSeconds', 'startedAt', 'expireAt']
+            if (customDurationFields.some((field) => Object.prototype.hasOwnProperty.call(body, field))) {
+              throw createAdminEntitlementRequestError('Membership grant duration is fixed at 30 days.', {
+                code: 'MEMBERSHIP_DURATION_NOT_CONFIGURABLE',
+                statusCode: 400
+              })
+            }
+            const operationId = normalizeAdminMembershipOperationId(body.operationId)
+            const reason = normalizeAdminOperationReason(body.reason)
+            const { sourceId, idempotencyKey } = createAdminMembershipGrantKeys(operationId)
+            let grant
+            try {
+              grant = await userEntitlementStore.grantMembershipDuration({
+                userId,
+                sourceType: 'admin_gift',
+                sourceId,
+                idempotencyKey,
+                operatorType: 'admin',
+                operatorId: normalizeAdminOptionalString(body.operatorId, 'admin-api-token'),
+                reason
+              })
+            } catch (error) {
+              if (error && error.code === 'IDEMPOTENCY_KEY_CONFLICT') {
+                throw createAdminEntitlementRequestError(
+                  'Membership operation id is already used by another user or entitlement operation.',
+                  {
+                    code: 'MEMBERSHIP_OPERATION_ID_CONFLICT',
+                    statusCode: 409
+                  }
+                )
+              }
+              throw error
+            }
+            const entitlement = await getOrInitializeUserEntitlement(userId, userEntitlementStore)
+            const transaction = await findMembershipGrantTransaction(userEntitlementStore, userId, idempotencyKey)
+            sendJson(res, 200, {
+              ok: true,
+              grant: toSafeAdminMembershipGrantPayload(grant),
+              transaction: toSafeAdminEntitlementTransactionPayload(transaction),
+              entitlement: toSafeAdminEntitlementPayload(entitlement, now())
             })
             return
           }
@@ -1378,4 +1488,6 @@ export function startServer(options = {}) {
   return server
 }
 
-startServer()
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startServer()
+}

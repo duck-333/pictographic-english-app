@@ -700,6 +700,10 @@
 							<text class="entitlement-summary-value">{{ entitlementManagement.entitlement.membershipStatus }}</text>
 							<text class="entitlement-summary-label">权益状态</text>
 						</view>
+						<view class="entitlement-summary-card">
+							<text class="entitlement-summary-value">{{ formatAdminDate(entitlementManagement.entitlement.membershipExpireAt) }}</text>
+							<text class="entitlement-summary-label">会员有效期</text>
+						</view>
 					</view>
 					<view v-else class="entitlement-empty detail-empty">
 						选择用户后显示当前权益快照。
@@ -720,8 +724,16 @@
 								扣除额度
 							</button>
 						</view>
+						<view class="operation-mode-row">
+							<button
+								:class="['operation-mode-button', entitlementManagement.operationType === 'membership' ? 'active' : '']"
+								@click="setEntitlementOperationType('membership')"
+							>
+								赠送30天会员
+							</button>
+						</view>
 						<view class="entitlement-form-grid">
-							<label class="entitlement-form-field">
+							<label v-if="entitlementManagement.operationType !== 'membership'" class="entitlement-form-field">
 								<text>额度次数</text>
 								<input
 									v-model="entitlementManagement.amount"
@@ -740,6 +752,15 @@
 							</label>
 						</view>
 						<button
+							v-if="entitlementManagement.operationType === 'membership'"
+							class="publish-button entitlement-submit-button"
+							:disabled="entitlementManagement.adjusting || !entitlementManagement.selectedUser"
+							@click="submitEntitlementAdjustment"
+						>
+							{{ entitlementManagement.adjusting ? '提交中...' : '赠送30天会员' }}
+						</button>
+						<button
+							v-else
 							class="publish-button entitlement-submit-button"
 							:disabled="entitlementManagement.adjusting || !entitlementManagement.selectedUser"
 							@click="submitEntitlementAdjustment"
@@ -1015,6 +1036,7 @@ import {
 	getAdminApiToken,
 	getAdminHomepageFeatured,
 	getAdminUserEntitlement,
+	grantAdminUserMembership,
 	grantAdminUserQuota,
 	listAdminUserEntitlementTransactions,
 	getPublicWordFromServer,
@@ -1113,6 +1135,12 @@ function clone(value) {
 	return JSON.parse(JSON.stringify(value))
 }
 
+function createAdminMembershipOperationId() {
+	const timePart = Date.now().toString(36)
+	const randomPart = Math.random().toString(36).slice(2, 10)
+	return `membership-gift-${timePart}-${randomPart}`
+}
+
 export default {
 	data() {
 		return {
@@ -1168,6 +1196,8 @@ export default {
 				operationType: 'grant',
 				amount: '',
 				reason: '',
+				membershipOperationId: '',
+				membershipOperationUserId: '',
 				lastResult: ''
 			},
 			keywordDraft: '',
@@ -1548,7 +1578,8 @@ export default {
 				quotaTotalExpired: Number(quotaTotalExpired || 0),
 				membershipType: source.membershipType || source.membership_type || 'none',
 				membershipStatus: source.membershipStatus || source.membership_status || 'none',
-				membershipExpireAt: source.membershipExpireAt || source.membership_expire_at || ''
+				membershipExpireAt: source.membershipExpireAt || source.membership_expire_at || '',
+				membershipActive: !!(source.membershipActive || source.membership_active)
 			}
 		},
 		normalizeEntitlementTransaction(transaction) {
@@ -1648,6 +1679,10 @@ export default {
 			if (!options.keepLoading) {
 				this.entitlementManagement.loading = true
 			}
+			if (this.entitlementManagement.membershipOperationUserId !== normalized.id) {
+				this.entitlementManagement.membershipOperationId = ''
+				this.entitlementManagement.membershipOperationUserId = ''
+			}
 			this.entitlementManagement.selectedUser = normalized
 			this.entitlementManagement.entitlement = null
 			this.entitlementManagement.transactions = []
@@ -1697,8 +1732,22 @@ export default {
 			})
 		},
 		setEntitlementOperationType(type) {
-			this.entitlementManagement.operationType = type === 'deduct' ? 'deduct' : 'grant'
+			this.entitlementManagement.operationType = type === 'membership'
+				? 'membership'
+				: type === 'deduct' ? 'deduct' : 'grant'
 			this.entitlementManagement.lastResult = ''
+		},
+		confirmMembershipGrant(userId) {
+			return new Promise((resolve) => {
+				uni.showModal({
+					title: '确认赠送会员',
+					content: `确定为 user_id=${userId} 赠送固定30天会员吗？`,
+					confirmText: '确认赠送',
+					cancelText: '取消',
+					success: (result) => resolve(Boolean(result && result.confirm)),
+					fail: () => resolve(false)
+				})
+			})
 		},
 		async submitEntitlementAdjustment() {
 			if (!this.adminUnlocked) {
@@ -1710,9 +1759,10 @@ export default {
 				uni.showToast({ title: '请先选择用户', icon: 'none' })
 				return
 			}
+			const isMembershipGrant = this.entitlementManagement.operationType === 'membership'
 			const amount = Number(this.entitlementManagement.amount)
 			const reason = String(this.entitlementManagement.reason || '').trim()
-			if (!Number.isFinite(amount) || amount <= 0 || Math.floor(amount) !== amount) {
+			if (!isMembershipGrant && (!Number.isFinite(amount) || amount <= 0 || Math.floor(amount) !== amount)) {
 				uni.showToast({ title: '请输入正整数额度', icon: 'none' })
 				return
 			}
@@ -1720,29 +1770,48 @@ export default {
 				uni.showToast({ title: '请填写操作原因', icon: 'none' })
 				return
 			}
+			if (isMembershipGrant && !(await this.confirmMembershipGrant(user.id))) return
+			if (isMembershipGrant && !this.entitlementManagement.membershipOperationId) {
+				this.entitlementManagement.membershipOperationId = createAdminMembershipOperationId()
+				this.entitlementManagement.membershipOperationUserId = user.id
+			}
 
 			this.entitlementManagement.adjusting = true
 			this.entitlementManagement.lastResult = ''
-			const payload = {
-				amount,
-				reason,
-				source: 'admin_portal',
-				operatorType: 'admin'
-			}
+			const payload = isMembershipGrant
+				? {
+					operationId: this.entitlementManagement.membershipOperationId,
+					reason,
+					operatorId: 'admin-portal'
+				}
+				: {
+					amount,
+					reason,
+					source: 'admin_portal',
+					operatorType: 'admin'
+				}
 			try {
-				const action = this.entitlementManagement.operationType === 'deduct'
-					? deductAdminUserQuota
-					: grantAdminUserQuota
+				const action = isMembershipGrant
+					? grantAdminUserMembership
+					: this.entitlementManagement.operationType === 'deduct'
+						? deductAdminUserQuota
+						: grantAdminUserQuota
 				await action(user.id, payload, this.getAdminRequestOptions())
-				const operationText = this.entitlementManagement.operationType === 'deduct' ? '扣除额度' : '增加额度'
+				const operationText = isMembershipGrant
+					? '赠送30天会员'
+					: this.entitlementManagement.operationType === 'deduct' ? '扣除额度' : '增加额度'
 				this.entitlementManagement.lastResult = `${operationText}已提交。`
-				this.entitlementManagement.amount = ''
+				if (!isMembershipGrant) this.entitlementManagement.amount = ''
 				this.entitlementManagement.reason = ''
+				if (isMembershipGrant) {
+					this.entitlementManagement.membershipOperationId = ''
+					this.entitlementManagement.membershipOperationUserId = ''
+				}
 				await this.loadSelectedUserEntitlement()
 				await this.loadSelectedUserEntitlementTransactions()
 				uni.showToast({ title: '操作已提交', icon: 'success' })
 			} catch (error) {
-				this.handleEntitlementAdminError(error, '额度调整失败。')
+				this.handleEntitlementAdminError(error, isMembershipGrant ? '会员赠送失败。' : '额度调整失败。')
 			} finally {
 				this.entitlementManagement.adjusting = false
 			}

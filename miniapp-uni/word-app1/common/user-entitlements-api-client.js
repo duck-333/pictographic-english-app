@@ -45,7 +45,8 @@ function normalizeEntitlement(value) {
     quotaTotalConsumed: toNumber(source.quotaTotalConsumed),
     membershipType: String(source.membershipType || 'none').trim() || 'none',
     membershipStatus: String(source.membershipStatus || 'none').trim() || 'none',
-    membershipExpireAt: source.membershipExpireAt ? String(source.membershipExpireAt).trim() : ''
+    membershipExpireAt: source.membershipExpireAt ? String(source.membershipExpireAt).trim() : '',
+    membershipActive: source.membershipActive === true
   }
 }
 

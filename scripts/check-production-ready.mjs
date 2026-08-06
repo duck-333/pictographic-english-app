@@ -21,6 +21,7 @@ import {
 const APP_WORD_DATA_PATH = 'miniapp-uni/word-app1/common/mock-data.js'
 const DEV_PREVIEW_DATA_PATH = 'miniapp-uni/word-app1/common/dev-preview-data.js'
 const HOME_PAGE_PATH = 'miniapp-uni/word-app1/pages/index/index.vue'
+const MINE_PAGE_PATH = 'miniapp-uni/word-app1/pages/mine/index.vue'
 const WORD_DETAIL_PATH = 'miniapp-uni/word-app1/pages/word-detail/index.vue'
 const MINIAPP_PAGES_PATH = 'miniapp-uni/word-app1/pages'
 const MINIAPP_PAGES_JSON_PATH = 'miniapp-uni/word-app1/pages.json'
@@ -45,6 +46,23 @@ const BLOCKED_USER_FACING_TEXT = [
   { label: 'admin token', pattern: /Admin API Token|dev-admin-token/i }
 ]
 
+const ALLOWED_USER_FACING_TEXT_BY_PATH = new Map([
+  [MINE_PAGE_PATH, [
+    '会员期间不限次数',
+    '会员类型',
+    '会员状态',
+    '月会员',
+    '会员有效期：',
+    '会员已到期'
+  ]],
+  [WORD_DETAIL_PATH, [
+    '完整学习内容暂未解锁',
+    '开通会员或获取更多次数后，可以继续查看完整学习内容。',
+    '开通会员或获取更多次数',
+    '剩余查词次数不足，请购买会员或获取更多权益。'
+  ]]
+])
+
 function collectStrings(value, pathParts = []) {
   if (typeof value === 'string') {
     return [{ value, path: pathParts.join('.') || '<root>' }]
@@ -66,6 +84,39 @@ function findLineHint(sourceText, needle) {
 
 function addError(errors, message) {
   errors.push(message)
+}
+
+function findBlockedUserFacingText(relativePath, sourceText) {
+  const allowedTexts = ALLOWED_USER_FACING_TEXT_BY_PATH.get(relativePath) || []
+  const sourceWithoutAllowedTexts = allowedTexts.reduce(
+    (result, allowedText) => result.split(allowedText).join(''),
+    sourceText
+  )
+  return BLOCKED_USER_FACING_TEXT.filter((blocked) => blocked.pattern.test(sourceWithoutAllowedTexts))
+}
+
+function checkUserFacingAllowlistContract(errors) {
+  ALLOWED_USER_FACING_TEXT_BY_PATH.forEach((allowedTexts, relativePath) => {
+    allowedTexts.forEach((allowedText) => {
+      if (findBlockedUserFacingText(relativePath, allowedText).length > 0) {
+        addError(errors, `${relativePath}: reviewed user-facing text is not covered by the exact allowlist: ${allowedText}`)
+      }
+      if (findBlockedUserFacingText('miniapp-uni/word-app1/pages/unreviewed/index.vue', allowedText).length === 0) {
+        addError(errors, `${relativePath}: reviewed user-facing text must remain blocked outside its exact page path.`)
+      }
+    })
+  })
+
+  const blockedCases = [
+    [MINE_PAGE_PATH, '会员充值入口'],
+    [WORD_DETAIL_PATH, '升级后解锁付费视频'],
+    [MINE_PAGE_PATH, 'Admin API Token: unsafe-placeholder']
+  ]
+  blockedCases.forEach(([relativePath, sourceText]) => {
+    if (findBlockedUserFacingText(relativePath, sourceText).length === 0) {
+      addError(errors, `${relativePath}: dangerous user-facing text allowlist regression was not blocked.`)
+    }
+  })
 }
 
 function checkDevPreviewData(errors) {
@@ -134,10 +185,8 @@ function checkUserFacingSource(errors) {
     const normalizedFile = String(file).replace(/\\/g, '/')
     const relativePath = `${MINIAPP_PAGES_PATH}/${normalizedFile}`
     const sourceText = fs.readFileSync(new URL(normalizedFile, pagesRoot), 'utf8')
-    BLOCKED_USER_FACING_TEXT.forEach((blocked) => {
-      if (blocked.pattern.test(sourceText)) {
-        addError(errors, `${relativePath}: contains blocked user-facing ${blocked.label} text.`)
-      }
+    findBlockedUserFacingText(relativePath, sourceText).forEach((blocked) => {
+      addError(errors, `${relativePath}: contains blocked user-facing ${blocked.label} text.`)
     })
   })
 
@@ -386,6 +435,7 @@ function main() {
 
   checkDevPreviewData(errors)
   checkPublishedWords(errors)
+  checkUserFacingAllowlistContract(errors)
   checkUserFacingSource(errors)
   checkMediaGuards(errors)
   checkIllustrationImageGuards(errors)

@@ -62,6 +62,11 @@
         <text class="section-title">学习权益</text>
         <text class="hint-text">{{ entitlementHint }}</text>
       </view>
+      <view v-if="entitlement" class="membership-summary">
+        <text class="membership-summary-title">{{ membershipSummaryTitle }}</text>
+        <text v-if="membershipSummaryValue" class="membership-summary-value">{{ membershipSummaryValue }}</text>
+        <text v-if="membershipActive" class="membership-summary-note">会员期间不限次数</text>
+      </view>
       <view class="entitlement-grid">
         <view class="entitlement-item">
           <text class="entitlement-value">{{ quotaTotalGrantedText }}</text>
@@ -245,6 +250,31 @@ export default {
       if (status === 'expired') return '已过期'
       if (status === 'cancelled') return '已取消'
       return '未开通'
+    },
+    membershipActive() {
+      return Boolean(this.entitlement && this.entitlement.membershipActive === true)
+    },
+    membershipExpired() {
+      if (!this.entitlement || this.membershipActive) return false
+      const status = String(this.entitlement.membershipStatus || 'none')
+      if (status === 'expired') return true
+      const expireAt = this.entitlement.membershipExpireAt ? new Date(this.entitlement.membershipExpireAt) : null
+      return Boolean(expireAt && Number.isFinite(expireAt.getTime()) && expireAt.getTime() <= Date.now())
+    },
+    membershipExpireDateText() {
+      if (!this.entitlement || !this.entitlement.membershipExpireAt) return '--'
+      const text = String(this.entitlement.membershipExpireAt).trim()
+      return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(0, 10) : '--'
+    },
+    membershipSummaryTitle() {
+      if (this.membershipActive) return '会员有效期：'
+      if (this.membershipExpired) return '会员已到期'
+      return '剩余查词次数：'
+    },
+    membershipSummaryValue() {
+      if (this.membershipActive) return this.membershipExpireDateText
+      if (this.membershipExpired) return ''
+      return `${this.quotaBalanceText}次`
     },
     entitlementHint() {
       if (this.entitlementLoading) return '同步中'
@@ -577,6 +607,28 @@ export default {
   border-radius: 30rpx;
   background: #ffffff;
   box-shadow: 0 6rpx 18rpx rgba(14, 58, 92, 0.06);
+}
+
+.membership-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+  margin-bottom: 18rpx;
+  padding: 22rpx;
+  border-radius: 20rpx;
+  background: #eef8ff;
+}
+
+.membership-summary-title,
+.membership-summary-value {
+  color: #0e3a5c;
+  font-size: 30rpx;
+  font-weight: 900;
+}
+
+.membership-summary-note {
+  color: #2f80b7;
+  font-size: 24rpx;
 }
 
 .entitlement-grid {
