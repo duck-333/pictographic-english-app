@@ -80,7 +80,7 @@ export function createCampaignPhoneIdentity(phone, options = {}) {
   const secret = resolveDedicatedSecret(options, {
     envName: CAMPAIGN_SECRET_ENV,
     codePrefix: 'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET',
-    disallowedSecretNames: [...COMMON_DISALLOWED_SECRET_NAMES, ORDER_SECRET_ENV]
+    disallowedSecretNames: [...COMMON_DISALLOWED_SECRET_NAMES, ORDER_SECRET_ENV, 'WECHAT_MINIAPP_SECRET']
   })
   const hashInput = `campaign-phone-identity:${HASH_VERSION}|${normalizedPhone.e164}`
 
