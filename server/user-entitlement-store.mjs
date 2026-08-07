@@ -255,6 +255,31 @@ function normalizeNonNegativeInteger(value, fieldName, code, options = {}) {
   return amount
 }
 
+function normalizeOptionalSafePositiveIntegerId(value, fieldName, code) {
+  if (value === undefined || value === null) return null
+
+  const normalizedValue = typeof value === 'bigint'
+    ? value.toString()
+    : typeof value === 'number'
+      ? (Number.isSafeInteger(value) ? String(value) : '')
+      : normalizeString(value)
+  if (!/^\d+$/.test(normalizedValue)) {
+    throw createUserEntitlementStoreError(`${fieldName} must be a safe positive integer.`, {
+      code,
+      statusCode: 400
+    })
+  }
+
+  const numericValue = BigInt(normalizedValue)
+  if (numericValue <= 0n || numericValue > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw createUserEntitlementStoreError(`${fieldName} must be a safe positive integer.`, {
+      code,
+      statusCode: 400
+    })
+  }
+  return numericValue.toString()
+}
+
 function normalizeTransactionType(value, allowedTypes, source, sourceMap, code) {
   const explicitValue = normalizeString(value).toUpperCase()
   const mappedValue = sourceMap.get(normalizeString(source).toLowerCase()) || ''
@@ -644,12 +669,13 @@ export function createUserEntitlementStore(options = {}) {
     return mapMembershipGrantRow(Array.isArray(rows) && rows.length ? rows[0] : null)
   }
 
-  async function findMembershipGrantByIdempotencyKey(connection, idempotencyKey) {
+  async function findMembershipGrantByIdempotencyKey(connection, idempotencyKey, options = {}) {
+    const lockClause = options.forUpdate ? ' FOR UPDATE' : ''
     const [rows] = await connection.execute(
       `SELECT ${membershipGrantSelectColumns}
          FROM ${quoteIdentifier(MEMBERSHIP_GRANTS_TABLE)}
         WHERE idempotency_key = ?
-        LIMIT 1`,
+        LIMIT 1${lockClause}`,
       [idempotencyKey]
     )
     return mapMembershipGrantRow(Array.isArray(rows) && rows.length ? rows[0] : null)
@@ -1011,6 +1037,57 @@ export function createUserEntitlementStore(options = {}) {
     }
   }
 
+  function assertMembershipGrantReplay(existingGrant, existingTransaction, expected) {
+    const hasMetadataGrantId = Boolean(
+      existingTransaction &&
+      existingTransaction.metadata &&
+      Object.prototype.hasOwnProperty.call(existingTransaction.metadata, 'membershipGrantId')
+    )
+    const metadataGrantId = hasMetadataGrantId
+      ? existingTransaction.metadata.membershipGrantId
+      : null
+    const matches = Boolean(
+      existingGrant &&
+      existingTransaction &&
+      existingGrant.userId === expected.userId &&
+      existingGrant.sourceType === expected.sourceType &&
+      existingGrant.sourceId === expected.sourceId &&
+      existingGrant.idempotencyKey === expected.idempotencyKey &&
+      existingGrant.redemptionCodeId === expected.redemptionCodeId &&
+      existingTransaction.idempotencyKey === expected.idempotencyKey &&
+      existingTransaction.transactionType === ENTITLEMENT_TRANSACTION_TYPES.MEMBERSHIP_GRANT &&
+      existingTransaction.userId === existingGrant.userId &&
+      existingTransaction.source === existingGrant.sourceType &&
+      String(existingTransaction.sourceId || '') === existingGrant.sourceId &&
+      existingTransaction.transactionId === existingGrant.grantTransactionId &&
+      (!hasMetadataGrantId || String(metadataGrantId) === existingGrant.id)
+    )
+    if (!matches) throw createIdempotencyConflictError()
+  }
+
+  function createMembershipGrantResult(existingGrant, existingTransaction, entitlement, idempotent) {
+    if (!existingGrant || !existingTransaction || !entitlement) {
+      throw createIdempotencyConflictError()
+    }
+    return {
+      grantId: existingGrant.id,
+      transactionId: existingTransaction.transactionId,
+      transactionInsertId: existingTransaction.id,
+      userId: existingGrant.userId,
+      sourceType: existingGrant.sourceType,
+      sourceId: existingGrant.sourceId,
+      redemptionCodeId: existingGrant.redemptionCodeId,
+      idempotent,
+      effectiveStartAt: existingGrant.effectiveStartAt,
+      effectiveEndAt: existingGrant.effectiveEndAt,
+      membershipStartedAt: entitlement.membershipStartedAt,
+      membershipExpireAt: entitlement.membershipExpireAt,
+      membershipType: entitlement.membershipType,
+      membershipStatus: entitlement.membershipStatus,
+      quotaBalance: entitlement.quotaBalance
+    }
+  }
+
   function assertIdempotentTransaction(transaction, allowedTypes, userId) {
     if (!transaction || !allowedTypes.has(transaction.transactionType)) {
       throw createUserEntitlementStoreError('Idempotency key is already used by another entitlement operation.', {
@@ -1264,7 +1341,14 @@ export function createUserEntitlementStore(options = {}) {
     })
   }
 
-  async function grantMembershipDuration(input = {}) {
+  async function grantMembershipDurationInTransaction(connection, input = {}) {
+    if (!connection || typeof connection.execute !== 'function') {
+      throw createUserEntitlementStoreError('A usable membership transaction connection is required.', {
+        code: 'MEMBERSHIP_TRANSACTION_CONNECTION_INVALID',
+        statusCode: 500
+      })
+    }
+
     const userId = normalizeUserId(input.userId)
     const sourceType = normalizeMembershipSourceType(input.sourceType)
     if (sourceType === 'legacy_membership') {
@@ -1278,195 +1362,231 @@ export function createUserEntitlementStore(options = {}) {
     const operatorType = normalizeMembershipOperatorType(input.operatorType)
     const operatorId = normalizeMembershipOperatorId(input.operatorId)
     const reason = normalizeRequiredReason(input.reason)
+    const redemptionCodeId = normalizeOptionalSafePositiveIntegerId(
+      input.redemptionCodeId,
+      'Redemption code id',
+      'REDEMPTION_CODE_ID_INVALID'
+    )
     const currentTime = normalizeDate(input.now === undefined ? now() : input.now, 'Membership grant time', 'MEMBERSHIP_GRANT_TIME_INVALID')
 
-    const connection = await getPool().getConnection()
-    try {
-      await connection.beginTransaction()
-      let entitlement = await ensureUserEntitlementInTransaction(connection, userId)
-      let grants = await listUserMembershipGrants(connection, userId, { forUpdate: true })
+    let entitlement = await ensureUserEntitlementInTransaction(connection, userId)
+    let grants = await listUserMembershipGrants(connection, userId, { forUpdate: true })
 
-      const existingByIdempotency = await findMembershipGrantByIdempotencyKey(connection, idempotencyKey)
-      if (existingByIdempotency) {
-        if (
-          existingByIdempotency.userId !== userId ||
-          existingByIdempotency.sourceType !== sourceType ||
-          existingByIdempotency.sourceId !== sourceId
-        ) {
-          throw createUserEntitlementStoreError('Idempotency key is already used by another membership grant.', {
-            code: 'IDEMPOTENCY_KEY_CONFLICT',
-            statusCode: 409
-          })
-        }
-        await connection.commit()
-        return {
-          grantId: existingByIdempotency.id,
-          idempotent: true,
-          effectiveStartAt: existingByIdempotency.effectiveStartAt,
-          effectiveEndAt: existingByIdempotency.effectiveEndAt,
-          membershipType: entitlement.membershipType,
-          membershipStatus: entitlement.membershipStatus,
-          membershipExpireAt: entitlement.membershipExpireAt
-        }
-      }
-
-      const existingBySource = await findMembershipGrantBySource(connection, sourceType, sourceId)
-      if (existingBySource) {
-        throw createUserEntitlementStoreError('Membership source is already used by another grant request.', {
-          code: 'MEMBERSHIP_SOURCE_CONFLICT',
-          statusCode: 409
-        })
-      }
-      const existingTransaction = await findTransactionByIdempotencyKey(connection, idempotencyKey)
-      if (existingTransaction) {
-        throw createUserEntitlementStoreError('Idempotency key is already used by another entitlement operation.', {
-          code: 'IDEMPOTENCY_KEY_CONFLICT',
-          statusCode: 409
-        })
-      }
-
-      await ensureLegacyMembershipGrant(connection, userId, entitlement, currentTime, grants)
-      grants = await listUserMembershipGrants(connection, userId, { forUpdate: true })
-      entitlement = await findUserEntitlement(connection, userId, { forUpdate: true })
-
-      const schedule = scheduleMembershipGrant({
-        now: currentTime,
-        membershipExpireAt: entitlement.membershipExpireAt,
-        grants,
-        durationSeconds: MEMBERSHIP_GRANT_DURATION_SECONDS
-      })
-      const grantId = await insertMembershipGrant(connection, {
+    const existingByIdempotency = await findMembershipGrantByIdempotencyKey(connection, idempotencyKey, { forUpdate: true })
+    const existingTransaction = await findTransactionByIdempotencyKey(connection, idempotencyKey, { forUpdate: true })
+    if (existingByIdempotency || existingTransaction) {
+      assertMembershipGrantReplay(existingByIdempotency, existingTransaction, {
         userId,
         sourceType,
         sourceId,
-        redemptionCodeId: null,
+        idempotencyKey,
+        redemptionCodeId
+      })
+      return createMembershipGrantResult(existingByIdempotency, existingTransaction, entitlement, true)
+    }
+
+    const existingBySource = await findMembershipGrantBySource(connection, sourceType, sourceId)
+    if (existingBySource) {
+      throw createUserEntitlementStoreError('Membership source is already used by another grant request.', {
+        code: 'MEMBERSHIP_SOURCE_CONFLICT',
+        statusCode: 409
+      })
+    }
+
+    await ensureLegacyMembershipGrant(connection, userId, entitlement, currentTime, grants)
+    grants = await listUserMembershipGrants(connection, userId, { forUpdate: true })
+    entitlement = await findUserEntitlement(connection, userId, { forUpdate: true })
+
+    const schedule = scheduleMembershipGrant({
+      now: currentTime,
+      membershipExpireAt: entitlement.membershipExpireAt,
+      grants,
+      durationSeconds: MEMBERSHIP_GRANT_DURATION_SECONDS
+    })
+    const grantId = await insertMembershipGrant(connection, {
+      userId,
+      sourceType,
+      sourceId,
+      redemptionCodeId,
+      daysGranted: MEMBERSHIP_GRANT_DAYS,
+      durationSeconds: MEMBERSHIP_GRANT_DURATION_SECONDS,
+      status: 'granted',
+      grantedAt: currentTime,
+      effectiveStartAt: new Date(schedule.effectiveStartAt),
+      effectiveEndAt: new Date(schedule.effectiveEndAt),
+      idempotencyKey
+    })
+    const transactionId = normalizeTransactionId(input.transactionId)
+    const transactionInsertId = await insertTransaction(connection, {
+      transactionId,
+      userId,
+      transactionType: ENTITLEMENT_TRANSACTION_TYPES.MEMBERSHIP_GRANT,
+      amount: 0,
+      balanceAfter: entitlement.quotaBalance,
+      source: sourceType,
+      sourceId,
+      expiresAt: null,
+      idempotencyKey,
+      operatorType,
+      operatorId,
+      reason,
+      metadataJson: normalizeJson({
+        membershipGrantId: grantId,
+        membershipType: 'monthly',
         daysGranted: MEMBERSHIP_GRANT_DAYS,
         durationSeconds: MEMBERSHIP_GRANT_DURATION_SECONDS,
-        status: 'granted',
-        grantedAt: currentTime,
-        effectiveStartAt: new Date(schedule.effectiveStartAt),
-        effectiveEndAt: new Date(schedule.effectiveEndAt),
-        idempotencyKey
-      })
-      const transactionId = normalizeTransactionId(input.transactionId)
-      const transactionInsertId = await insertTransaction(connection, {
-        transactionId,
-        userId,
-        transactionType: ENTITLEMENT_TRANSACTION_TYPES.MEMBERSHIP_GRANT,
-        amount: 0,
-        balanceAfter: entitlement.quotaBalance,
-        source: sourceType,
-        sourceId,
-        expiresAt: null,
-        idempotencyKey,
-        operatorType,
-        operatorId,
-        reason,
-        metadataJson: normalizeJson({
-          membershipGrantId: grantId,
-          membershipType: 'monthly',
-          daysGranted: MEMBERSHIP_GRANT_DAYS,
-          durationSeconds: MEMBERSHIP_GRANT_DURATION_SECONDS,
-          effectiveStartAt: schedule.effectiveStartAt,
-          effectiveEndAt: schedule.effectiveEndAt,
-          durationRule: '30x24_hours_not_calendar_month'
-        }, 'Metadata', 'METADATA_INVALID')
-      })
-      const [grantLinkUpdate] = await connection.execute(
-        `UPDATE ${quoteIdentifier(MEMBERSHIP_GRANTS_TABLE)}
-            SET grant_transaction_id = ?
-          WHERE id = ? AND user_id = ? AND status = 'granted'`,
-        [transactionId, grantId, userId]
-      )
-      assertSingleRowUpdate(grantLinkUpdate, 'membership grant transaction link')
-
-      const allGrants = await listUserMembershipGrants(connection, userId, { forUpdate: true })
-      const membershipStartedAt = allGrants.length ? allGrants[0].effectiveStartAt : schedule.effectiveStartAt
-      const membershipStartedAtDate = normalizeDate(
-        membershipStartedAt,
-        'Membership start time',
-        'MEMBERSHIP_STARTED_AT_INVALID'
-      )
-      // Compatibility value: "monthly" means exactly 30x24 hours in stage 1, never a calendar month.
-      const [snapshotUpdate] = await connection.execute(
-        `UPDATE ${quoteIdentifier(USER_ENTITLEMENTS_TABLE)}
-            SET membership_type = ?,
-                membership_status = ?,
-                membership_started_at = ?,
-                membership_expire_at = ?,
-                last_transaction_id = ?
-          WHERE user_id = ?`,
-        ['monthly', 'active', membershipStartedAtDate, new Date(schedule.membershipExpireAt), transactionInsertId, userId]
-      )
-      assertSingleRowUpdate(snapshotUpdate, 'membership grant entitlement snapshot')
-
-      await connection.commit()
-      return {
-        grantId,
-        idempotent: false,
         effectiveStartAt: schedule.effectiveStartAt,
         effectiveEndAt: schedule.effectiveEndAt,
-        membershipType: 'monthly',
-        membershipStatus: 'active',
-        membershipExpireAt: schedule.membershipExpireAt
-      }
-    } catch (error) {
-      await connection.rollback()
-      if (isDuplicateEntryError(error)) {
-        const existingGrant = await findMembershipGrantByIdempotencyKey(connection, idempotencyKey)
-        if (
-          existingGrant &&
-          existingGrant.userId === userId &&
-          existingGrant.sourceType === sourceType &&
-          existingGrant.sourceId === sourceId
-        ) {
-          const entitlement = await findUserEntitlement(connection, userId)
-          return {
-            grantId: existingGrant.id,
-            idempotent: true,
-            effectiveStartAt: existingGrant.effectiveStartAt,
-            effectiveEndAt: existingGrant.effectiveEndAt,
-            membershipType: entitlement ? entitlement.membershipType : 'monthly',
-            membershipStatus: entitlement ? entitlement.membershipStatus : 'active',
-            membershipExpireAt: entitlement ? entitlement.membershipExpireAt : existingGrant.effectiveEndAt
-          }
-        }
-        if (existingGrant) throw createIdempotencyConflictError()
+        durationRule: '30x24_hours_not_calendar_month'
+      }, 'Metadata', 'METADATA_INVALID')
+    })
+    const [grantLinkUpdate] = await connection.execute(
+      `UPDATE ${quoteIdentifier(MEMBERSHIP_GRANTS_TABLE)}
+          SET grant_transaction_id = ?
+        WHERE id = ? AND user_id = ? AND status = 'granted'`,
+      [transactionId, grantId, userId]
+    )
+    assertSingleRowUpdate(grantLinkUpdate, 'membership grant transaction link')
 
-        const existingBySource = await findMembershipGrantBySource(connection, sourceType, sourceId)
-        if (
-          existingBySource &&
-          existingBySource.userId === userId &&
-          existingBySource.idempotencyKey === idempotencyKey
-        ) {
-          const entitlement = await findUserEntitlement(connection, userId)
-          return {
-            grantId: existingBySource.id,
-            idempotent: true,
-            effectiveStartAt: existingBySource.effectiveStartAt,
-            effectiveEndAt: existingBySource.effectiveEndAt,
-            membershipType: entitlement ? entitlement.membershipType : 'monthly',
-            membershipStatus: entitlement ? entitlement.membershipStatus : 'active',
-            membershipExpireAt: entitlement ? entitlement.membershipExpireAt : existingBySource.effectiveEndAt
-          }
-        }
-        if (existingBySource) {
+    const allGrants = await listUserMembershipGrants(connection, userId, { forUpdate: true })
+    const membershipStartedAt = allGrants.length ? allGrants[0].effectiveStartAt : schedule.effectiveStartAt
+    const membershipStartedAtDate = normalizeDate(
+      membershipStartedAt,
+      'Membership start time',
+      'MEMBERSHIP_STARTED_AT_INVALID'
+    )
+    const membershipExpireAtDate = normalizeDate(
+      schedule.membershipExpireAt,
+      'Membership expiry time',
+      'MEMBERSHIP_EXPIRE_AT_INVALID'
+    )
+    // Compatibility value: "monthly" means exactly 30x24 hours in stage 1, never a calendar month.
+    const [snapshotUpdate] = await connection.execute(
+      `UPDATE ${quoteIdentifier(USER_ENTITLEMENTS_TABLE)}
+          SET membership_type = ?,
+              membership_status = ?,
+              membership_started_at = ?,
+              membership_expire_at = ?,
+              last_transaction_id = ?
+        WHERE user_id = ?`,
+      ['monthly', 'active', membershipStartedAtDate, membershipExpireAtDate, transactionInsertId, userId]
+    )
+    assertSingleRowUpdate(snapshotUpdate, 'membership grant entitlement snapshot')
+
+    return {
+      grantId,
+      transactionId,
+      transactionInsertId,
+      userId,
+      sourceType,
+      sourceId,
+      redemptionCodeId,
+      idempotent: false,
+      effectiveStartAt: schedule.effectiveStartAt,
+      effectiveEndAt: schedule.effectiveEndAt,
+      membershipStartedAt: membershipStartedAtDate.toISOString(),
+      membershipExpireAt: membershipExpireAtDate.toISOString(),
+      membershipType: 'monthly',
+      membershipStatus: 'active',
+      quotaBalance: entitlement.quotaBalance
+    }
+  }
+
+  async function recoverMembershipGrantAfterDuplicate(input = {}) {
+    const userId = normalizeUserId(input.userId)
+    const sourceType = normalizeMembershipSourceType(input.sourceType)
+    const sourceId = normalizeRequiredSourceId(input.sourceId)
+    const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey)
+    const redemptionCodeId = normalizeOptionalSafePositiveIntegerId(
+      input.redemptionCodeId,
+      'Redemption code id',
+      'REDEMPTION_CODE_ID_INVALID'
+    )
+    const recoveryConnection = await getPool().getConnection()
+    let result = null
+    let recoveryError = null
+    try {
+      let existingGrant = await findMembershipGrantByIdempotencyKey(recoveryConnection, idempotencyKey)
+      if (!existingGrant) {
+        const existingBySource = await findMembershipGrantBySource(recoveryConnection, sourceType, sourceId)
+        if (existingBySource && existingBySource.idempotencyKey !== idempotencyKey) {
           throw createUserEntitlementStoreError('Membership source is already used by another grant request.', {
             code: 'MEMBERSHIP_SOURCE_CONFLICT',
             statusCode: 409
           })
         }
-
-        const existingTransaction = await findTransactionByIdempotencyKey(connection, idempotencyKey)
-        if (existingTransaction) throw createIdempotencyConflictError()
+        existingGrant = existingBySource
+      }
+      const existingTransaction = await findTransactionByIdempotencyKey(recoveryConnection, idempotencyKey)
+      if (!existingGrant && !existingTransaction) {
         throw createUserEntitlementStoreError('Concurrent membership grant could not be reconciled.', {
           code: 'MEMBERSHIP_GRANT_CONFLICT',
           statusCode: 409
         })
       }
-      throw error
-    } finally {
+      assertMembershipGrantReplay(existingGrant, existingTransaction, {
+        userId,
+        sourceType,
+        sourceId,
+        idempotencyKey,
+        redemptionCodeId
+      })
+      const entitlement = await findUserEntitlement(recoveryConnection, userId)
+      result = createMembershipGrantResult(existingGrant, existingTransaction, entitlement, true)
+    } catch (error) {
+      recoveryError = error
+    }
+
+    let releaseError = null
+    try {
+      recoveryConnection.release()
+    } catch (error) {
+      releaseError = error
+    }
+    if (recoveryError) throw recoveryError
+    if (releaseError) throw releaseError
+    return result
+  }
+
+  async function grantMembershipDuration(input = {}) {
+    const connection = await getPool().getConnection()
+    let transactionStarted = false
+    let transactionCommitted = false
+    try {
+      await connection.beginTransaction()
+      transactionStarted = true
+      const result = await grantMembershipDurationInTransaction(connection, input)
+      await connection.commit()
+      transactionStarted = false
+      transactionCommitted = true
       connection.release()
+      return result
+    } catch (primaryError) {
+      if (transactionCommitted) throw primaryError
+
+      let rollbackCompleted = false
+      let errorToThrow = primaryError
+      if (transactionStarted) {
+        try {
+          await connection.rollback()
+          transactionStarted = false
+          rollbackCompleted = true
+        } catch (rollbackError) {
+          errorToThrow = rollbackError
+        }
+      }
+
+      let releaseCompleted = false
+      try {
+        connection.release()
+        releaseCompleted = true
+      } catch {
+        // A release failure is secondary to the existing database or rollback error.
+      }
+      if (!isDuplicateEntryError(primaryError) || !rollbackCompleted || !releaseCompleted) {
+        throw errorToThrow
+      }
+      return await recoverMembershipGrantAfterDuplicate(input)
     }
   }
 
@@ -1823,6 +1943,7 @@ export function createUserEntitlementStore(options = {}) {
     ensureUserEntitlement,
     ensureRegistrationBonus,
     grantQuota,
+    grantMembershipDurationInTransaction,
     grantMembershipDuration,
     grantMembership,
     revokeMembershipGrant,
