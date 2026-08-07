@@ -9,6 +9,8 @@ const DEFAULT_HASH_VERSION = 'v1'
 const USERS_TABLE = 'users'
 const WECHAT_BINDINGS_TABLE = 'wechat_user_bindings'
 const PHONE_BINDINGS_TABLE = 'user_phone_bindings'
+const CAMPAIGN_PHONE_HASH_VERSION = 'v1'
+let campaignPhoneIdentityModulePromise = null
 
 function normalizeString(value) {
   return String(value || '').trim()
@@ -100,6 +102,56 @@ async function getTableColumns(connection, tableName) {
     if (row && row.Field) columns[row.Field] = row
   })
   return columns
+}
+
+async function createDefaultCampaignPhoneIdentity(phone, options = {}) {
+  if (!campaignPhoneIdentityModulePromise) {
+    campaignPhoneIdentityModulePromise = import('./book-benefit-foundation.mjs')
+  }
+  const foundation = await campaignPhoneIdentityModulePromise
+  return foundation.createCampaignPhoneIdentity(phone, options)
+}
+
+function normalizeCampaignPhoneIdentity(value) {
+  const hash = value && value.campaignPhoneIdentityHash
+  const hashVersion = normalizeString(
+    value && (value.campaignPhoneHashVersion || value.hashVersion)
+  )
+  if (!Buffer.isBuffer(hash) || hash.length !== 32 || hashVersion !== CAMPAIGN_PHONE_HASH_VERSION) {
+    throw createIdentityStoreError('Campaign phone identity is invalid.')
+  }
+  return {
+    campaignPhoneIdentityHash: Buffer.from(hash),
+    campaignPhoneHashVersion: hashVersion
+  }
+}
+
+async function resolveCampaignPhoneIdentity(factory, phone, options) {
+  try {
+    return normalizeCampaignPhoneIdentity(await factory(phone, options))
+  } catch {
+    throw createIdentityStoreError('Campaign phone identity is unavailable.')
+  }
+}
+
+function requireCampaignPhoneBindingColumns(columns) {
+  const hashColumn = columns.campaign_phone_identity_hash
+  const versionColumn = columns.campaign_phone_hash_version
+  const hashType = normalizeString(hashColumn && hashColumn.Type).toLowerCase()
+  const versionType = normalizeString(versionColumn && versionColumn.Type).toLowerCase()
+  const hashExtra = normalizeString(hashColumn && hashColumn.Extra).toLowerCase()
+  const versionExtra = normalizeString(versionColumn && versionColumn.Extra).toLowerCase()
+
+  if (
+    !hashColumn ||
+    !versionColumn ||
+    hashType !== 'binary(32)' ||
+    versionType !== 'varchar(16)' ||
+    hashExtra.includes('generated') ||
+    versionExtra.includes('generated')
+  ) {
+    throw createIdentityStoreError('Campaign phone identity schema is unavailable.')
+  }
 }
 
 function getPhoneInput(value) {
@@ -400,6 +452,7 @@ export async function createOrUpdatePhoneBinding(connection, userId, phoneIdenti
 
   const hashVersion = normalizeString(phoneIdentity.hashVersion || DEFAULT_HASH_VERSION)
   const countryCode = normalizeCountryCode(phoneIdentity.countryCode)
+  const campaignPhoneIdentity = normalizeCampaignPhoneIdentity(phoneIdentity)
   const existingBinding = await findPhoneBinding(connection, phoneHash)
   if (existingBinding && existingBinding.userId !== String(userId)) {
     throw createIdentityStoreError('Identity binding conflict.', {
@@ -409,6 +462,7 @@ export async function createOrUpdatePhoneBinding(connection, userId, phoneIdenti
   }
 
   const bindingColumns = await getTableColumns(connection, PHONE_BINDINGS_TABLE)
+  requireCampaignPhoneBindingColumns(bindingColumns)
   if (existingBinding) {
     const bindingUpdate = buildUpdate(
       PHONE_BINDINGS_TABLE,
@@ -416,6 +470,8 @@ export async function createOrUpdatePhoneBinding(connection, userId, phoneIdenti
         phone_masked: bindingColumns.phone_masked && phoneMasked ? phoneMasked : undefined,
         hash_version: bindingColumns.hash_version ? hashVersion : undefined,
         country_code: bindingColumns.country_code ? countryCode : undefined,
+        campaign_phone_identity_hash: campaignPhoneIdentity.campaignPhoneIdentityHash,
+        campaign_phone_hash_version: campaignPhoneIdentity.campaignPhoneHashVersion,
         status: bindingColumns.status ? 'active' : undefined,
         verified_at: bindingColumns.verified_at && !existingBinding.verifiedAt ? timestamp : undefined,
         last_verified_at: bindingColumns.last_verified_at ? timestamp : undefined,
@@ -435,6 +491,8 @@ export async function createOrUpdatePhoneBinding(connection, userId, phoneIdenti
     phone_masked: phoneMasked,
     hash_version: bindingColumns.hash_version ? hashVersion : undefined,
     country_code: bindingColumns.country_code ? countryCode : undefined,
+    campaign_phone_identity_hash: campaignPhoneIdentity.campaignPhoneIdentityHash,
+    campaign_phone_hash_version: campaignPhoneIdentity.campaignPhoneHashVersion,
     status: bindingColumns.status ? 'active' : undefined,
     bound_at: bindingColumns.bound_at ? timestamp : undefined,
     verified_at: bindingColumns.verified_at ? timestamp : undefined,
@@ -445,9 +503,41 @@ export async function createOrUpdatePhoneBinding(connection, userId, phoneIdenti
   await connection.execute(bindingInsert.sql, bindingInsert.values)
 }
 
+export async function findCurrentCampaignPhoneIdentityInTransaction(connection, userId, options = {}) {
+  if (!connection || typeof connection.execute !== 'function') {
+    throw createIdentityStoreError('Database connection is required.')
+  }
+  const normalizedUserId = normalizeString(userId)
+  if (!normalizedUserId) {
+    throw createIdentityStoreError('User id is required.')
+  }
+
+  const lockClause = options.forUpdate === true ? ' FOR UPDATE' : ''
+  const [rows] = await connection.execute(
+    `SELECT campaign_phone_identity_hash, campaign_phone_hash_version
+       FROM ${quoteIdentifier(PHONE_BINDINGS_TABLE)}
+      WHERE user_id = ?
+        AND status = 'active'
+      ORDER BY last_verified_at DESC, id DESC
+      LIMIT 1${lockClause}`,
+    [normalizedUserId]
+  )
+  const row = Array.isArray(rows) && rows.length ? rows[0] : null
+  if (!row) return null
+  if (row.campaign_phone_identity_hash === null || row.campaign_phone_hash_version === null) {
+    return null
+  }
+
+  return normalizeCampaignPhoneIdentity({
+    campaignPhoneIdentityHash: row.campaign_phone_identity_hash,
+    hashVersion: row.campaign_phone_hash_version
+  })
+}
+
 export function createIdentityStore(options = {}) {
   let pool = options.pool || null
   const now = options.now || (() => new Date())
+  const campaignPhoneIdentityFactory = options.campaignPhoneIdentityFactory || createDefaultCampaignPhoneIdentity
 
   function getPool() {
     if (pool) return pool
@@ -483,18 +573,30 @@ export function createIdentityStore(options = {}) {
       })
     }
 
-    const normalizedPhone = normalizePhone(identity.phone || identity.phoneNumber || identity.purePhoneNumber, {
-      countryCode: identity.countryCode
+    const trustedPhone = identity.phone
+    const normalizedPhone = normalizePhone(trustedPhone, {
+      countryCode: trustedPhone && trustedPhone.countryCode
     })
     const hashedPhone = hashPhone(normalizedPhone, {
       secret: options.phoneHashSecret === undefined ? process.env.PHONE_HASH_SECRET : options.phoneHashSecret,
       hashVersion: options.phoneHashVersion || DEFAULT_HASH_VERSION
     })
+    const campaignPhoneIdentity = await resolveCampaignPhoneIdentity(
+      campaignPhoneIdentityFactory,
+      normalizedPhone.e164,
+      {
+        secret: options.campaignPhoneIdentityHashSecret === undefined
+          ? process.env.CAMPAIGN_PHONE_IDENTITY_HASH_SECRET
+          : options.campaignPhoneIdentityHashSecret,
+        env: options.campaignPhoneIdentityEnv || process.env
+      }
+    )
     const phoneIdentity = {
       phoneHash: hashedPhone.phoneHash,
       phoneMasked: maskPhone(normalizedPhone),
       hashVersion: hashedPhone.hashVersion,
-      countryCode: hashedPhone.countryCode
+      countryCode: hashedPhone.countryCode,
+      ...campaignPhoneIdentity
     }
 
     const connection = await getPool().getConnection()
