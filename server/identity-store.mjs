@@ -10,6 +10,8 @@ const USERS_TABLE = 'users'
 const WECHAT_BINDINGS_TABLE = 'wechat_user_bindings'
 const PHONE_BINDINGS_TABLE = 'user_phone_bindings'
 const CAMPAIGN_PHONE_HASH_VERSION = 'v1'
+const MAX_SAFE_USER_ID = BigInt(Number.MAX_SAFE_INTEGER)
+const MAX_SAFE_USER_ID_DIGITS = String(Number.MAX_SAFE_INTEGER).length
 let campaignPhoneIdentityModulePromise = null
 
 function normalizeString(value) {
@@ -532,6 +534,132 @@ export async function findCurrentCampaignPhoneIdentityInTransaction(connection, 
     campaignPhoneIdentityHash: row.campaign_phone_identity_hash,
     hashVersion: row.campaign_phone_hash_version
   })
+}
+
+function normalizeAdminIdentityLookupResult(row) {
+  const userId = normalizeString(row && row.user_id)
+  const phoneBindingId = normalizeString(row && row.id)
+  const phoneMasked = normalizeString(row && row.phone_masked)
+  if (!userId || !phoneBindingId || !phoneMasked) {
+    throw createIdentityStoreError('Admin identity binding is invalid.')
+  }
+  const campaignIdentity = normalizeCampaignPhoneIdentity({
+    campaignPhoneIdentityHash: row.campaign_phone_identity_hash,
+    hashVersion: row.campaign_phone_hash_version
+  })
+  return {
+    userId,
+    phoneBindingId,
+    phoneMasked,
+    ...campaignIdentity
+  }
+}
+
+function normalizeBookBenefitAdminLookupUserId(value, fieldName) {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw createIdentityStoreError(`${fieldName} is invalid.`)
+    }
+    return String(value)
+  }
+
+  if (typeof value !== 'string') {
+    throw createIdentityStoreError(`${fieldName} is invalid.`)
+  }
+  const normalized = value.trim()
+  if (!/^\d+$/.test(normalized) || normalized.length > MAX_SAFE_USER_ID_DIGITS) {
+    throw createIdentityStoreError(`${fieldName} is invalid.`)
+  }
+  const numericValue = BigInt(normalized)
+  if (numericValue <= 0n || numericValue > MAX_SAFE_USER_ID) {
+    throw createIdentityStoreError(`${fieldName} is invalid.`)
+  }
+  return numericValue.toString()
+}
+
+async function findLatestActivePhoneBinding(connection, userId, lockClause) {
+  const [rows] = await connection.execute(
+    `SELECT id, user_id, phone_hash, phone_masked,
+            campaign_phone_identity_hash, campaign_phone_hash_version
+       FROM ${quoteIdentifier(PHONE_BINDINGS_TABLE)}
+      WHERE user_id = ?
+        AND status = 'active'
+      ORDER BY last_verified_at DESC, id DESC
+      LIMIT 1${lockClause}`,
+    [userId]
+  )
+  return Array.isArray(rows) && rows.length ? rows[0] : null
+}
+
+export async function findBookBenefitAdminIdentityInTransaction(connection, locator = {}, options = {}) {
+  if (!connection || typeof connection.execute !== 'function' || typeof connection.query !== 'function') {
+    throw createIdentityStoreError('Database connection is required.')
+  }
+
+  const lookup = locator && typeof locator === 'object' ? locator : {}
+  const hasUserId = lookup.userId !== undefined && lookup.userId !== null
+  const hasPhone = lookup.phone !== undefined && lookup.phone !== null
+  if (hasUserId === hasPhone) {
+    throw createIdentityStoreError('Exactly one admin identity locator is required.')
+  }
+  const userId = hasUserId
+    ? normalizeBookBenefitAdminLookupUserId(lookup.userId, 'Admin lookup user id')
+    : ''
+  const hasExpectedUserId = options.expectedUserId !== undefined && options.expectedUserId !== null
+  const expectedUserId = hasExpectedUserId
+    ? normalizeBookBenefitAdminLookupUserId(options.expectedUserId, 'Expected user id')
+    : ''
+
+  let existingPhoneHash = ''
+  if (hasPhone) {
+    const normalizedPhone = normalizePhone(lookup.phone, {
+      countryCode: lookup.countryCode
+    })
+    existingPhoneHash = hashPhone(normalizedPhone, {
+      secret: options.phoneHashSecret === undefined ? process.env.PHONE_HASH_SECRET : options.phoneHashSecret,
+      hashVersion: options.phoneHashVersion || DEFAULT_HASH_VERSION
+    }).phoneHash
+  }
+
+  const bindingColumns = await getTableColumns(connection, PHONE_BINDINGS_TABLE)
+  requireCampaignPhoneBindingColumns(bindingColumns)
+  const lockClause = options.forUpdate === true ? ' FOR UPDATE' : ''
+
+  if (userId) {
+    const latestBinding = await findLatestActivePhoneBinding(connection, userId, lockClause)
+    if (!latestBinding) {
+      throw createIdentityStoreError('Admin identity binding was not found.')
+    }
+    return normalizeAdminIdentityLookupResult(latestBinding)
+  }
+
+  const [matchedRows] = await connection.execute(
+    `SELECT id, user_id, phone_hash
+       FROM ${quoteIdentifier(PHONE_BINDINGS_TABLE)}
+      WHERE phone_hash = ?
+        AND status = 'active'
+      LIMIT 1${lockClause}`,
+    [existingPhoneHash]
+  )
+  const matchedBinding = Array.isArray(matchedRows) && matchedRows.length ? matchedRows[0] : null
+  if (!matchedBinding) {
+    throw createIdentityStoreError('Admin identity binding was not found.')
+  }
+
+  const matchedUserId = normalizeString(matchedBinding.user_id)
+  if (expectedUserId && matchedUserId !== expectedUserId) {
+    throw createIdentityStoreError('Admin phone identity conflicts with the expected user.')
+  }
+
+  const latestBinding = await findLatestActivePhoneBinding(connection, matchedUserId, lockClause)
+  if (!latestBinding) {
+    throw createIdentityStoreError('Admin identity binding was not found.')
+  }
+  if (normalizeString(latestBinding.id) !== normalizeString(matchedBinding.id)) {
+    throw createIdentityStoreError('Admin phone identity is no longer current.')
+  }
+
+  return normalizeAdminIdentityLookupResult(latestBinding)
 }
 
 export function createIdentityStore(options = {}) {
