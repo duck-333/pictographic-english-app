@@ -55,6 +55,7 @@ const ALLOWED_INPUT_FIELDS = new Set([
 ])
 const ALLOWED_REDEMPTION_INPUT_FIELDS = new Set(['userId', 'plaintextCode', 'operationId', 'now'])
 const ALLOWED_REPLACEMENT_INPUT_FIELDS = new Set(['codeId', 'operationId', 'reasonCode', 'operatorId', 'now'])
+const ALLOWED_ISSUE_STATUS_INPUT_FIELDS = new Set(['operationId'])
 const REPLACEMENT_REASON_CODES = new Set(['plaintext_unavailable', 'delivery_failed'])
 
 function createStoreError(message, code = 'BOOK_BENEFIT_STORE_ERROR', statusCode = 500) {
@@ -206,6 +207,18 @@ function normalizeReplacementInput(input = {}) {
     operatorId: normalizeIdentifier(input.operatorId, 'Operator id', 191),
     now: normalizeNow(input.now)
   }
+}
+
+function normalizeIssueStatusInput(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw createStoreError('Book-benefit issue status input is invalid.', 'BOOK_BENEFIT_INPUT_INVALID', 400)
+  }
+  for (const fieldName of Object.keys(input)) {
+    if (!ALLOWED_ISSUE_STATUS_INPUT_FIELDS.has(fieldName)) {
+      throw createStoreError('Book-benefit issue status input contains an unsupported field.', 'BOOK_BENEFIT_INPUT_INVALID', 400)
+    }
+  }
+  return { operationId: normalizeOperationId(input.operationId) }
 }
 
 function normalizeReplacementGeneration(value) {
@@ -514,6 +527,82 @@ async function findConfiguredCampaign(connection, options = {}) {
     [key]
   )
   return mapConfiguredCampaign(Array.isArray(rows) && rows.length ? rows[0] : null, key)
+}
+
+async function getIssueOperationStatus(connection, input, options) {
+  const campaign = await findConfiguredCampaign(connection, options)
+  const [applicationRows] = await connection.execute(
+    `SELECT id, application_no, campaign_id, applicant_user_id, status
+       FROM book_benefit_applications
+      WHERE create_idempotency_key = ?
+      LIMIT 1`,
+    [input.operationId]
+  )
+  const application = Array.isArray(applicationRows) && applicationRows.length ? applicationRows[0] : null
+  if (!application) return { status: 'not_found' }
+  const base = {
+    applicationNo: application.application_no,
+    userId: String(application.applicant_user_id)
+  }
+  if (String(application.campaign_id) !== campaign.campaignId || application.status !== 'approved') {
+    return { ...base, status: 'inconsistent' }
+  }
+  const [codeRows] = await connection.execute(
+    `SELECT id, application_id, status, replacement_code_id, expires_at
+       FROM book_benefit_codes
+      WHERE issue_idempotency_key = ?
+      LIMIT 1`,
+    [input.operationId]
+  )
+  const code = Array.isArray(codeRows) && codeRows.length ? codeRows[0] : null
+  const [auditRows] = await connection.execute(
+    `SELECT application_id, code_id, event_type, result
+       FROM book_benefit_audit_events
+      WHERE event_id = ?
+      LIMIT 1`,
+    [auditEventId(input.operationId)]
+  )
+  const audit = Array.isArray(auditRows) && auditRows.length ? auditRows[0] : null
+  if (
+    !code || !audit ||
+    String(code.application_id) !== String(application.id) ||
+    String(audit.application_id) !== String(application.id) ||
+    String(audit.code_id) !== String(code.id) ||
+    audit.event_type !== 'qualification_approved_code_issued' ||
+    audit.result !== 'succeeded'
+  ) {
+    return { ...base, status: 'inconsistent' }
+  }
+  let codeExpiresAt = null
+  try { codeExpiresAt = asDate(code.expires_at, 'Code expiration time') } catch { /* Inconsistent below. */ }
+  const codeBase = { ...base, codeId: String(code.id), codeExpiresAt }
+  if (!codeExpiresAt) return { ...codeBase, status: 'inconsistent' }
+  if (code.status === 'issued' && code.replacement_code_id === null) {
+    return { ...codeBase, status: 'issued_plaintext_unavailable' }
+  }
+  if (code.status === 'voided' && code.replacement_code_id !== null) {
+    const [replacementRows] = await connection.execute(
+      `SELECT id, application_id, expires_at
+         FROM book_benefit_codes
+        WHERE id = ?
+        LIMIT 1`,
+      [code.replacement_code_id]
+    )
+    const replacement = Array.isArray(replacementRows) && replacementRows.length ? replacementRows[0] : null
+    if (!replacement || String(replacement.application_id) !== String(application.id)) {
+      return { ...codeBase, status: 'inconsistent' }
+    }
+    let replacementExpiresAt = null
+    try { replacementExpiresAt = asDate(replacement.expires_at, 'Replacement code expiration time') } catch { /* Inconsistent below. */ }
+    if (!replacementExpiresAt) return { ...codeBase, status: 'inconsistent' }
+    return {
+      ...codeBase,
+      codeExpiresAt: replacementExpiresAt,
+      replacementCodeId: String(replacement.id),
+      status: 'replaced'
+    }
+  }
+  return { ...codeBase, status: 'inconsistent' }
 }
 
 async function findReplacementByOperationForUpdate(connection, operationId) {
@@ -1303,6 +1392,23 @@ export function createBookBenefitStore(options = {}) {
     return result
   }
 
+  async function getBookBenefitIssueOperationStatus(rawInput = {}) {
+    const input = normalizeIssueStatusInput(rawInput)
+    const connection = await getPool().getConnection()
+    let primaryError = null
+    let result = null
+    try {
+      result = await getIssueOperationStatus(connection, input, options)
+    } catch (error) {
+      primaryError = error
+    }
+    let releaseError = null
+    try { connection.release() } catch (error) { releaseError = error }
+    if (primaryError) throw primaryError
+    if (releaseError) throw releaseError
+    return result
+  }
+
   async function replaceIssuedBookBenefitCode(rawInput = {}) {
     const input = normalizeReplacementInput(rawInput)
     const connection = await getPool().getConnection()
@@ -1385,6 +1491,7 @@ export function createBookBenefitStore(options = {}) {
     issueApprovedBookBenefitCode,
     redeemBookBenefitCode,
     getConfiguredBookBenefitCampaign,
+    getBookBenefitIssueOperationStatus,
     replaceIssuedBookBenefitCode
   }
 }

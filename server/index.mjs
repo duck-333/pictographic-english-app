@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 
 import { assertUserAuthConfig, createUserSessionToken, requireAdminAuth, requireUserAuth } from './auth.mjs'
+import { createBookBenefitStore } from './book-benefit-store.mjs'
 import { createIdentityStore } from './identity-store.mjs'
 import { createUserEntitlementStore, ENTITLEMENT_REASONS, ENTITLEMENT_TRANSACTION_TYPES } from './user-entitlement-store.mjs'
 import { createUserFavoritesStore } from './user-favorites-store.mjs'
@@ -17,15 +18,51 @@ const DEFAULT_HOST = '0.0.0.0'
 const MAX_BODY_BYTES = 1024 * 1024
 const MAX_FAVORITE_WORD_ID_LENGTH = 191
 const MAX_RECENT_WORD_ID_LENGTH = 191
+const BOOK_BENEFIT_ADMIN_ACTOR = 'legacy-admin'
+const BOOK_BENEFIT_OPERATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/
+const BOOK_BENEFIT_ORDER_CHANNELS = new Set(['taobao', 'wechat', 'xianyu', 'legacy_offline'])
+const BOOK_BENEFIT_SELLER_CODES = new Set(['official_store', 'authorized_seller', 'unverified'])
+const BOOK_BENEFIT_CUSTOMER_SERVICE_CHANNELS = new Set([
+  'miniapp_cs',
+  'taobao_cs',
+  'xianyu_cs',
+  'wechat_official_cs'
+])
+const BOOK_BENEFIT_MANUAL_REASON_CODES = new Set([
+  'historical_evidence_unavailable',
+  'customer_service_approved_exception'
+])
+const BOOK_BENEFIT_REPLACEMENT_REASON_CODES = new Set(['plaintext_unavailable', 'delivery_failed'])
+const BOOK_BENEFIT_ISSUE_FIELDS = new Set([
+  'operationId',
+  'userId',
+  'orderClaimType',
+  'orderChannel',
+  'orderNumber',
+  'manualExceptionReasonCode',
+  'sellerVerificationCode',
+  'customerServiceChannel'
+])
+const BOOK_BENEFIT_ISSUE_STATUS_FIELDS = new Set(['operationId'])
+const BOOK_BENEFIT_REPLACEMENT_FIELDS = new Set(['codeId', 'operationId', 'reasonCode'])
+const BOOK_BENEFIT_REDEMPTION_FIELDS = new Set(['code', 'operationId'])
 
-function sendJson(res, statusCode, payload) {
+function sendJson(res, statusCode, payload, additionalHeaders = {}) {
   res.writeHead(statusCode, {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Request-Id',
-    'Content-Type': 'application/json; charset=utf-8'
+    'Content-Type': 'application/json; charset=utf-8',
+    ...additionalHeaders
   })
   res.end(JSON.stringify(payload))
+}
+
+function sendNoStoreJson(res, statusCode, payload, containsPlaintextCode = false) {
+  sendJson(res, statusCode, payload, {
+    'Cache-Control': 'no-store',
+    ...(containsPlaintextCode ? { Pragma: 'no-cache', Expires: '0' } : {})
+  })
 }
 
 function sendOptions(res) {
@@ -421,6 +458,274 @@ function sendAdminEntitlementError(res, error) {
   })
 }
 
+function createBookBenefitRequestError(message = 'Book-benefit request is invalid.') {
+  const error = new Error(message)
+  error.code = 'BOOK_BENEFIT_INPUT_INVALID'
+  error.statusCode = 400
+  return error
+}
+
+function assertBookBenefitBody(body, allowedFields) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw createBookBenefitRequestError()
+  }
+  for (const fieldName of Object.keys(body)) {
+    if (!allowedFields.has(fieldName)) throw createBookBenefitRequestError()
+  }
+}
+
+function normalizeBookBenefitOperationId(value) {
+  if (typeof value !== 'string') throw createBookBenefitRequestError()
+  const operationId = value.trim()
+  if (
+    !operationId ||
+    operationId.length > 191 ||
+    operationId !== value ||
+    !BOOK_BENEFIT_OPERATION_ID_PATTERN.test(operationId)
+  ) {
+    throw createBookBenefitRequestError()
+  }
+  return operationId
+}
+
+function normalizeBookBenefitPositiveId(value) {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value <= 0) throw createBookBenefitRequestError()
+    return String(value)
+  }
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
+    throw createBookBenefitRequestError()
+  }
+  const normalized = value.replace(/^0+(?=\d)/, '')
+  if (normalized.length > 16 || BigInt(normalized) > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw createBookBenefitRequestError()
+  }
+  return normalized
+}
+
+function normalizeBookBenefitWhitelist(value, allowedValues) {
+  if (typeof value !== 'string' || !allowedValues.has(value)) {
+    throw createBookBenefitRequestError()
+  }
+  return value
+}
+
+function normalizeBookBenefitIssueBody(body) {
+  assertBookBenefitBody(body, BOOK_BENEFIT_ISSUE_FIELDS)
+  const operationId = normalizeBookBenefitOperationId(body.operationId)
+  const userId = normalizeBookBenefitPositiveId(body.userId)
+  const orderClaimType = normalizeBookBenefitWhitelist(body.orderClaimType, new Set(['standard', 'manual_exception']))
+  const sellerVerificationCode = normalizeBookBenefitWhitelist(body.sellerVerificationCode, BOOK_BENEFIT_SELLER_CODES)
+  const customerServiceChannel = normalizeBookBenefitWhitelist(
+    body.customerServiceChannel,
+    BOOK_BENEFIT_CUSTOMER_SERVICE_CHANNELS
+  )
+
+  if (orderClaimType === 'standard') {
+    if (sellerVerificationCode === 'unverified') throw createBookBenefitRequestError()
+    if (body.manualExceptionReasonCode !== undefined) throw createBookBenefitRequestError()
+    if (typeof body.orderNumber !== 'string' || !body.orderNumber.trim() || body.orderNumber.length > 512) {
+      throw createBookBenefitRequestError()
+    }
+    return {
+      operationId,
+      userId,
+      orderClaimType,
+      orderChannel: normalizeBookBenefitWhitelist(body.orderChannel, BOOK_BENEFIT_ORDER_CHANNELS),
+      orderNumber: body.orderNumber,
+      sellerVerificationCode,
+      customerServiceChannel
+    }
+  }
+
+  if (body.orderChannel !== undefined || body.orderNumber !== undefined) throw createBookBenefitRequestError()
+  return {
+    operationId,
+    userId,
+    orderClaimType,
+    manualExceptionReasonCode: normalizeBookBenefitWhitelist(
+      body.manualExceptionReasonCode,
+      BOOK_BENEFIT_MANUAL_REASON_CODES
+    ),
+    sellerVerificationCode,
+    customerServiceChannel
+  }
+}
+
+function normalizeBookBenefitIssueStatusBody(body) {
+  assertBookBenefitBody(body, BOOK_BENEFIT_ISSUE_STATUS_FIELDS)
+  return { operationId: normalizeBookBenefitOperationId(body.operationId) }
+}
+
+function normalizeBookBenefitReplacementBody(body) {
+  assertBookBenefitBody(body, BOOK_BENEFIT_REPLACEMENT_FIELDS)
+  return {
+    codeId: normalizeBookBenefitPositiveId(body.codeId),
+    operationId: normalizeBookBenefitOperationId(body.operationId),
+    reasonCode: normalizeBookBenefitWhitelist(body.reasonCode, BOOK_BENEFIT_REPLACEMENT_REASON_CODES)
+  }
+}
+
+function normalizeBookBenefitRedemptionBody(body) {
+  assertBookBenefitBody(body, BOOK_BENEFIT_REDEMPTION_FIELDS)
+  if (typeof body.code !== 'string' || !body.code.trim() || body.code.length > 128) {
+    throw createBookBenefitRequestError()
+  }
+  return {
+    code: body.code,
+    operationId: normalizeBookBenefitOperationId(body.operationId)
+  }
+}
+
+function toSafeBookBenefitCampaignPayload(campaign) {
+  return {
+    name: campaign.name,
+    status: campaign.status,
+    benefitDays: campaign.benefitDays,
+    rulesVersion: campaign.rulesVersion,
+    startsAt: campaign.startsAt,
+    endsAt: campaign.endsAt
+  }
+}
+
+function toSafeBookBenefitIssuePayload(result) {
+  const payload = {
+    applicationNo: result.applicationNo,
+    codeId: result.codeId,
+    codeExpiresAt: result.codeExpiresAt,
+    userId: result.userId,
+    status: result.status
+  }
+  if (result.status === 'issued' && typeof result.plaintextCode === 'string') {
+    payload.plaintextCode = result.plaintextCode
+  }
+  return payload
+}
+
+function toSafeBookBenefitIssueStatusPayload(result) {
+  const payload = { status: result.status }
+  for (const fieldName of ['applicationNo', 'codeId', 'replacementCodeId', 'userId', 'codeExpiresAt']) {
+    if (result[fieldName] !== undefined) payload[fieldName] = result[fieldName]
+  }
+  return payload
+}
+
+function toSafeBookBenefitReplacementPayload(result) {
+  const payload = {
+    originalCodeId: result.originalCodeId,
+    replacementCodeId: result.replacementCodeId,
+    codeExpiresAt: result.codeExpiresAt,
+    applicationId: result.applicationId,
+    userId: result.userId,
+    generationNo: result.generationNo,
+    status: result.status
+  }
+  if (result.status === 'issued' && typeof result.plaintextCode === 'string') {
+    payload.plaintextCode = result.plaintextCode
+  }
+  return payload
+}
+
+function toSafeBookBenefitRedemptionPayload(result) {
+  return {
+    membershipType: result.membershipType,
+    membershipStatus: result.membershipStatus,
+    membershipStartedAt: result.membershipStartedAt,
+    membershipExpireAt: result.membershipExpireAt,
+    quotaBalance: result.quotaBalance,
+    idempotent: Boolean(result.idempotent)
+  }
+}
+
+const ADMIN_BOOK_BENEFIT_ERROR_MESSAGES = {
+  BOOK_BENEFIT_INPUT_INVALID: 'Book-benefit request is invalid.',
+  BOOK_BENEFIT_CAMPAIGN_CONFIG_INVALID: 'Book-benefit campaign configuration is invalid.',
+  BOOK_BENEFIT_CAMPAIGN_INVALID: 'Book-benefit campaign configuration is invalid.',
+  BOOK_BENEFIT_CAMPAIGN_NOT_FOUND: 'Book-benefit campaign was not found.',
+  BOOK_BENEFIT_CAMPAIGN_NOT_ACTIVE: 'Book-benefit campaign is not active.',
+  BOOK_BENEFIT_CAMPAIGN_NOT_STARTED: 'Book-benefit campaign has not started.',
+  BOOK_BENEFIT_CAMPAIGN_ENDED: 'Book-benefit campaign has ended.',
+  BOOK_BENEFIT_PHONE_IDENTITY_REQUIRED: 'The user must verify the current phone number.',
+  BOOK_BENEFIT_CAMPAIGN_USER_CONFLICT: 'The user has already participated in this campaign.',
+  BOOK_BENEFIT_CAMPAIGN_PHONE_CONFLICT: 'The phone identity has already participated in this campaign.',
+  BOOK_BENEFIT_ORDER_CONFLICT: 'The order has already been used for this campaign.',
+  BOOK_BENEFIT_OPERATION_CONFLICT: 'The operation id conflicts with an existing operation.',
+  BOOK_BENEFIT_CONCURRENT_CONFLICT: 'The request conflicts with another operation.',
+  BOOK_BENEFIT_CODE_NOT_FOUND: 'The book-benefit code was not found.',
+  BOOK_BENEFIT_CODE_UNAVAILABLE: 'The book-benefit code cannot be replaced.',
+  BOOK_BENEFIT_CODE_REDEEMED: 'The book-benefit code has already been redeemed.',
+  BOOK_BENEFIT_CODE_VOIDED: 'The book-benefit code has been voided.',
+  BOOK_BENEFIT_CODE_EXPIRED: 'The book-benefit code has expired.',
+  BOOK_BENEFIT_REPLACEMENT_LIMIT: 'The replacement limit has been reached.',
+  BOOK_BENEFIT_APPLICATION_INVALID: 'The book-benefit application is not eligible.',
+  BOOK_BENEFIT_RELATION_INVALID: 'Book-benefit records are inconsistent.'
+}
+
+function getPublicAdminBookBenefitError(error) {
+  const code = error && error.code ? String(error.code) : ''
+  if (Object.prototype.hasOwnProperty.call(ADMIN_BOOK_BENEFIT_ERROR_MESSAGES, code)) {
+    return {
+      statusCode: normalizeErrorStatusCode(error && error.statusCode, code === 'BOOK_BENEFIT_INPUT_INVALID' ? 400 : 409),
+      code,
+      message: ADMIN_BOOK_BENEFIT_ERROR_MESSAGES[code]
+    }
+  }
+  if (code === 'IDENTITY_STORE_ERROR' || /^IDENTITY_/.test(code)) {
+    return { statusCode: 409, code: 'BOOK_BENEFIT_PHONE_IDENTITY_REQUIRED', message: ADMIN_BOOK_BENEFIT_ERROR_MESSAGES.BOOK_BENEFIT_PHONE_IDENTITY_REQUIRED }
+  }
+  if (code === 'BOOK_BENEFIT_DB_CONFIG_MISSING' || isDatabaseErrorCode(code)) {
+    return { statusCode: 503, code: 'BOOK_BENEFIT_SERVICE_UNAVAILABLE', message: 'Book-benefit service is unavailable.' }
+  }
+  return { statusCode: 500, code: 'BOOK_BENEFIT_ADMIN_ERROR', message: 'Book-benefit operation failed.' }
+}
+
+function getPublicUserBookBenefitError(error) {
+  const code = error && error.code ? String(error.code) : ''
+  if (code === 'BOOK_BENEFIT_PHONE_IDENTITY_REQUIRED' || code === 'IDENTITY_STORE_ERROR' || /^IDENTITY_/.test(code)) {
+    return { statusCode: 409, code: 'PHONE_VERIFICATION_REQUIRED', message: 'Please verify your phone number.' }
+  }
+  if (code === 'BOOK_BENEFIT_CODE_NOT_FOUND' || code === 'BOOK_BENEFIT_INPUT_INVALID') {
+    return { statusCode: 400, code: 'BOOK_BENEFIT_CODE_INVALID', message: 'The redemption code is invalid.' }
+  }
+  if (code === 'BOOK_BENEFIT_CODE_EXPIRED') {
+    return { statusCode: 409, code, message: 'The redemption code has expired.' }
+  }
+  if (code === 'BOOK_BENEFIT_CODE_REDEEMED') {
+    return { statusCode: 409, code, message: 'The redemption code has already been used.' }
+  }
+  if (code === 'BOOK_BENEFIT_CODE_VOIDED' || code === 'BOOK_BENEFIT_CODE_UNAVAILABLE') {
+    return { statusCode: 409, code: 'BOOK_BENEFIT_CODE_VOIDED', message: 'The redemption code has been voided.' }
+  }
+  if (code === 'BOOK_BENEFIT_REDEMPTION_CONFLICT' || code === 'BOOK_BENEFIT_CAMPAIGN_USER_CONFLICT' || code === 'BOOK_BENEFIT_CAMPAIGN_PHONE_CONFLICT') {
+    return { statusCode: 409, code: 'BOOK_BENEFIT_ALREADY_PARTICIPATED', message: 'You have already participated in this campaign.' }
+  }
+  if (code === 'BOOK_BENEFIT_OPERATION_CONFLICT' || code === 'BOOK_BENEFIT_CONCURRENT_CONFLICT') {
+    return { statusCode: 409, code: 'BOOK_BENEFIT_REQUEST_CONFLICT', message: 'The request conflicts with an existing operation.' }
+  }
+  if (code === 'BOOK_BENEFIT_DB_CONFIG_MISSING' || isDatabaseErrorCode(code)) {
+    return { statusCode: 503, code: 'BOOK_BENEFIT_SERVICE_UNAVAILABLE', message: 'Book-benefit service is unavailable.' }
+  }
+  return { statusCode: 500, code: 'INTERNAL_SERVER_ERROR', message: 'Internal server error.' }
+}
+
+function sendAdminBookBenefitError(res, error, containsPlaintextCode = false) {
+  const publicError = getPublicAdminBookBenefitError(error)
+  sendNoStoreJson(res, publicError.statusCode, {
+    ok: false,
+    code: publicError.code,
+    message: publicError.message
+  }, containsPlaintextCode)
+}
+
+function sendUserBookBenefitError(res, error) {
+  const publicError = getPublicUserBookBenefitError(error)
+  sendNoStoreJson(res, publicError.statusCode, {
+    ok: false,
+    code: publicError.code,
+    message: publicError.message
+  })
+}
+
 function parseAdminEntitlementUserRoute(pathname) {
   const prefix = '/api/admin/entitlements/users/'
   if (!pathname.startsWith(prefix)) return null
@@ -716,6 +1021,10 @@ export function createApiHandler(options = {}) {
   const userFavoritesStore = options.userFavoritesStore || createUserFavoritesStore(options)
   const userRecentWordsStore = options.userRecentWordsStore || createUserRecentWordsStore(options)
   const identityStore = options.identityStore || createIdentityStore(options)
+  const bookBenefitStore = options.bookBenefitStore || createBookBenefitStore({
+    ...options,
+    entitlementStore: userEntitlementStore || undefined
+  })
   const wechatLoginClient = options.wechatLoginClient || createWechatLoginClient(options)
   const now = options.now || (() => new Date())
   const adminAuthOptions = {
@@ -746,6 +1055,113 @@ export function createApiHandler(options = {}) {
           timestamp: now().toISOString(),
           wordCount: await store.getWordCount()
         })
+        return
+      }
+
+      if (req.method === 'GET' && pathname === '/api/admin/book-benefits/campaign') {
+        const authResult = requireAdminAuth(req, adminAuthOptions)
+        if (!authResult.ok) {
+          sendNoStoreJson(res, authResult.statusCode, { ok: false, message: 'Unauthorized' })
+          return
+        }
+        try {
+          const campaign = await bookBenefitStore.getConfiguredBookBenefitCampaign()
+          sendNoStoreJson(res, 200, { ok: true, ...toSafeBookBenefitCampaignPayload(campaign) })
+        } catch (error) {
+          sendAdminBookBenefitError(res, error)
+        }
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/admin/book-benefits/codes/issue') {
+        const authResult = requireAdminAuth(req, adminAuthOptions)
+        if (!authResult.ok) {
+          sendNoStoreJson(res, authResult.statusCode, { ok: false, message: 'Unauthorized' }, true)
+          return
+        }
+        try {
+          const input = normalizeBookBenefitIssueBody(await readJsonBody(req))
+          const campaign = await bookBenefitStore.getConfiguredBookBenefitCampaign()
+          const result = await bookBenefitStore.issueApprovedBookBenefitCode({
+            campaignId: campaign.campaignId,
+            locator: { userId: input.userId },
+            orderClaimType: input.orderClaimType,
+            orderChannel: input.orderChannel,
+            orderNumber: input.orderNumber,
+            manualExceptionReasonCode: input.manualExceptionReasonCode,
+            sellerVerificationCode: input.sellerVerificationCode,
+            customerServiceChannel: input.customerServiceChannel,
+            operatorId: BOOK_BENEFIT_ADMIN_ACTOR,
+            operationId: input.operationId,
+            now: now()
+          })
+          const statusCode = result.status === 'ISSUED_CODE_PLAINTEXT_UNAVAILABLE' ? 409 : 200
+          sendNoStoreJson(res, statusCode, { ok: statusCode === 200, ...toSafeBookBenefitIssuePayload(result) }, true)
+        } catch (error) {
+          sendAdminBookBenefitError(res, error, true)
+        }
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/admin/book-benefits/codes/issue-status') {
+        const authResult = requireAdminAuth(req, adminAuthOptions)
+        if (!authResult.ok) {
+          sendNoStoreJson(res, authResult.statusCode, { ok: false, message: 'Unauthorized' })
+          return
+        }
+        try {
+          const input = normalizeBookBenefitIssueStatusBody(await readJsonBody(req))
+          const result = await bookBenefitStore.getBookBenefitIssueOperationStatus(input)
+          sendNoStoreJson(res, 200, { ok: true, ...toSafeBookBenefitIssueStatusPayload(result) })
+        } catch (error) {
+          sendAdminBookBenefitError(res, error)
+        }
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/admin/book-benefits/codes/replace') {
+        const authResult = requireAdminAuth(req, adminAuthOptions)
+        if (!authResult.ok) {
+          sendNoStoreJson(res, authResult.statusCode, { ok: false, message: 'Unauthorized' }, true)
+          return
+        }
+        try {
+          const input = normalizeBookBenefitReplacementBody(await readJsonBody(req))
+          const result = await bookBenefitStore.replaceIssuedBookBenefitCode({
+            ...input,
+            operatorId: BOOK_BENEFIT_ADMIN_ACTOR,
+            now: now()
+          })
+          const statusCode = result.status === 'REPLACEMENT_CODE_PLAINTEXT_UNAVAILABLE' ? 409 : 200
+          sendNoStoreJson(res, statusCode, { ok: statusCode === 200, ...toSafeBookBenefitReplacementPayload(result) }, true)
+        } catch (error) {
+          sendAdminBookBenefitError(res, error, true)
+        }
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/user/book-benefits/redeem') {
+        const authResult = requireUserAuth(req, userAuthOptions)
+        if (!authResult.ok) {
+          sendNoStoreJson(res, authResult.statusCode, {
+            ok: false,
+            code: 'UNAUTHORIZED',
+            message: 'Please log in.'
+          })
+          return
+        }
+        try {
+          const input = normalizeBookBenefitRedemptionBody(await readJsonBody(req))
+          const result = await bookBenefitStore.redeemBookBenefitCode({
+            userId: authResult.userId,
+            plaintextCode: input.code,
+            operationId: input.operationId,
+            now: now()
+          })
+          sendNoStoreJson(res, 200, { ok: true, ...toSafeBookBenefitRedemptionPayload(result) })
+        } catch (error) {
+          sendUserBookBenefitError(res, error)
+        }
         return
       }
 
@@ -1451,6 +1867,19 @@ export function createApiHandler(options = {}) {
         sendJson(res, 200, {
           ok: true,
           word: result.word
+        })
+        return
+      }
+
+      if (
+        pathname === '/api/admin/book-benefits' ||
+        pathname.startsWith('/api/admin/book-benefits/') ||
+        pathname === '/api/user/book-benefits' ||
+        pathname.startsWith('/api/user/book-benefits/')
+      ) {
+        sendNoStoreJson(res, 404, {
+          ok: false,
+          message: 'API route not found.'
         })
         return
       }
