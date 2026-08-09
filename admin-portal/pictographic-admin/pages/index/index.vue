@@ -772,6 +772,111 @@
 				</view>
 			</view>
 
+			<view class="panel book-benefit-card">
+				<view class="panel-head">
+					<view>
+						<text class="panel-title">购书福利30天会员</text>
+						<text class="panel-note">确认用户和客服核验结果后生成一次性兑换码。</text>
+					</view>
+					<button class="secondary-button" :disabled="bookBenefit.campaignLoading" @click="loadBookBenefitCampaign">
+						{{ bookBenefit.campaignLoading ? '读取中...' : '刷新活动' }}
+					</button>
+				</view>
+
+				<view v-if="bookBenefit.campaign" class="book-benefit-campaign-grid">
+					<view><text class="entitlement-field-label">活动名称</text><text class="entitlement-field-value">{{ bookBenefit.campaign.name }}</text></view>
+					<view><text class="entitlement-field-label">状态</text><text class="entitlement-field-value">{{ bookBenefit.campaign.status }}</text></view>
+					<view><text class="entitlement-field-label">会员权益</text><text class="entitlement-field-value">{{ bookBenefit.campaign.benefitDays }}天</text></view>
+					<view><text class="entitlement-field-label">规则版本</text><text class="entitlement-field-value">{{ bookBenefit.campaign.rulesVersion }}</text></view>
+					<view><text class="entitlement-field-label">开始时间</text><text class="entitlement-field-value">{{ formatAdminDate(bookBenefit.campaign.startsAt) }}</text></view>
+					<view><text class="entitlement-field-label">结束时间</text><text class="entitlement-field-value">{{ formatAdminDate(bookBenefit.campaign.endsAt) }}</text></view>
+				</view>
+				<text :class="['book-benefit-state', bookBenefitCampaignAvailable ? 'available' : 'blocked']">{{ bookBenefitCampaignStateText }}</text>
+
+				<view class="book-benefit-user-summary">
+					<template v-if="entitlementManagement.selectedUser">
+						<text>已确认用户：user_id={{ entitlementManagement.selectedUser.id }}</text>
+						<text>手机号：{{ entitlementManagement.selectedUser.phoneMasked }}</text>
+						<text v-if="entitlementManagement.entitlement">会员状态：{{ entitlementManagement.entitlement.membershipStatus }}，到期：{{ formatAdminDate(entitlementManagement.entitlement.membershipExpireAt) }}</text>
+					</template>
+					<text v-else>请先在上方搜索并确认一个用户。</text>
+				</view>
+
+				<view class="book-benefit-form-grid">
+					<label class="entitlement-form-field">
+						<text>核验方式</text>
+						<picker :disabled="bookBenefit.issuing" :range="bookBenefitOptions.claimTypes" range-key="label" :value="bookBenefitOptionIndex('claimTypes', bookBenefit.form.orderClaimType)" @change="changeBookBenefitOption('claimTypes', 'orderClaimType', $event)">
+							<view class="book-benefit-picker">{{ bookBenefitOptionLabel('claimTypes', bookBenefit.form.orderClaimType) }}</view>
+						</picker>
+					</label>
+					<label v-if="bookBenefit.form.orderClaimType === 'standard'" class="entitlement-form-field">
+						<text>订单渠道</text>
+						<picker :disabled="bookBenefit.issuing" :range="bookBenefitOptions.orderChannels" range-key="label" :value="bookBenefitOptionIndex('orderChannels', bookBenefit.form.orderChannel)" @change="changeBookBenefitOption('orderChannels', 'orderChannel', $event)">
+							<view class="book-benefit-picker">{{ bookBenefitOptionLabel('orderChannels', bookBenefit.form.orderChannel) }}</view>
+						</picker>
+					</label>
+					<label v-if="bookBenefit.form.orderClaimType === 'standard'" class="entitlement-form-field book-benefit-order-field">
+						<text>订单号</text>
+						<input v-model="bookBenefit.form.orderNumber" :disabled="bookBenefit.issuing" class="entitlement-form-input" maxlength="512" placeholder="仅用于本次服务端核验" @input="handleBookBenefitOrderNumberInput" />
+					</label>
+					<label v-if="bookBenefit.form.orderClaimType === 'standard'" class="entitlement-form-field">
+						<text>销售方核验</text>
+						<picker :disabled="bookBenefit.issuing" :range="bookBenefitOptions.sellerCodes" range-key="label" :value="bookBenefitOptionIndex('sellerCodes', bookBenefit.form.sellerVerificationCode)" @change="changeBookBenefitOption('sellerCodes', 'sellerVerificationCode', $event)">
+							<view class="book-benefit-picker">{{ bookBenefitOptionLabel('sellerCodes', bookBenefit.form.sellerVerificationCode) }}</view>
+						</picker>
+					</label>
+					<label v-else class="entitlement-form-field book-benefit-order-field">
+						<text>人工例外原因</text>
+						<picker :disabled="bookBenefit.issuing" :range="bookBenefitOptions.manualReasons" range-key="label" :value="bookBenefitOptionIndex('manualReasons', bookBenefit.form.manualExceptionReasonCode)" @change="changeBookBenefitOption('manualReasons', 'manualExceptionReasonCode', $event)">
+							<view class="book-benefit-picker">{{ bookBenefitOptionLabel('manualReasons', bookBenefit.form.manualExceptionReasonCode) }}</view>
+						</picker>
+					</label>
+					<label class="entitlement-form-field">
+						<text>客服渠道</text>
+						<picker :disabled="bookBenefit.issuing" :range="bookBenefitOptions.customerServiceChannels" range-key="label" :value="bookBenefitOptionIndex('customerServiceChannels', bookBenefit.form.customerServiceChannel)" @change="changeBookBenefitOption('customerServiceChannels', 'customerServiceChannel', $event)">
+							<view class="book-benefit-picker">{{ bookBenefitOptionLabel('customerServiceChannels', bookBenefit.form.customerServiceChannel) }}</view>
+						</picker>
+					</label>
+				</view>
+
+				<view class="book-benefit-actions">
+					<button class="publish-button" :disabled="!bookBenefitCanIssue" @click="submitBookBenefitIssue">
+						{{ bookBenefit.issuing ? '生成中...' : '审核通过并生成兑换码' }}
+					</button>
+					<button v-if="bookBenefit.pendingConfirmation" class="secondary-button" :disabled="bookBenefit.statusChecking" @click="checkBookBenefitIssueStatus">
+						{{ bookBenefit.statusChecking ? '查询中...' : '查询签发状态' }}
+					</button>
+				</view>
+				<text v-if="bookBenefit.message" class="book-benefit-message">{{ bookBenefit.message }}</text>
+
+				<view v-if="bookBenefit.statusResult" class="book-benefit-status-result">
+					<text>状态：{{ getBookBenefitStatusLabel(bookBenefit.statusResult.status) }}</text>
+					<text v-if="bookBenefit.statusResult.applicationNo">申请编号：{{ bookBenefit.statusResult.applicationNo }}</text>
+					<text v-if="bookBenefit.statusResult.codeId">原码 ID：{{ bookBenefit.statusResult.codeId }}</text>
+					<text v-if="bookBenefit.statusResult.replacementCodeId">替换码 ID：{{ bookBenefit.statusResult.replacementCodeId }}</text>
+					<template v-if="bookBenefit.statusResult.status === 'issued_plaintext_unavailable'">
+						<picker :range="bookBenefitOptions.replacementReasons" range-key="label" :value="bookBenefitOptionIndex('replacementReasons', bookBenefit.replacementReasonCode)" @change="changeBookBenefitReplacementReason">
+							<view class="book-benefit-picker">{{ bookBenefitOptionLabel('replacementReasons', bookBenefit.replacementReasonCode) }}</view>
+						</picker>
+						<button class="danger-button book-benefit-replace-button" :disabled="bookBenefit.replacing" @click="replaceBookBenefitIssue">
+							{{ bookBenefit.replacing ? '补发中...' : (bookBenefit.replacementOperationId ? '确认补发结果' : '作废并补发') }}
+						</button>
+					</template>
+				</view>
+
+				<view v-if="bookBenefit.result && bookBenefit.result.plaintextCode" class="book-benefit-code-result">
+					<text class="book-benefit-code-warning">兑换码明文只显示本次，请复制并发送后再关闭。</text>
+					<text class="book-benefit-code">{{ bookBenefit.result.plaintextCode }}</text>
+					<text>有效期：{{ formatAdminDate(bookBenefit.result.codeExpiresAt) }}</text>
+					<view class="book-benefit-actions">
+						<button class="secondary-button" @click="copyBookBenefitText(bookBenefit.result.plaintextCode, '兑换码已复制')">复制兑换码</button>
+						<button class="secondary-button" @click="copyBookBenefitText(bookBenefit.customerReply, '客服回复已复制')">复制完整客服回复</button>
+						<button class="danger-button" :disabled="bookBenefit.replacing" @click="replaceBookBenefitIssue('delivery_failed')">客服确认未交付，作废补发</button>
+						<button class="danger-button" @click="closeBookBenefitResult">关闭并清除明文</button>
+					</view>
+				</view>
+			</view>
+
 			<view class="panel entitlement-transactions-panel">
 				<view class="panel-head">
 					<view>
@@ -1034,17 +1139,21 @@ import {
 	checkAdminAuth,
 	deductAdminUserQuota,
 	getAdminApiToken,
+	getBookBenefitCampaign,
+	getBookBenefitIssueStatus,
 	getAdminHomepageFeatured,
 	getAdminUserEntitlement,
 	grantAdminUserMembership,
 	grantAdminUserQuota,
+	issueBookBenefitCode,
 	listAdminUserEntitlementTransactions,
 	getPublicWordFromServer,
 	saveAdminApiToken,
 	saveAdminHomepageFeatured,
 	saveAdminWordToServer,
 	searchAdminEntitlementUsers,
-	searchPublicWordsFromServer
+	searchPublicWordsFromServer,
+	replaceBookBenefitCode
 } from '../../common/api-client.js'
 
 const STORAGE_KEY = 'pictographic-admin:words-draft'
@@ -1141,6 +1250,12 @@ function createAdminMembershipOperationId() {
 	return `membership-gift-${timePart}-${randomPart}`
 }
 
+function createBookBenefitOperationId(prefix) {
+	const timePart = Date.now().toString(36)
+	const randomPart = Math.random().toString(36).slice(2, 12)
+	return `${prefix}-${timePart}-${randomPart}`
+}
+
 export default {
 	data() {
 		return {
@@ -1199,6 +1314,60 @@ export default {
 				membershipOperationId: '',
 				membershipOperationUserId: '',
 				lastResult: ''
+			},
+			bookBenefit: {
+				campaign: null,
+				campaignLoading: false,
+				campaignMessage: '进入用户权益管理后读取固定活动。',
+				form: {
+					orderClaimType: 'standard',
+					orderChannel: 'taobao',
+					orderNumber: '',
+					manualExceptionReasonCode: 'customer_service_approved_exception',
+					sellerVerificationCode: 'official_store',
+					customerServiceChannel: 'taobao_cs'
+				},
+				issuing: false,
+				operationId: '',
+				pendingConfirmation: false,
+				statusChecking: false,
+				statusResult: null,
+				result: null,
+				customerReply: '',
+				message: '',
+				replacementReasonCode: 'plaintext_unavailable',
+				replacementOperationId: '',
+				replacing: false
+			},
+			bookBenefitOptions: {
+				claimTypes: [
+					{ value: 'standard', label: '标准订单' },
+					{ value: 'manual_exception', label: '人工例外' }
+				],
+				orderChannels: [
+					{ value: 'taobao', label: '淘宝' },
+					{ value: 'wechat', label: '微信' },
+					{ value: 'xianyu', label: '闲鱼' },
+					{ value: 'legacy_offline', label: '历史线下订单' }
+				],
+				sellerCodes: [
+					{ value: 'official_store', label: '官方店铺' },
+					{ value: 'authorized_seller', label: '授权销售方' }
+				],
+				manualReasons: [
+					{ value: 'historical_evidence_unavailable', label: '历史凭证不可取得' },
+					{ value: 'customer_service_approved_exception', label: '客服批准例外' }
+				],
+				customerServiceChannels: [
+					{ value: 'miniapp_cs', label: '小程序客服' },
+					{ value: 'taobao_cs', label: '淘宝客服' },
+					{ value: 'xianyu_cs', label: '闲鱼客服' },
+					{ value: 'wechat_official_cs', label: '微信公众号客服' }
+				],
+				replacementReasons: [
+					{ value: 'plaintext_unavailable', label: '明文无法恢复' },
+					{ value: 'delivery_failed', label: '客服确认未成功交付' }
+				]
 			},
 			keywordDraft: '',
 			keyword: '',
@@ -1358,6 +1527,38 @@ export default {
 		},
 		recentEntitlementTransactions() {
 			return this.entitlementManagement.transactions.slice(0, 5)
+		},
+		bookBenefitCampaignAvailable() {
+			const campaign = this.bookBenefit.campaign
+			if (!campaign || campaign.status !== 'active') return false
+			const now = Date.now()
+			const startsAt = campaign.startsAt ? new Date(campaign.startsAt).getTime() : null
+			const endsAt = campaign.endsAt ? new Date(campaign.endsAt).getTime() : null
+			if (startsAt !== null && (!Number.isFinite(startsAt) || now < startsAt)) return false
+			if (endsAt !== null && (!Number.isFinite(endsAt) || now >= endsAt)) return false
+			return true
+		},
+		bookBenefitCanIssue() {
+			return Boolean(
+				this.entitlementManagement.selectedUser &&
+				this.entitlementManagement.selectedUser.id &&
+				this.bookBenefitCampaignAvailable &&
+				!this.bookBenefit.issuing &&
+				!this.bookBenefit.replacing &&
+				!this.bookBenefit.pendingConfirmation &&
+				!this.bookBenefit.statusResult &&
+				!this.bookBenefit.result
+			)
+		},
+		bookBenefitCampaignStateText() {
+			if (this.bookBenefit.campaignLoading) return '活动读取中...'
+			const campaign = this.bookBenefit.campaign
+			if (!campaign) return this.bookBenefit.campaignMessage || '活动读取失败，暂不可发码。'
+			if (campaign.status === 'draft') return '活动尚未启用，暂不可发码。'
+			if (campaign.status === 'paused') return '活动已暂停，暂不可发码。'
+			if (campaign.status === 'ended') return '活动已结束，暂不可发码。'
+			if (!this.bookBenefitCampaignAvailable) return '当前不在活动可签发时间内。'
+			return '活动可用，可以为已确认用户审核发码。'
 		},
 		stats() {
 			return {
@@ -1546,6 +1747,9 @@ export default {
 			if (this.activeAdminView === 'dashboard' && this.adminUnlocked) {
 				this.loadHomepageFeaturedConfig()
 			}
+			if (this.activeAdminView === 'entitlements' && this.adminUnlocked) {
+				this.loadBookBenefitCampaign()
+			}
 		},
 		getAdminRequestOptions() {
 			return {
@@ -1624,6 +1828,317 @@ export default {
 			if (amount < 0) return 'negative'
 			return 'neutral'
 		},
+		bookBenefitOptionIndex(group, value) {
+			const options = this.bookBenefitOptions[group] || []
+			const index = options.findIndex((item) => item.value === value)
+			return index > -1 ? index : 0
+		},
+		bookBenefitOptionLabel(group, value) {
+			const options = this.bookBenefitOptions[group] || []
+			const selected = options.find((item) => item.value === value)
+			return selected ? selected.label : '请选择'
+		},
+		getBookBenefitStatusLabel(status) {
+			const labels = {
+				not_found: '未找到操作',
+				issued_plaintext_unavailable: '已签发，明文无法恢复',
+				replaced: '原码已替换',
+				inconsistent: '记录需要技术检查'
+			}
+			return labels[status] || '未知状态'
+		},
+		changeBookBenefitOption(group, field, event) {
+			if (this.bookBenefit.issuing || this.bookBenefit.replacing) return
+			const options = this.bookBenefitOptions[group] || []
+			const selected = options[Number(event && event.detail ? event.detail.value : -1)]
+			if (!selected) return
+			this.bookBenefit.form[field] = selected.value
+			if (field === 'orderClaimType') {
+				this.bookBenefit.form.orderNumber = ''
+				this.bookBenefit.form.sellerVerificationCode = selected.value === 'manual_exception'
+					? 'unverified'
+					: 'official_store'
+			}
+			this.resetBookBenefitOperation()
+		},
+		changeBookBenefitReplacementReason(event) {
+			const options = this.bookBenefitOptions.replacementReasons
+			const selected = options[Number(event && event.detail ? event.detail.value : -1)]
+			if (!selected || this.bookBenefit.replacing) return
+			this.bookBenefit.replacementReasonCode = selected.value
+			this.bookBenefit.replacementOperationId = ''
+		},
+		handleBookBenefitOrderNumberInput() {
+			this.resetBookBenefitOperation()
+		},
+		resetBookBenefitOperation(options = {}) {
+			this.bookBenefit.operationId = ''
+			this.bookBenefit.pendingConfirmation = false
+			this.bookBenefit.statusResult = null
+			this.bookBenefit.result = null
+			this.bookBenefit.customerReply = ''
+			this.bookBenefit.message = ''
+			this.bookBenefit.replacementOperationId = ''
+			if (options.clearFormSecrets) this.bookBenefit.form.orderNumber = ''
+		},
+		async loadBookBenefitCampaign() {
+			if (this.bookBenefit.campaignLoading) return
+			this.bookBenefit.campaignLoading = true
+			this.bookBenefit.campaignMessage = '正在读取固定活动...'
+			try {
+				this.bookBenefit.campaign = await getBookBenefitCampaign(this.getAdminRequestOptions())
+				this.bookBenefit.campaignMessage = ''
+			} catch (error) {
+				if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+					this.handleAdminUnauthorized()
+					return
+				}
+				this.bookBenefit.campaign = null
+				this.bookBenefit.campaignMessage = '活动读取失败，暂不可发码。'
+			} finally {
+				this.bookBenefit.campaignLoading = false
+			}
+		},
+		buildBookBenefitIssuePayload() {
+			const user = this.entitlementManagement.selectedUser
+			const form = this.bookBenefit.form
+			if (!user || !user.id) return null
+			const payload = {
+				operationId: this.bookBenefit.operationId,
+				userId: user.id,
+				orderClaimType: form.orderClaimType,
+				sellerVerificationCode: form.orderClaimType === 'manual_exception' ? 'unverified' : form.sellerVerificationCode,
+				customerServiceChannel: form.customerServiceChannel
+			}
+			if (form.orderClaimType === 'standard') {
+				payload.orderChannel = form.orderChannel
+				payload.orderNumber = String(form.orderNumber || '').trim()
+			} else {
+				payload.manualExceptionReasonCode = form.manualExceptionReasonCode
+			}
+			return payload
+		},
+		validateBookBenefitIssueForm() {
+			if (!this.entitlementManagement.selectedUser) return '请先从搜索结果中确认用户。'
+			if (!this.bookBenefitCampaignAvailable) return this.bookBenefitCampaignStateText
+			const form = this.bookBenefit.form
+			if (form.orderClaimType === 'standard' && !String(form.orderNumber || '').trim()) return '请输入完整订单号。'
+			if (!form.customerServiceChannel) return '请选择客服渠道。'
+			return ''
+		},
+		isBookBenefitNetworkUncertain(error) {
+			const code = error && error.code ? String(error.code) : ''
+			return !Number(error && error.statusCode) || code === 'ADMIN_API_NETWORK_ERROR' || code === 'ADMIN_API_TIMEOUT'
+		},
+		createBookBenefitCustomerReply(result) {
+			const code = result && result.plaintextCode ? String(result.plaintextCode) : ''
+			if (!code) return ''
+			const expiresAt = this.formatAdminDate(result.codeExpiresAt)
+			return `您好，这是您领取的“购书用户30天会员福利”兑换码：\n\n【${code}】\n\n请在有效期 ${expiresAt} 前，进入“象形英语”小程序，在“我的”页面找到“兑换30天学习权益”并输入福利码。\n\n每个兑换码仅可使用一次；每个账号及当前绑定手机号在本活动中仅可领取一次。兑换成功后可获得30天会员，会员有效期按兑换成功时间开始计算。`
+		},
+		applyBookBenefitPlaintextResult(result) {
+			this.bookBenefit.result = {
+				applicationNo: result.applicationNo || '',
+				applicationId: result.applicationId || '',
+				codeId: result.codeId || result.replacementCodeId || '',
+				originalCodeId: result.originalCodeId || '',
+				replacementCodeId: result.replacementCodeId || '',
+				plaintextCode: result.plaintextCode || '',
+				codeExpiresAt: result.codeExpiresAt || '',
+				generationNo: result.generationNo || 1,
+				status: result.status || 'issued'
+			}
+			this.bookBenefit.customerReply = this.createBookBenefitCustomerReply(this.bookBenefit.result)
+			this.bookBenefit.pendingConfirmation = false
+			this.bookBenefit.statusResult = null
+			this.bookBenefit.message = '兑换码已生成。请复制并发送后再关闭结果区。'
+		},
+		applyUnavailableIssueResult(data) {
+			this.bookBenefit.result = null
+			this.bookBenefit.customerReply = ''
+			this.bookBenefit.statusResult = {
+				status: 'issued_plaintext_unavailable',
+				codeId: data.codeId || '',
+				applicationNo: data.applicationNo || '',
+				userId: data.userId || ''
+			}
+			this.bookBenefit.pendingConfirmation = false
+			this.bookBenefit.message = '兑换码已经生成，但明文无法恢复。'
+		},
+		getBookBenefitAdminErrorMessage(error) {
+			const code = error && error.code ? String(error.code) : ''
+			const messages = {
+				BOOK_BENEFIT_INPUT_INVALID: '核验信息不完整，请检查后重试。',
+				BOOK_BENEFIT_CAMPAIGN_NOT_ACTIVE: '活动当前未启用。',
+				BOOK_BENEFIT_CAMPAIGN_NOT_STARTED: '活动尚未开始。',
+				BOOK_BENEFIT_CAMPAIGN_ENDED: '活动已经结束。',
+				BOOK_BENEFIT_PHONE_IDENTITY_REQUIRED: '该用户需要先在小程序重新验证手机号。',
+				BOOK_BENEFIT_CAMPAIGN_USER_CONFLICT: '该用户已经参加过本活动。',
+				BOOK_BENEFIT_CAMPAIGN_PHONE_CONFLICT: '该手机号已经参加过本活动。',
+				BOOK_BENEFIT_ORDER_CONFLICT: '该订单已经用于本活动。',
+				BOOK_BENEFIT_OPERATION_CONFLICT: '本次操作与已有记录冲突，请先查询签发状态。',
+				BOOK_BENEFIT_CODE_REDEEMED: '原兑换码已经使用，不能补发。',
+				BOOK_BENEFIT_CODE_VOIDED: '原兑换码已经作废。',
+				BOOK_BENEFIT_CODE_EXPIRED: '原兑换码已经过期。',
+				BOOK_BENEFIT_CODE_UNAVAILABLE: '原兑换码当前不能补发。',
+				BOOK_BENEFIT_REPLACEMENT_LIMIT: '该兑换码已经达到第三代补发上限。'
+			}
+			return messages[code] || '操作未完成，请稍后重试。'
+		},
+		async submitBookBenefitIssue() {
+			if (this.bookBenefit.issuing) return
+			const validationMessage = this.validateBookBenefitIssueForm()
+			if (validationMessage) {
+				uni.showToast({ title: validationMessage, icon: 'none' })
+				return
+			}
+			if (!this.bookBenefit.operationId) this.bookBenefit.operationId = createBookBenefitOperationId('book-issue')
+			const payload = this.buildBookBenefitIssuePayload()
+			const requestUserId = String(payload.userId)
+			const requestOperationId = String(payload.operationId)
+			const isCurrentIssueRequest = () => {
+				const selectedUser = this.entitlementManagement.selectedUser
+				return Boolean(
+					selectedUser &&
+					String(selectedUser.id) === requestUserId &&
+					String(this.bookBenefit.operationId) === requestOperationId
+				)
+			}
+			this.bookBenefit.issuing = true
+			this.bookBenefit.message = ''
+			try {
+				const result = await issueBookBenefitCode(payload, this.getAdminRequestOptions())
+				if (!isCurrentIssueRequest()) return
+				this.applyBookBenefitPlaintextResult(result)
+			} catch (error) {
+				if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+					this.handleAdminUnauthorized()
+					return
+				}
+				if (!isCurrentIssueRequest()) return
+				const responseData = error && error.responseData ? error.responseData : {}
+				if (responseData.status === 'ISSUED_CODE_PLAINTEXT_UNAVAILABLE') {
+					this.applyUnavailableIssueResult(responseData)
+				} else if (this.isBookBenefitNetworkUncertain(error)) {
+					this.bookBenefit.pendingConfirmation = true
+					this.bookBenefit.message = '结果待确认，请使用原操作号查询签发状态。'
+				} else {
+					this.bookBenefit.operationId = ''
+					this.bookBenefit.message = this.getBookBenefitAdminErrorMessage(error)
+				}
+			} finally {
+				this.bookBenefit.issuing = false
+			}
+		},
+		async checkBookBenefitIssueStatus() {
+			if (!this.bookBenefit.operationId || this.bookBenefit.statusChecking) return
+			this.bookBenefit.statusChecking = true
+			try {
+				const result = await getBookBenefitIssueStatus(this.bookBenefit.operationId, this.getAdminRequestOptions())
+				this.bookBenefit.statusResult = result
+				if (result.status === 'not_found') {
+					this.bookBenefit.message = '服务端未找到该操作，请返回表单确认后重新提交。'
+					this.bookBenefit.operationId = ''
+					this.bookBenefit.pendingConfirmation = false
+					this.bookBenefit.statusResult = null
+				} else if (result.status === 'issued_plaintext_unavailable') {
+					this.applyUnavailableIssueResult(result)
+				} else if (result.status === 'replaced') {
+					this.bookBenefit.pendingConfirmation = false
+					this.bookBenefit.message = '原兑换码已被替换；替换码明文无法从服务端恢复。'
+				} else {
+					this.bookBenefit.pendingConfirmation = false
+					this.bookBenefit.message = '记录状态不完整，请联系技术人员检查。'
+				}
+			} catch (error) {
+				this.bookBenefit.message = this.isBookBenefitNetworkUncertain(error)
+					? '状态查询暂未完成，请稍后使用同一操作号重试。'
+					: this.getBookBenefitAdminErrorMessage(error)
+			} finally {
+				this.bookBenefit.statusChecking = false
+			}
+		},
+		confirmBookBenefitReplacement() {
+			return new Promise((resolve) => {
+				uni.showModal({
+					title: '确认作废并补发',
+					content: '原兑换码将立即失效，新码明文仍只显示一次，最多补发到第三代。',
+					confirmText: '确认补发',
+					cancelText: '取消',
+					success: (result) => resolve(Boolean(result && result.confirm)),
+					fail: () => resolve(false)
+				})
+			})
+		},
+		async replaceBookBenefitIssue(forcedReasonCode = '') {
+			if (this.bookBenefit.replacing) return
+			const status = this.bookBenefit.statusResult
+			const visibleResult = this.bookBenefit.result
+			const codeId = status && status.codeId
+				? String(status.codeId)
+				: visibleResult && visibleResult.codeId ? String(visibleResult.codeId) : ''
+			if (!codeId) return
+			this.bookBenefit.replacing = true
+			try {
+				if (!this.bookBenefit.replacementOperationId && !(await this.confirmBookBenefitReplacement())) return
+				if (forcedReasonCode === 'delivery_failed') this.bookBenefit.replacementReasonCode = 'delivery_failed'
+				if (!this.bookBenefit.replacementOperationId) {
+					this.bookBenefit.replacementOperationId = createBookBenefitOperationId('book-replace')
+				}
+				if (visibleResult && visibleResult.plaintextCode) {
+					this.bookBenefit.result = null
+					this.bookBenefit.customerReply = ''
+					this.bookBenefit.statusResult = {
+						status: 'issued_plaintext_unavailable',
+						codeId,
+						applicationNo: visibleResult.applicationNo || ''
+					}
+				}
+				const result = await replaceBookBenefitCode({
+					codeId,
+					operationId: this.bookBenefit.replacementOperationId,
+					reasonCode: this.bookBenefit.replacementReasonCode
+				}, this.getAdminRequestOptions())
+				this.applyBookBenefitPlaintextResult(result)
+				this.bookBenefit.replacementOperationId = ''
+			} catch (error) {
+				const responseData = error && error.responseData ? error.responseData : {}
+				if (responseData.status === 'REPLACEMENT_CODE_PLAINTEXT_UNAVAILABLE') {
+					this.bookBenefit.result = null
+					this.bookBenefit.customerReply = ''
+					this.bookBenefit.statusResult = {
+						...this.bookBenefit.statusResult,
+						status: 'replaced',
+						replacementCodeId: responseData.replacementCodeId || ''
+					}
+					this.bookBenefit.replacementOperationId = ''
+					this.bookBenefit.message = '补发已经完成，但新兑换码明文无法恢复。'
+				} else if (this.isBookBenefitNetworkUncertain(error)) {
+					this.bookBenefit.message = '补发结果待确认，请使用同一补发操作重试。'
+				} else {
+					this.bookBenefit.replacementOperationId = ''
+					this.bookBenefit.message = this.getBookBenefitAdminErrorMessage(error)
+				}
+			} finally {
+				this.bookBenefit.replacing = false
+			}
+		},
+		copyBookBenefitText(value, successMessage) {
+			const text = String(value || '')
+			if (!text) return
+			uni.setClipboardData({
+				data: text,
+				success: () => uni.showToast({ title: successMessage, icon: 'success' }),
+				fail: () => uni.showToast({ title: '复制失败，请手动复制', icon: 'none' })
+			})
+		},
+		closeBookBenefitResult() {
+			this.bookBenefit.result = null
+			this.bookBenefit.customerReply = ''
+			this.bookBenefit.operationId = ''
+			this.bookBenefit.replacementOperationId = ''
+			this.bookBenefit.message = '一次性明文已从当前页面清除。'
+		},
 		handleEntitlementAdminError(error, fallbackMessage) {
 			if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
 				this.handleAdminUnauthorized()
@@ -1651,6 +2166,7 @@ export default {
 			this.entitlementManagement.loading = true
 			this.entitlementManagement.message = '正在查询用户权益...'
 			this.entitlementManagement.lastResult = ''
+			this.resetBookBenefitOperation({ clearFormSecrets: true })
 			try {
 				const result = await searchAdminEntitlementUsers(keyword, this.getAdminRequestOptions())
 				const users = Array.isArray(result.users) ? result.users.map((item) => this.normalizeEntitlementUser(item)) : []
@@ -1682,6 +2198,9 @@ export default {
 			if (this.entitlementManagement.membershipOperationUserId !== normalized.id) {
 				this.entitlementManagement.membershipOperationId = ''
 				this.entitlementManagement.membershipOperationUserId = ''
+			}
+			if (!this.entitlementManagement.selectedUser || this.entitlementManagement.selectedUser.id !== normalized.id) {
+				this.resetBookBenefitOperation({ clearFormSecrets: true })
 			}
 			this.entitlementManagement.selectedUser = normalized
 			this.entitlementManagement.entitlement = null
@@ -2292,6 +2811,9 @@ export default {
 				if (this.activeAdminView === 'dashboard') {
 					await this.loadHomepageFeaturedConfig()
 				}
+				if (this.activeAdminView === 'entitlements') {
+					await this.loadBookBenefitCampaign()
+				}
 			} catch (error) {
 				saveAdminApiToken('')
 				this.adminApiTokenDraft = ''
@@ -2333,6 +2855,7 @@ export default {
 			}
 		},
 		lockAdmin() {
+			this.resetBookBenefitOperation({ clearFormSecrets: true })
 			saveAdminApiToken('')
 			this.adminApiTokenDraft = ''
 			this.adminUnlocked = false
@@ -2344,6 +2867,7 @@ export default {
 			uni.showToast({ title: '已锁定后台', icon: 'none' })
 		},
 		handleAdminUnauthorized() {
+			this.resetBookBenefitOperation({ clearFormSecrets: true })
 			saveAdminApiToken('')
 			this.adminApiTokenDraft = ''
 			this.adminUnlocked = false
@@ -6145,6 +6669,102 @@ button::after {
 	margin-top: 14px;
 }
 
+.book-benefit-card {
+	border: 1px solid rgba(14, 58, 92, 0.08);
+}
+
+.book-benefit-campaign-grid,
+.book-benefit-form-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 12px;
+	margin-top: 16px;
+}
+
+.book-benefit-state,
+.book-benefit-message {
+	display: block;
+	margin-top: 14px;
+	font-size: 13px;
+	line-height: 1.6;
+}
+
+.book-benefit-state.available {
+	color: #1f7a45;
+}
+
+.book-benefit-state.blocked,
+.book-benefit-message {
+	color: #a65a00;
+}
+
+.book-benefit-user-summary,
+.book-benefit-status-result,
+.book-benefit-code-result {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 16px;
+	padding: 16px;
+	border: 1px solid #e0eef6;
+	border-radius: 16px;
+	background: #f9fcfe;
+	color: #315c82;
+	font-size: 13px;
+}
+
+.book-benefit-order-field {
+	grid-column: span 2;
+}
+
+.book-benefit-picker {
+	box-sizing: border-box;
+	height: 42px;
+	margin-top: 8px;
+	padding: 0 14px;
+	border: 1px solid #cfe3ef;
+	border-radius: 14px;
+	background: #fff;
+	color: #12344d;
+	font-size: 14px;
+	line-height: 42px;
+}
+
+.book-benefit-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-top: 16px;
+}
+
+.book-benefit-actions button {
+	width: auto;
+	margin: 0;
+}
+
+.book-benefit-replace-button {
+	margin-top: 12px;
+}
+
+.book-benefit-code-result {
+	border-color: rgba(254, 133, 0, 0.3);
+	background: #fff8e8;
+}
+
+.book-benefit-code-warning {
+	color: #a65a00;
+	font-weight: 800;
+}
+
+.book-benefit-code {
+	color: #0e3a5c;
+	font-family: monospace;
+	font-size: 24px;
+	font-weight: 900;
+	letter-spacing: 2px;
+	word-break: break-all;
+}
+
 .entitlement-transaction-table {
 	margin-top: 16px;
 	overflow-x: auto;
@@ -8225,6 +8845,20 @@ button.file-button::after {
 	.publish-all-button,
 	.outline-button,
 	.ghost-button {
+		width: 100%;
+	}
+
+	.book-benefit-campaign-grid,
+	.book-benefit-form-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.book-benefit-order-field {
+		grid-column: span 1;
+	}
+
+	.book-benefit-actions,
+	.book-benefit-actions button {
 		width: 100%;
 	}
 }

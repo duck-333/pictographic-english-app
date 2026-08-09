@@ -108,11 +108,13 @@ function createAdminApiError(response, data) {
   const message = isAuthError
     ? '管理员鉴权失败，请检查 Admin API Token'
     : (data.message || 'Admin API save failed') + detail
-  const error = new Error(message)
-  error.statusCode = response.status
-  error.isAuthError = isAuthError
-  if (isAuthError) {
-    error.code = 'UNAUTHORIZED'
+	const error = new Error(message)
+	error.statusCode = response.status
+	error.isAuthError = isAuthError
+	error.code = data && data.code ? String(data.code) : 'ADMIN_API_ERROR'
+	error.responseData = data && typeof data === 'object' ? data : {}
+	if (isAuthError) {
+		error.code = 'UNAUTHORIZED'
   }
   return error
 }
@@ -316,6 +318,34 @@ export function searchAdminEntitlementUsers(query, options = {}) {
       users: Array.isArray(data.users) ? data.users : [],
       count: Number(data.count || 0)
     }))
+}
+
+export function getBookBenefitCampaign(options = {}) {
+	return requestAdminJson('/api/admin/book-benefits/campaign', options)
+}
+
+export function issueBookBenefitCode(payload, options = {}) {
+	return requestAdminJson('/api/admin/book-benefits/codes/issue', {
+		...options,
+		method: 'POST',
+		data: payload
+	})
+}
+
+export function getBookBenefitIssueStatus(operationId, options = {}) {
+	return requestAdminJson('/api/admin/book-benefits/codes/issue-status', {
+		...options,
+		method: 'POST',
+		data: { operationId }
+	})
+}
+
+export function replaceBookBenefitCode(payload, options = {}) {
+	return requestAdminJson('/api/admin/book-benefits/codes/replace', {
+		...options,
+		method: 'POST',
+		data: payload
+	})
 }
 
 export function getAdminUserEntitlement(userId, options = {}) {
