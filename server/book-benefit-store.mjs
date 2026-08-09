@@ -7,14 +7,20 @@ import {
 } from './book-benefit-foundation.mjs'
 import {
   generateBookBenefitRedemptionCode,
-  hashBookBenefitRedemptionCode
+  hashBookBenefitRedemptionCode,
+  normalizeBookBenefitRedemptionCode
 } from './book-benefit-code.mjs'
-import { findBookBenefitAdminIdentityInTransaction } from './identity-store.mjs'
+import {
+  findBookBenefitAdminIdentityInTransaction,
+  findCurrentCampaignPhoneIdentityInTransaction
+} from './identity-store.mjs'
+import { createUserEntitlementStore } from './user-entitlement-store.mjs'
 
 const DEFAULT_DB_HOST = '127.0.0.1'
 const DEFAULT_DB_PORT = 3306
 const DEFAULT_DB_NAME = 'baxiaota'
 const CODE_VALIDITY_MILLISECONDS = 30 * 24 * 60 * 60 * 1000
+const REDEMPTION_OPERATOR_ID = 'book-benefit-redemption'
 const MAX_SAFE_ID = BigInt(Number.MAX_SAFE_INTEGER)
 const MAX_SAFE_ID_DIGITS = String(Number.MAX_SAFE_INTEGER).length
 const ORDER_CLAIM_TYPES = new Set(['standard', 'manual_exception'])
@@ -43,6 +49,7 @@ const ALLOWED_INPUT_FIELDS = new Set([
   'operationId',
   'now'
 ])
+const ALLOWED_REDEMPTION_INPUT_FIELDS = new Set(['userId', 'plaintextCode', 'operationId', 'now'])
 
 function createStoreError(message, code = 'BOOK_BENEFIT_STORE_ERROR', statusCode = 500) {
   const error = new Error(message)
@@ -110,7 +117,7 @@ function normalizeNow(value) {
   return date
 }
 
-function normalizeInput(input = {}) {
+function normalizeIssueInput(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw createStoreError('Book-benefit issue input is invalid.', 'BOOK_BENEFIT_INPUT_INVALID', 400)
   }
@@ -173,6 +180,23 @@ function normalizeInput(input = {}) {
   }
 }
 
+function normalizeRedemptionInput(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw createStoreError('Book-benefit redemption input is invalid.', 'BOOK_BENEFIT_INPUT_INVALID', 400)
+  }
+  for (const fieldName of Object.keys(input)) {
+    if (!ALLOWED_REDEMPTION_INPUT_FIELDS.has(fieldName)) {
+      throw createStoreError('Book-benefit redemption input contains an unsupported field.', 'BOOK_BENEFIT_INPUT_INVALID', 400)
+    }
+  }
+  return {
+    userId: normalizePositiveId(input.userId, 'User id'),
+    canonicalCode: normalizeBookBenefitRedemptionCode(input.plaintextCode),
+    operationId: normalizeOperationId(input.operationId),
+    now: normalizeNow(input.now)
+  }
+}
+
 function getDbConfig(options = {}) {
   const host = normalizeString(options.dbHost === undefined ? process.env.DB_HOST : options.dbHost) || DEFAULT_DB_HOST
   const port = Number(options.dbPort === undefined ? process.env.DB_PORT : options.dbPort) || DEFAULT_DB_PORT
@@ -194,6 +218,22 @@ function applicationNumber(operationId) {
 
 function auditEventId(operationId) {
   return stableIdentifier('bbev_', 'book-benefit-audit:v1', operationId, 59)
+}
+
+function redemptionId(operationId) {
+  return stableIdentifier('bbr_', 'book-benefit-redemption:v1', operationId, 60)
+}
+
+function redemptionAuditEventId(operationId) {
+  return stableIdentifier('bbre_', 'book-benefit-redemption-audit:v1', operationId, 59)
+}
+
+function membershipTransactionId(operationId) {
+  return stableIdentifier('bbrtx_', 'book-benefit-membership-transaction:v1', operationId, 58)
+}
+
+function membershipIdempotencyKey(operationId) {
+  return stableIdentifier('bbrm_', 'book-benefit-membership-idempotency:v1', operationId, 59)
 }
 
 function asDate(value, fieldName) {
@@ -312,6 +352,259 @@ async function findCampaignForUpdate(connection, campaignId) {
     [campaignId]
   )
   return Array.isArray(rows) && rows.length ? rows[0] : null
+}
+
+async function findRedemptionByIdempotencyKey(connection, idempotencyKey) {
+  const [rows] = await connection.execute(
+    `SELECT id, redemption_id, code_id, campaign_id, application_id, redeemer_user_id,
+            redeemer_phone_identity_hash, redeemer_phone_hash_version,
+            membership_grant_id, entitlement_transaction_id
+       FROM book_benefit_redemptions
+      WHERE idempotency_key = ?
+      LIMIT 1
+      FOR UPDATE`,
+    [idempotencyKey]
+  )
+  return Array.isArray(rows) && rows.length ? rows[0] : null
+}
+
+async function findRedeemableCodeForUpdate(connection, codeHash) {
+  const [rows] = await connection.execute(
+    `SELECT c.id AS code_id, c.application_id AS code_application_id, c.status AS code_status,
+            c.expires_at, a.id AS application_id, a.campaign_id, a.status AS application_status,
+            p.id AS campaign_record_id, p.benefit_days
+       FROM book_benefit_codes c
+       LEFT JOIN book_benefit_applications a ON a.id = c.application_id
+       LEFT JOIN book_benefit_campaigns p ON p.id = a.campaign_id
+      WHERE c.code_hash = ? AND c.code_hash_version = 'v1'
+      LIMIT 1
+      FOR UPDATE`,
+    [codeHash]
+  )
+  return Array.isArray(rows) && rows.length ? rows[0] : null
+}
+
+function assertRedeemableCode(row, now) {
+  if (!row) {
+    throw createStoreError('Book-benefit code was not found.', 'BOOK_BENEFIT_CODE_NOT_FOUND', 404)
+  }
+  if (row.code_status !== 'issued') {
+    const code = row.code_status === 'redeemed'
+      ? 'BOOK_BENEFIT_CODE_REDEEMED'
+      : row.code_status === 'voided'
+        ? 'BOOK_BENEFIT_CODE_VOIDED'
+        : row.code_status === 'expired'
+          ? 'BOOK_BENEFIT_CODE_EXPIRED'
+          : 'BOOK_BENEFIT_CODE_UNAVAILABLE'
+    throw createStoreError('Book-benefit code is not available.', code, 409)
+  }
+  const expiresAt = asDate(row.expires_at, 'Code expiration time')
+  if (!expiresAt || now.getTime() >= expiresAt.getTime()) {
+    throw createStoreError('Book-benefit code has expired.', 'BOOK_BENEFIT_CODE_EXPIRED', 409)
+  }
+  if (
+    row.application_id === null || row.application_id === undefined ||
+    row.campaign_id === null || row.campaign_id === undefined ||
+    row.campaign_record_id === null || row.campaign_record_id === undefined ||
+    String(row.code_application_id) !== String(row.application_id) ||
+    String(row.campaign_id) !== String(row.campaign_record_id)
+  ) {
+    throw createStoreError('Book-benefit code relationship is invalid.', 'BOOK_BENEFIT_RELATION_INVALID', 409)
+  }
+  if (row.application_status !== 'approved') {
+    throw createStoreError('Book-benefit application is not approved.', 'BOOK_BENEFIT_APPLICATION_INVALID', 409)
+  }
+  if (Number(row.benefit_days) !== 30) {
+    throw createStoreError('Book-benefit campaign duration is invalid.', 'BOOK_BENEFIT_CAMPAIGN_INVALID', 409)
+  }
+}
+
+async function assertRedemptionAvailable(connection, code, identity) {
+  const [rows] = await connection.execute(
+    `SELECT id, code_id, redeemer_user_id
+       FROM book_benefit_redemptions
+      WHERE code_id = ?
+         OR (campaign_id = ? AND redeemer_user_id = ?)
+         OR (campaign_id = ? AND redeemer_phone_identity_hash = ?)
+      LIMIT 1
+      FOR UPDATE`,
+    [code.code_id, code.campaign_id, identity.userId, code.campaign_id, identity.campaignPhoneIdentityHash]
+  )
+  const row = Array.isArray(rows) && rows.length ? rows[0] : null
+  if (!row) return
+  if (String(row.code_id) === String(code.code_id)) {
+    throw createStoreError('Book-benefit code was already redeemed.', 'BOOK_BENEFIT_CODE_REDEEMED', 409)
+  }
+  throw createStoreError('Book benefit was already redeemed for this campaign.', 'BOOK_BENEFIT_REDEMPTION_CONFLICT', 409)
+}
+
+function createRedemptionResult(redemption, membership, idempotent) {
+  return {
+    redemptionId: redemption.redemption_id,
+    codeId: String(redemption.code_id),
+    campaignId: String(redemption.campaign_id),
+    applicationId: String(redemption.application_id),
+    userId: String(redemption.redeemer_user_id),
+    grantId: String(membership.grantId),
+    transactionId: membership.transactionId,
+    transactionInsertId: String(membership.transactionInsertId),
+    membershipType: membership.membershipType,
+    membershipStatus: membership.membershipStatus,
+    membershipStartedAt: membership.membershipStartedAt,
+    membershipExpireAt: membership.membershipExpireAt,
+    quotaBalance: membership.quotaBalance,
+    idempotent
+  }
+}
+
+async function redeemBookBenefitCodeInTransaction(connection, input, options, entitlementStore) {
+  const codeIdentity = hashBookBenefitRedemptionCode(input.canonicalCode, {
+    secret: options.redemptionCodeHashSecret === undefined
+      ? process.env.REDEMPTION_CODE_HASH_SECRET
+      : options.redemptionCodeHashSecret,
+    env: options.secretEnv || process.env
+  })
+  const grantIdempotencyKey = membershipIdempotencyKey(input.operationId)
+  const existing = await findRedemptionByIdempotencyKey(connection, input.operationId)
+  const code = await findRedeemableCodeForUpdate(connection, codeIdentity.codeHash)
+
+  if (existing) {
+    if (
+      !code ||
+      existing.redemption_id !== redemptionId(input.operationId) ||
+      String(existing.code_id) !== String(code.code_id) ||
+      String(existing.application_id) !== String(code.application_id) ||
+      String(existing.campaign_id) !== String(code.campaign_id) ||
+      String(existing.redeemer_user_id) !== input.userId
+    ) {
+      throw createStoreError('Redemption operation conflicts with an existing record.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
+    }
+    let currentIdentity = null
+    try {
+      currentIdentity = await findCurrentCampaignPhoneIdentityInTransaction(
+        connection,
+        input.userId,
+        { forUpdate: true }
+      )
+    } catch (error) {
+      if (!error || error.code !== 'IDENTITY_STORE_ERROR') throw error
+      throw createStoreError('Redemption operation conflicts with an existing record.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
+    }
+    if (
+      !Buffer.isBuffer(existing.redeemer_phone_identity_hash) ||
+      existing.redeemer_phone_identity_hash.length !== 32 ||
+      existing.redeemer_phone_hash_version !== 'v1' ||
+      !currentIdentity ||
+      !Buffer.isBuffer(currentIdentity.campaignPhoneIdentityHash) ||
+      currentIdentity.campaignPhoneIdentityHash.length !== 32 ||
+      currentIdentity.campaignPhoneHashVersion !== 'v1' ||
+      !existing.redeemer_phone_identity_hash.equals(currentIdentity.campaignPhoneIdentityHash)
+    ) {
+      throw createStoreError('Redemption operation conflicts with an existing record.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
+    }
+    const membership = await entitlementStore.grantMembershipDurationInTransaction(connection, {
+      userId: input.userId,
+      sourceType: 'redemption_code',
+      sourceId: String(existing.code_id),
+      redemptionCodeId: existing.code_id,
+      idempotencyKey: grantIdempotencyKey,
+      transactionId: membershipTransactionId(input.operationId),
+      operatorType: 'system',
+      operatorId: REDEMPTION_OPERATOR_ID,
+      reason: 'Book-benefit redemption code redeemed.',
+      now: input.now
+    })
+    if (
+      membership.idempotent !== true ||
+      String(existing.membership_grant_id) !== String(membership.grantId) ||
+      String(existing.entitlement_transaction_id) !== String(membership.transactionId)
+    ) {
+      throw createStoreError('Existing redemption is incomplete.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
+    }
+    return createRedemptionResult(existing, membership, true)
+  }
+
+  assertRedeemableCode(code, input.now)
+  const identity = await findCurrentCampaignPhoneIdentityInTransaction(connection, input.userId, { forUpdate: true })
+  if (!identity) {
+    throw createStoreError('Verified campaign phone identity is required.', 'BOOK_BENEFIT_PHONE_IDENTITY_REQUIRED', 409)
+  }
+  await assertRedemptionAvailable(connection, code, { ...identity, userId: input.userId })
+
+  const membership = await entitlementStore.grantMembershipDurationInTransaction(connection, {
+    userId: input.userId,
+    sourceType: 'redemption_code',
+    sourceId: String(code.code_id),
+    redemptionCodeId: code.code_id,
+    idempotencyKey: grantIdempotencyKey,
+    transactionId: membershipTransactionId(input.operationId),
+    operatorType: 'system',
+    operatorId: REDEMPTION_OPERATOR_ID,
+    reason: 'Book-benefit redemption code redeemed.',
+    now: input.now
+  })
+  if (membership.idempotent) {
+    throw createStoreError('Existing membership grant has no matching redemption.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
+  }
+
+  const businessRedemptionId = redemptionId(input.operationId)
+  const [redemptionInsert] = await connection.execute(
+    `INSERT INTO book_benefit_redemptions (
+       redemption_id, code_id, campaign_id, application_id, redeemer_user_id,
+       redeemer_phone_identity_hash, redeemer_phone_hash_version, idempotency_key,
+       membership_grant_id, entitlement_transaction_id, redeemed_at, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      businessRedemptionId,
+      code.code_id,
+      code.campaign_id,
+      code.application_id,
+      input.userId,
+      identity.campaignPhoneIdentityHash,
+      identity.campaignPhoneHashVersion,
+      input.operationId,
+      membership.grantId,
+      membership.transactionId,
+      input.now,
+      input.now
+    ]
+  )
+  const redemptionRecordId = assertInsertId(redemptionInsert, 'Book-benefit redemption')
+  const [codeUpdate] = await connection.execute(
+    `UPDATE book_benefit_codes
+        SET status = 'redeemed', redeemed_at = ?, updated_at = ?
+      WHERE id = ? AND status = 'issued'`,
+    [input.now, input.now, code.code_id]
+  )
+  assertSingleRow(codeUpdate, 'Book-benefit code')
+  const [auditInsert] = await connection.execute(
+    `INSERT INTO book_benefit_audit_events (
+       event_id, campaign_id, application_id, code_id, redemption_record_id,
+       event_type, actor_type, actor_id, result, reason_code, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      redemptionAuditEventId(input.operationId),
+      code.campaign_id,
+      code.application_id,
+      code.code_id,
+      redemptionRecordId,
+      'code_redeemed_membership_granted',
+      'user',
+      input.userId,
+      'succeeded',
+      null,
+      input.now
+    ]
+  )
+  assertSingleRow(auditInsert, 'Book-benefit audit event')
+
+  return createRedemptionResult({
+    redemption_id: businessRedemptionId,
+    code_id: code.code_id,
+    campaign_id: code.campaign_id,
+    application_id: code.application_id,
+    redeemer_user_id: input.userId
+  }, membership, false)
 }
 
 async function insertApplication(connection, values) {
@@ -511,11 +804,23 @@ function mapDuplicateError(error) {
     ['uk_book_benefit_codes_hash', 'BOOK_BENEFIT_CODE_HASH_CONFLICT'],
     ['uk_book_benefit_applications_idempotency', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
     ['uk_book_benefit_codes_issue_idempotency', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
-    ['uk_book_benefit_audit_events_event_id', 'BOOK_BENEFIT_OPERATION_CONFLICT']
+    ['uk_book_benefit_audit_events_event_id', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
+    ['uk_membership_grants_idempotency', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
+    ['uk_entitlement_transactions_idempotency_key', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
+    ['uk_entitlement_transactions_transaction_id', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
+    ['uk_membership_grants_source', 'BOOK_BENEFIT_CODE_REDEEMED'],
+    ['uk_membership_grants_redemption_code', 'BOOK_BENEFIT_CODE_REDEEMED'],
+    ['uk_book_benefit_redemptions_redemption_id', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
+    ['uk_book_benefit_redemptions_idempotency', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
+    ['uk_book_benefit_redemptions_code', 'BOOK_BENEFIT_CODE_REDEEMED'],
+    ['uk_book_benefit_redemptions_campaign_user', 'BOOK_BENEFIT_REDEMPTION_CONFLICT'],
+    ['uk_book_benefit_redemptions_campaign_phone', 'BOOK_BENEFIT_REDEMPTION_CONFLICT'],
+    ['uk_book_benefit_redemptions_membership_grant', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
+    ['uk_book_benefit_redemptions_entitlement_transaction', 'BOOK_BENEFIT_OPERATION_CONFLICT']
   ]
   const match = mappings.find(([indexName]) => detail.includes(indexName))
   return createStoreError(
-    'Book-benefit issuance conflicts with an existing record.',
+    'Book-benefit operation conflicts with an existing record.',
     match ? match[1] : 'BOOK_BENEFIT_CONCURRENT_CONFLICT',
     409
   )
@@ -523,6 +828,7 @@ function mapDuplicateError(error) {
 
 export function createBookBenefitStore(options = {}) {
   let pool = options.pool || null
+  const entitlementStore = options.entitlementStore || createUserEntitlementStore({ pool: options.pool })
 
   function getPool() {
     if (pool) return pool
@@ -544,7 +850,7 @@ export function createBookBenefitStore(options = {}) {
   }
 
   async function issueApprovedBookBenefitCode(rawInput = {}) {
-    const input = normalizeInput(rawInput)
+    const input = normalizeIssueInput(rawInput)
     const connection = await getPool().getConnection()
     let transactionStarted = false
     let transactionCommitted = false
@@ -582,7 +888,47 @@ export function createBookBenefitStore(options = {}) {
     return result
   }
 
+  async function redeemBookBenefitCode(rawInput = {}) {
+    const input = normalizeRedemptionInput(rawInput)
+    const connection = await getPool().getConnection()
+    let transactionStarted = false
+    let transactionCommitted = false
+    let primaryError = null
+    let result = null
+
+    try {
+      await connection.beginTransaction()
+      transactionStarted = true
+      result = await redeemBookBenefitCodeInTransaction(connection, input, options, entitlementStore)
+      await connection.commit()
+      transactionStarted = false
+      transactionCommitted = true
+    } catch (error) {
+      primaryError = error
+      if (transactionStarted && !transactionCommitted) {
+        try {
+          await connection.rollback()
+          transactionStarted = false
+        } catch {
+          // Preserve the original database or business error.
+        }
+      }
+    }
+
+    let releaseError = null
+    try {
+      connection.release()
+    } catch (error) {
+      releaseError = error
+    }
+
+    if (primaryError) throw mapDuplicateError(primaryError)
+    if (releaseError) throw releaseError
+    return result
+  }
+
   return {
-    issueApprovedBookBenefitCode
+    issueApprovedBookBenefitCode,
+    redeemBookBenefitCode
   }
 }
