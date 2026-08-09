@@ -49,8 +49,11 @@ function resolveRedemptionCodeSecret(options = {}) {
   return secret
 }
 
-function canonicalizeRedemptionCode(value) {
-  const compact = String(value === undefined || value === null ? '' : value)
+export function normalizeBookBenefitRedemptionCode(value) {
+  if (typeof value !== 'string' || value.length > 64) {
+    throw createCodeError('Redemption code is invalid.', 'REDEMPTION_CODE_INVALID')
+  }
+  const compact = value
     .normalize('NFKC')
     .trim()
     .toUpperCase()
@@ -73,11 +76,11 @@ export function generateBookBenefitRedemptionCode() {
       if (body.length === RANDOM_CHARACTER_COUNT) break
     }
   }
-  return canonicalizeRedemptionCode(`${CODE_PREFIX}${body}`)
+  return normalizeBookBenefitRedemptionCode(`${CODE_PREFIX}${body}`)
 }
 
 export function hashBookBenefitRedemptionCode(code, options = {}) {
-  const canonicalCode = canonicalizeRedemptionCode(code)
+  const canonicalCode = normalizeBookBenefitRedemptionCode(code)
   const secret = resolveRedemptionCodeSecret(options)
   return {
     codeHash: crypto
