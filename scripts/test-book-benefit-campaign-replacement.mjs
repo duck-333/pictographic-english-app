@@ -12,11 +12,9 @@ const CAMPAIGN_NAME = '购书用户30天会员福利'
 const RULES_VERSION = 'book-benefit-rules-v1'
 const ORDER_SECRET = 'fake-order-claim-secret-for-replacement-tests'
 const CODE_SECRET = 'fake-redemption-secret-for-replacement-tests'
-const PHONE_SECRET = 'fake-phone-secret-for-replacement-tests-only'
 const ORDER_NUMBER = 'FAKE-ORDER-2C1A-001'
 const SECRET_ENV = {
   BOOK_ORDER_CLAIM_HASH_SECRET: ORDER_SECRET,
-  PHONE_HASH_SECRET: PHONE_SECRET,
   CAMPAIGN_PHONE_IDENTITY_HASH_SECRET: 'different-fake-campaign-secret-32-bytes',
   JWT_SECRET: 'different-fake-jwt-secret-32-bytes',
   ADMIN_API_TOKEN: 'different-fake-admin-token-32-bytes',
@@ -51,16 +49,15 @@ function issueSeed() {
     secret: ORDER_SECRET, env: SECRET_ENV
   })
   return {
-    application: {
-      id: '21', application_no: 'BBA-TARGET', campaign_id: '1', applicant_user_id: '10',
-      applicant_phone_identity_hash: Buffer.alloc(32, 10), applicant_phone_hash_version: 'v1',
+    issuance: {
+      id: '21', issuance_no: 'BBI-TARGET', campaign_id: '1', qualification_rules_version: RULES_VERSION,
       order_claim_type: 'standard', approved_order_claim_hash: orderClaim.orderClaimHash,
-      order_claim_hash_version: 'v1', order_channel: 'taobao', status: 'approved',
+      order_claim_hash_version: 'v1', order_channel: 'taobao', status: 'approved', reviewed_by: 'admin-1',
       review_reason_code: null, seller_verification_code: 'official_store',
       customer_service_channel: 'taobao_cs', create_idempotency_key: operationId
     },
     code: {
-      id: '31', application_id: '21', generation_no: 1, code_hash: Buffer.alloc(32, 31),
+      id: '31', issuance_id: '21', generation_no: 1, code_hash: Buffer.alloc(32, 31),
       code_hash_version: 'v1', status: 'issued', issue_idempotency_key: operationId,
       replacement_code_id: null, issued_by: 'admin-1', issued_at: NOW,
       expires_at: new Date(NOW.getTime() + 30 * DAY_MS), redeemed_at: null,
@@ -68,8 +65,8 @@ function issueSeed() {
     },
     audit: {
       id: '41', event_id: stable('bbev_', 'book-benefit-audit:v1', operationId, 59),
-      campaign_id: '1', application_id: '21', code_id: '31', redemption_record_id: null,
-      event_type: 'qualification_approved_code_issued', actor_type: 'admin', actor_id: 'admin-1',
+      campaign_id: '1', issuance_id: '21', code_id: '31', redemption_record_id: null,
+      event_type: 'unassigned_code_issued', actor_type: 'admin', actor_id: 'admin-1',
       result: 'succeeded', reason_code: null, created_at: NOW
     }
   }
@@ -79,15 +76,10 @@ function initialState(overrides = {}) {
   const seed = issueSeed()
   return {
     campaigns: overrides.campaigns ?? [exactCampaign()],
-    applications: overrides.applications ?? [seed.application],
+    issuances: overrides.issuances ?? [seed.issuance],
     codes: overrides.codes ?? [seed.code],
     audits: overrides.audits ?? [seed.audit],
     redemptions: overrides.redemptions ?? [],
-    phoneBindings: overrides.phoneBindings ?? [{
-      id: '11', user_id: '10', phone_masked: '100****0000', phone_hash: 'fake-phone-hash',
-      campaign_phone_identity_hash: Buffer.alloc(32, 10), campaign_phone_hash_version: 'v1',
-      status: 'active', last_verified_at: NOW
-    }],
     nextCampaignId: overrides.nextCampaignId ?? 1,
     nextCodeId: overrides.nextCodeId ?? 100,
     nextAuditId: overrides.nextAuditId ?? 100
@@ -126,11 +118,7 @@ function createDatabase(options = {}) {
       async rollback() { lifecycle.rollback += 1; working = null; fail('rollback') },
       release() { assert.equal(released, false); released = true; lifecycle.release += 1; fail('release') },
       async query(sql) {
-        assert.match(sql, /SHOW COLUMNS FROM `user_phone_bindings`/)
-        return [[
-          { Field: 'campaign_phone_identity_hash', Type: 'binary(32)', Extra: '' },
-          { Field: 'campaign_phone_hash_version', Type: 'varchar(16)', Extra: '' }
-        ]]
+        throw new Error(`Unexpected query: ${sql}`)
       },
       async execute(sql, values = []) {
         const compact = String(sql).replace(/\s+/g, ' ').trim()
@@ -164,12 +152,8 @@ function createDatabase(options = {}) {
           }
           return [{ affectedRows: 1 }]
         }
-        if (/FROM book_benefit_applications WHERE create_idempotency_key = \?/i.test(compact)) {
-          const row = db.applications.find((item) => item.create_idempotency_key === values[0])
-          return [row ? [clone(row)] : []]
-        }
-        if (/FROM `user_phone_bindings`/i.test(compact) && /WHERE user_id = \?/i.test(compact)) {
-          const row = db.phoneBindings.find((item) => item.status === 'active' && String(item.user_id) === String(values[0]))
+        if (/FROM book_benefit_issuances WHERE create_idempotency_key = \?/i.test(compact)) {
+          const row = db.issuances.find((item) => item.create_idempotency_key === values[0])
           return [row ? [clone(row)] : []]
         }
         if (/FROM book_benefit_campaigns/i.test(compact) && /WHERE id = \?/i.test(compact)) {
@@ -187,11 +171,11 @@ function createDatabase(options = {}) {
         if (/WHERE c.replacement_code_id = \?/i.test(compact)) {
           const code = db.codes.find((item) => String(item.replacement_code_id) === String(values[0]))
           if (!code) return [[]]
-          const app = db.applications.find((item) => item.id === code.application_id)
-          const campaign = db.campaigns.find((item) => item.id === app.campaign_id)
+          const issuance = db.issuances.find((item) => item.id === code.issuance_id)
+          const campaign = db.campaigns.find((item) => item.id === issuance.campaign_id)
           return [[{
-            ...clone(code), campaign_id: app.campaign_id, applicant_user_id: app.applicant_user_id,
-            application_status: app.status, campaign_record_id: campaign.id,
+            ...clone(code), campaign_id: issuance.campaign_id,
+            issuance_status: issuance.status, campaign_record_id: campaign.id,
             campaign_status: campaign.status, benefit_days: campaign.benefit_days,
             starts_at: campaign.starts_at, ends_at: campaign.ends_at,
             redemption_record_id: db.redemptions.find((item) => item.code_id === code.id)?.id ?? null
@@ -200,12 +184,12 @@ function createDatabase(options = {}) {
         if (/FROM book_benefit_codes c/i.test(compact) && /WHERE c.id = \?/i.test(compact)) {
           const code = db.codes.find((item) => String(item.id) === String(values[0]))
           if (!code) return [[]]
-          const app = db.applications.find((item) => item.id === code.application_id)
-          const campaign = app && db.campaigns.find((item) => item.id === app.campaign_id)
-          if (!app || !campaign) return [[]]
+          const issuance = db.issuances.find((item) => item.id === code.issuance_id)
+          const campaign = issuance && db.campaigns.find((item) => item.id === issuance.campaign_id)
+          if (!issuance || !campaign) return [[]]
           return [[{
-            ...clone(code), application_record_id: app.id, campaign_id: app.campaign_id,
-            applicant_user_id: app.applicant_user_id, application_status: app.status,
+            ...clone(code), issuance_record_id: issuance.id, campaign_id: issuance.campaign_id,
+            issuance_status: issuance.status,
             campaign_record_id: campaign.id, campaign_status: campaign.status,
             benefit_days: campaign.benefit_days,
             starts_at: campaign.starts_at, ends_at: campaign.ends_at,
@@ -259,7 +243,7 @@ function createDatabase(options = {}) {
 function storeFor(database) {
   return createBookBenefitStore({
     pool: database.pool, campaignKey: CAMPAIGN_KEY,
-    phoneHashSecret: PHONE_SECRET, orderClaimHashSecret: ORDER_SECRET,
+    orderClaimHashSecret: ORDER_SECRET,
     redemptionCodeHashSecret: CODE_SECRET, secretEnv: SECRET_ENV
   })
 }
@@ -270,7 +254,7 @@ function replacementInput(overrides = {}) {
 
 function issueInput(overrides = {}) {
   return {
-    campaignId: '1', locator: { userId: '10' }, orderClaimType: 'standard',
+    orderClaimType: 'standard',
     orderChannel: 'taobao', orderNumber: ORDER_NUMBER, sellerVerificationCode: 'official_store',
     customerServiceChannel: 'taobao_cs', operatorId: 'admin-1',
     operationId: 'issue-target-operation', now: NOW, ...overrides
@@ -278,7 +262,7 @@ function issueInput(overrides = {}) {
 }
 
 async function testCampaignLifecycle() {
-  const database = createDatabase({ state: initialState({ campaigns: [], applications: [], codes: [], audits: [] }) })
+  const database = createDatabase({ state: initialState({ campaigns: [], issuances: [], codes: [], audits: [] }) })
   const created = await runBookBenefitCampaignAction('create-draft', { pool: database.pool, operatorId: 'admin-1', now: NOW })
   assert.equal(created.created, true)
   const repeated = await runBookBenefitCampaignAction('create-draft', { pool: database.pool, operatorId: 'admin-1', now: NOW })
@@ -297,7 +281,7 @@ async function testCampaignLifecycle() {
   for (const field of ['name', 'benefit_days', 'rules_version']) {
     const campaign = exactCampaign('draft')
     campaign[field] = field === 'benefit_days' ? 31 : 'wrong'
-    const mismatch = createDatabase({ state: initialState({ campaigns: [campaign], applications: [], codes: [], audits: [] }) })
+    const mismatch = createDatabase({ state: initialState({ campaigns: [campaign], issuances: [], codes: [], audits: [] }) })
     await assert.rejects(runBookBenefitCampaignAction('create-draft', { pool: mismatch.pool, operatorId: 'admin-1', now: NOW }),
       (error) => error.code === 'BOOK_BENEFIT_CAMPAIGN_CONFIG_CONFLICT')
   }
@@ -324,31 +308,24 @@ async function testConfiguredCampaignRead() {
 
 async function testIssueTargetReplay() {
   const exactDatabase = createDatabase()
-  const exactResult = await storeFor(exactDatabase).issueApprovedBookBenefitCode(issueInput())
+  const exactResult = await storeFor(exactDatabase).issueUnassignedBookBenefitCode(issueInput())
   assert.equal(exactResult.status, 'ISSUED_CODE_PLAINTEXT_UNAVAILABLE')
   const cases = [
-    issueInput({ locator: { userId: '20' } }),
     issueInput({ orderNumber: 'DIFFERENT-FAKE-ORDER' }),
     issueInput({ sellerVerificationCode: 'authorized_seller' }),
     issueInput({ customerServiceChannel: 'wechat_official_cs' })
   ]
   for (const input of cases) {
     const state = initialState()
-    if (input.locator.userId === '20') state.phoneBindings.push({ ...clone(state.phoneBindings[0]), id: '12', user_id: '20', campaign_phone_identity_hash: Buffer.alloc(32, 20) })
     const before = clone(state)
     const database = createDatabase({ state })
-    await assert.rejects(storeFor(database).issueApprovedBookBenefitCode(input),
+    await assert.rejects(storeFor(database).issueUnassignedBookBenefitCode(input),
       (error) => error.code === 'BOOK_BENEFIT_OPERATION_CONFLICT')
     assert.deepEqual(database.snapshot(), before)
   }
-  const changedPhone = initialState()
-  changedPhone.phoneBindings[0].campaign_phone_identity_hash = Buffer.alloc(32, 99)
-  const phoneDatabase = createDatabase({ state: changedPhone })
-  await assert.rejects(storeFor(phoneDatabase).issueApprovedBookBenefitCode(issueInput()),
-    (error) => error.code === 'BOOK_BENEFIT_OPERATION_CONFLICT')
 
-  const invalidSeller = createDatabase({ state: initialState({ applications: [], codes: [], audits: [] }) })
-  await assert.rejects(storeFor(invalidSeller).issueApprovedBookBenefitCode(issueInput({ sellerVerificationCode: 'unverified', operationId: 'new-op' })),
+  const invalidSeller = createDatabase({ state: initialState({ issuances: [], codes: [], audits: [] }) })
+  await assert.rejects(storeFor(invalidSeller).issueUnassignedBookBenefitCode(issueInput({ sellerVerificationCode: 'unverified', operationId: 'new-op' })),
     (error) => error.code === 'BOOK_BENEFIT_INPUT_INVALID')
   assert.equal(invalidSeller.connections.length, 0)
 }
@@ -358,8 +335,8 @@ async function testReplacement() {
   const store = storeFor(database)
   const result = await store.replaceIssuedBookBenefitCode(replacementInput())
   assert.deepEqual(Object.keys(result).sort(), [
-    'applicationId', 'campaignId', 'codeExpiresAt', 'generationNo', 'originalCodeId',
-    'plaintextCode', 'replacementCodeId', 'status', 'userId'
+    'campaignId', 'codeExpiresAt', 'generationNo', 'issuanceId', 'originalCodeId',
+    'plaintextCode', 'replacementCodeId', 'status'
   ].sort())
   assert.equal(result.generationNo, 2)
   assert.equal(result.codeExpiresAt.getTime() - NOW.getTime(), 30 * DAY_MS)

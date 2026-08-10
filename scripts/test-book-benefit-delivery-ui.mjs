@@ -68,7 +68,7 @@ async function testAdminApiClient() {
     const client = await import(ADMIN_CLIENT_PATH)
     const requestOptions = { apiBaseUrl: 'https://admin.invalid', adminApiToken: 'FAKE_ADMIN_TOKEN' }
     await client.getBookBenefitCampaign(requestOptions)
-    await client.issueBookBenefitCode({ operationId: 'issue-1', userId: '42' }, requestOptions)
+    await client.issueBookBenefitCode({ operationId: 'issue-1' }, requestOptions)
     await client.getBookBenefitIssueStatus('issue-1', requestOptions)
     await client.replaceBookBenefitCode({ codeId: '7', operationId: 'replace-1', reasonCode: 'delivery_failed' }, requestOptions)
 
@@ -79,7 +79,7 @@ async function testAdminApiClient() {
       ['https://admin.invalid/api/admin/book-benefits/codes/replace', 'POST']
     ])
     for (const item of requests) assert.equal(item.options.headers.Authorization, 'Bearer FAKE_ADMIN_TOKEN')
-    assert.deepEqual(JSON.parse(requests[1].options.body), { operationId: 'issue-1', userId: '42' })
+    assert.deepEqual(JSON.parse(requests[1].options.body), { operationId: 'issue-1' })
     assert.deepEqual(JSON.parse(requests[2].options.body), { operationId: 'issue-1' })
     assert.deepEqual(JSON.parse(requests[3].options.body), { codeId: '7', operationId: 'replace-1', reasonCode: 'delivery_failed' })
   } finally {
@@ -147,13 +147,13 @@ async function testAdminPageBehavior() {
     issueCalls: [],
     replaceCalls: [],
     issueImpl: async () => ({
-      applicationNo: 'BBA-1', codeId: '7', plaintextCode: 'BOOK-ONE-TIME',
-      codeExpiresAt: '2026-09-12T00:00:00.000Z', userId: '42', status: 'issued'
+      issuanceNo: 'BBI-1', codeId: '7', plaintextCode: 'BOOK-ONE-TIME',
+      codeExpiresAt: '2026-09-12T00:00:00.000Z', status: 'issued'
     }),
     statusImpl: async () => ({ status: 'not_found' }),
     replaceImpl: async () => ({
       originalCodeId: '7', replacementCodeId: '8', plaintextCode: 'BOOK-REPLACEMENT',
-      codeExpiresAt: '2026-09-13T00:00:00.000Z', applicationId: '6', userId: '42', generationNo: 2, status: 'issued'
+      codeExpiresAt: '2026-09-13T00:00:00.000Z', issuanceId: '6', generationNo: 2, status: 'issued'
     })
   }
   const clipboard = []
@@ -190,13 +190,12 @@ async function testAdminPageBehavior() {
   page.adminApiTokenDraft = 'FAKE_ADMIN_TOKEN'
   page.bookBenefit.campaign = { status: 'active', startsAt: null, endsAt: null }
 
-  await page.submitBookBenefitIssue()
-  assert.equal(api.issueCalls.length, 0, 'Issuance must require a selected user')
-  page.entitlementManagement.selectedUser = { id: '42', phoneMasked: '138****0000' }
   page.bookBenefit.campaign.status = 'paused'
   assert.equal(page.bookBenefitCanIssue, false)
   page.bookBenefit.campaign.status = 'active'
   page.bookBenefit.form.orderNumber = 'FAKE-ORDER-UI-001'
+  assert.equal(page.entitlementManagement.selectedUser, null)
+  assert.equal(page.bookBenefitCanIssue, true, 'Issuance must not require a selected user')
 
   let resolveIssue = null
   api.issueImpl = () => new Promise((resolve) => { resolveIssue = resolve })
@@ -205,18 +204,21 @@ async function testAdminPageBehavior() {
   assert.equal(api.issueCalls.length, 1, 'Double click must issue once')
   const firstOperationId = page.bookBenefit.operationId
   resolveIssue({
-    applicationNo: 'BBA-1', codeId: '7', plaintextCode: 'BOOK-ONE-TIME',
-    codeExpiresAt: '2026-09-12T00:00:00.000Z', userId: '42', status: 'issued'
+    issuanceNo: 'BBI-1', codeId: '7', plaintextCode: 'BOOK-ONE-TIME',
+    codeExpiresAt: '2026-09-12T00:00:00.000Z', status: 'issued'
   })
   await Promise.all([first, second])
   const issuedPayload = api.issueCalls[0]
   assert.equal(issuedPayload.operationId, firstOperationId)
-  assert.equal(issuedPayload.userId, '42')
+  assert.equal(Object.hasOwn(issuedPayload, 'userId'), false)
+  assert.equal(Object.hasOwn(issuedPayload, 'locator'), false)
   assert.equal(issuedPayload.orderClaimType, 'standard')
   assert.equal(issuedPayload.orderNumber, 'FAKE-ORDER-UI-001')
   assert.equal(Object.hasOwn(issuedPayload, 'campaignId'), false)
   assert.equal(page.bookBenefit.result.plaintextCode, 'BOOK-ONE-TIME')
   assert.match(page.bookBenefit.customerReply, /BOOK-ONE-TIME/)
+  assert.match(page.bookBenefit.customerReply, /兑换码未兑换前可以转交/)
+  assert.match(page.bookBenefit.customerReply, /首个成功兑换账号获得30天学习权益/)
   page.copyBookBenefitText(page.bookBenefit.result.plaintextCode, 'copied')
   page.copyBookBenefitText(page.bookBenefit.customerReply, 'copied')
   assert.equal(clipboard.length, 2)
@@ -231,17 +233,21 @@ async function testAdminPageBehavior() {
   const staleOperationId = page.bookBenefit.operationId
   assert(staleOperationId)
   await page.selectEntitlementUser({ id: '43', phoneMasked: '139****0000' })
-  assert.equal(page.bookBenefit.operationId, '')
+  assert.equal(page.bookBenefit.operationId, staleOperationId)
   resolveStaleIssue({
-    applicationNo: 'BBA-STALE', codeId: '70', plaintextCode: 'BOOK-STALE-USER-42',
-    codeExpiresAt: '2026-09-12T00:00:00.000Z', userId: '42', status: 'issued'
+    issuanceNo: 'BBI-IN-FLIGHT', codeId: '70', plaintextCode: 'BOOK-IN-FLIGHT',
+    codeExpiresAt: '2026-09-12T00:00:00.000Z', status: 'issued'
   })
   await staleIssue
   assert.equal(page.entitlementManagement.selectedUser.id, '43')
-  assert.equal(page.bookBenefit.result, null, 'A stale issuance result must not be applied to the newly selected user')
-  assert.equal(page.bookBenefit.customerReply, '')
-  assert.equal(page.bookBenefit.message, '')
+  assert.equal(page.bookBenefit.result.plaintextCode, 'BOOK-IN-FLIGHT', 'User selection must not own an unassigned issuance')
+  assert.match(page.bookBenefit.customerReply, /BOOK-IN-FLIGHT/)
+  page.closeBookBenefitResult()
   await page.selectEntitlementUser({ id: '42', phoneMasked: '138****0000' })
+  page.bookBenefit.operationId = 'selection-independent-operation'
+  page.entitlementManagement.keyword = '42'
+  await page.searchEntitlementUsers()
+  assert.equal(page.bookBenefit.operationId, 'selection-independent-operation')
 
   page.bookBenefit.form.orderClaimType = 'manual_exception'
   page.bookBenefit.form.manualExceptionReasonCode = 'customer_service_approved_exception'
@@ -263,7 +269,7 @@ async function testAdminPageBehavior() {
 
   for (const statusResult of [
     { status: 'not_found' },
-    { status: 'issued_plaintext_unavailable', codeId: '7', applicationNo: 'BBA-1' },
+    { status: 'issued_plaintext_unavailable', issuanceId: '6', issuanceNo: 'BBI-1', codeId: '7' },
     { status: 'replaced', codeId: '7', replacementCodeId: '8' },
     { status: 'inconsistent' }
   ]) {
@@ -279,7 +285,7 @@ async function testAdminPageBehavior() {
   page.bookBenefit.statusResult = { status: 'issued_plaintext_unavailable', codeId: '7' }
   api.replaceImpl = async () => new Promise((resolve) => setTimeout(() => resolve({
     originalCodeId: '7', replacementCodeId: '8', plaintextCode: 'BOOK-REPLACEMENT',
-    codeExpiresAt: '2026-09-13T00:00:00.000Z', applicationId: '6', userId: '42', generationNo: 2, status: 'issued'
+    codeExpiresAt: '2026-09-13T00:00:00.000Z', issuanceId: '6', generationNo: 2, status: 'issued'
   }), 0))
   const replaceFirst = page.replaceBookBenefitIssue()
   const replaceSecond = page.replaceBookBenefitIssue()
@@ -291,7 +297,7 @@ async function testAdminPageBehavior() {
 
   page.bookBenefit.statusResult = null
   page.bookBenefit.result = {
-    applicationNo: 'BBA-1', codeId: '8', plaintextCode: 'BOOK-DELIVERY-FAILED',
+    issuanceNo: 'BBI-1', codeId: '8', plaintextCode: 'BOOK-DELIVERY-FAILED',
     codeExpiresAt: '2026-09-13T00:00:00.000Z'
   }
   page.bookBenefit.customerReply = 'PRIVATE TEMPORARY REPLY'
@@ -302,6 +308,8 @@ async function testAdminPageBehavior() {
 
   assert.doesNotMatch(source, /localStorage\.setItem\([^\n]*(orderNumber|plaintextCode|customerReply)/)
   assert.doesNotMatch(source, /console\.(log|error)\([^\n]*(orderNumber|plaintextCode|adminApiToken)/)
+  assert.doesNotMatch(source, /book-benefit-user-summary/)
+  assert.doesNotMatch(source, /application(No|Id)/)
 }
 
 async function testMiniappPageBehavior() {

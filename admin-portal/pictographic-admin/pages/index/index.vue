@@ -776,7 +776,7 @@
 				<view class="panel-head">
 					<view>
 						<text class="panel-title">购书福利30天会员</text>
-						<text class="panel-note">确认用户和客服核验结果后生成一次性兑换码。</text>
+						<text class="panel-note">根据客服核验结果生成未绑定的一次性兑换码，无需选择用户。</text>
 					</view>
 					<button class="secondary-button" :disabled="bookBenefit.campaignLoading" @click="loadBookBenefitCampaign">
 						{{ bookBenefit.campaignLoading ? '读取中...' : '刷新活动' }}
@@ -792,15 +792,6 @@
 					<view><text class="entitlement-field-label">结束时间</text><text class="entitlement-field-value">{{ formatAdminDate(bookBenefit.campaign.endsAt) }}</text></view>
 				</view>
 				<text :class="['book-benefit-state', bookBenefitCampaignAvailable ? 'available' : 'blocked']">{{ bookBenefitCampaignStateText }}</text>
-
-				<view class="book-benefit-user-summary">
-					<template v-if="entitlementManagement.selectedUser">
-						<text>已确认用户：user_id={{ entitlementManagement.selectedUser.id }}</text>
-						<text>手机号：{{ entitlementManagement.selectedUser.phoneMasked }}</text>
-						<text v-if="entitlementManagement.entitlement">会员状态：{{ entitlementManagement.entitlement.membershipStatus }}，到期：{{ formatAdminDate(entitlementManagement.entitlement.membershipExpireAt) }}</text>
-					</template>
-					<text v-else>请先在上方搜索并确认一个用户。</text>
-				</view>
 
 				<view class="book-benefit-form-grid">
 					<label class="entitlement-form-field">
@@ -851,7 +842,7 @@
 
 				<view v-if="bookBenefit.statusResult" class="book-benefit-status-result">
 					<text>状态：{{ getBookBenefitStatusLabel(bookBenefit.statusResult.status) }}</text>
-					<text v-if="bookBenefit.statusResult.applicationNo">申请编号：{{ bookBenefit.statusResult.applicationNo }}</text>
+					<text v-if="bookBenefit.statusResult.issuanceNo">签发编号：{{ bookBenefit.statusResult.issuanceNo }}</text>
 					<text v-if="bookBenefit.statusResult.codeId">原码 ID：{{ bookBenefit.statusResult.codeId }}</text>
 					<text v-if="bookBenefit.statusResult.replacementCodeId">替换码 ID：{{ bookBenefit.statusResult.replacementCodeId }}</text>
 					<template v-if="bookBenefit.statusResult.status === 'issued_plaintext_unavailable'">
@@ -1540,8 +1531,6 @@ export default {
 		},
 		bookBenefitCanIssue() {
 			return Boolean(
-				this.entitlementManagement.selectedUser &&
-				this.entitlementManagement.selectedUser.id &&
 				this.bookBenefitCampaignAvailable &&
 				!this.bookBenefit.issuing &&
 				!this.bookBenefit.replacing &&
@@ -1558,7 +1547,7 @@ export default {
 			if (campaign.status === 'paused') return '活动已暂停，暂不可发码。'
 			if (campaign.status === 'ended') return '活动已结束，暂不可发码。'
 			if (!this.bookBenefitCampaignAvailable) return '当前不在活动可签发时间内。'
-			return '活动可用，可以为已确认用户审核发码。'
+			return '活动可用，可以根据客服核验结果签发未绑定兑换码。'
 		},
 		stats() {
 			return {
@@ -1900,12 +1889,9 @@ export default {
 			}
 		},
 		buildBookBenefitIssuePayload() {
-			const user = this.entitlementManagement.selectedUser
 			const form = this.bookBenefit.form
-			if (!user || !user.id) return null
 			const payload = {
 				operationId: this.bookBenefit.operationId,
-				userId: user.id,
 				orderClaimType: form.orderClaimType,
 				sellerVerificationCode: form.orderClaimType === 'manual_exception' ? 'unverified' : form.sellerVerificationCode,
 				customerServiceChannel: form.customerServiceChannel
@@ -1919,7 +1905,6 @@ export default {
 			return payload
 		},
 		validateBookBenefitIssueForm() {
-			if (!this.entitlementManagement.selectedUser) return '请先从搜索结果中确认用户。'
 			if (!this.bookBenefitCampaignAvailable) return this.bookBenefitCampaignStateText
 			const form = this.bookBenefit.form
 			if (form.orderClaimType === 'standard' && !String(form.orderNumber || '').trim()) return '请输入完整订单号。'
@@ -1934,12 +1919,12 @@ export default {
 			const code = result && result.plaintextCode ? String(result.plaintextCode) : ''
 			if (!code) return ''
 			const expiresAt = this.formatAdminDate(result.codeExpiresAt)
-			return `您好，这是您领取的“购书用户30天会员福利”兑换码：\n\n【${code}】\n\n请在有效期 ${expiresAt} 前，进入“象形英语”小程序，在“我的”页面找到“兑换30天学习权益”并输入福利码。\n\n每个兑换码仅可使用一次；每个账号及当前绑定手机号在本活动中仅可领取一次。兑换成功后可获得30天会员，会员有效期按兑换成功时间开始计算。`
+			return `您好，这是您领取的“购书用户30天会员福利”兑换码：\n\n【${code}】\n\n请在有效期 ${expiresAt} 前，进入“象形英语”小程序，在“我的”页面找到“兑换30天学习权益”并输入福利码。\n\n兑换码未兑换前可以转交，首个成功兑换账号获得30天学习权益。每个兑换码仅可使用一次；每个账号及当前绑定手机号在本活动中仅可领取一次。会员有效期按兑换成功时间开始计算。`
 		},
 		applyBookBenefitPlaintextResult(result) {
 			this.bookBenefit.result = {
-				applicationNo: result.applicationNo || '',
-				applicationId: result.applicationId || '',
+				issuanceNo: result.issuanceNo || '',
+				issuanceId: result.issuanceId || '',
 				codeId: result.codeId || result.replacementCodeId || '',
 				originalCodeId: result.originalCodeId || '',
 				replacementCodeId: result.replacementCodeId || '',
@@ -1959,8 +1944,8 @@ export default {
 			this.bookBenefit.statusResult = {
 				status: 'issued_plaintext_unavailable',
 				codeId: data.codeId || '',
-				applicationNo: data.applicationNo || '',
-				userId: data.userId || ''
+				issuanceId: data.issuanceId || '',
+				issuanceNo: data.issuanceNo || ''
 			}
 			this.bookBenefit.pendingConfirmation = false
 			this.bookBenefit.message = '兑换码已经生成，但明文无法恢复。'
@@ -1994,16 +1979,8 @@ export default {
 			}
 			if (!this.bookBenefit.operationId) this.bookBenefit.operationId = createBookBenefitOperationId('book-issue')
 			const payload = this.buildBookBenefitIssuePayload()
-			const requestUserId = String(payload.userId)
 			const requestOperationId = String(payload.operationId)
-			const isCurrentIssueRequest = () => {
-				const selectedUser = this.entitlementManagement.selectedUser
-				return Boolean(
-					selectedUser &&
-					String(selectedUser.id) === requestUserId &&
-					String(this.bookBenefit.operationId) === requestOperationId
-				)
-			}
+			const isCurrentIssueRequest = () => String(this.bookBenefit.operationId) === requestOperationId
 			this.bookBenefit.issuing = true
 			this.bookBenefit.message = ''
 			try {
@@ -2091,7 +2068,8 @@ export default {
 					this.bookBenefit.statusResult = {
 						status: 'issued_plaintext_unavailable',
 						codeId,
-						applicationNo: visibleResult.applicationNo || ''
+						issuanceId: visibleResult.issuanceId || '',
+						issuanceNo: visibleResult.issuanceNo || ''
 					}
 				}
 				const result = await replaceBookBenefitCode({
@@ -2166,7 +2144,6 @@ export default {
 			this.entitlementManagement.loading = true
 			this.entitlementManagement.message = '正在查询用户权益...'
 			this.entitlementManagement.lastResult = ''
-			this.resetBookBenefitOperation({ clearFormSecrets: true })
 			try {
 				const result = await searchAdminEntitlementUsers(keyword, this.getAdminRequestOptions())
 				const users = Array.isArray(result.users) ? result.users.map((item) => this.normalizeEntitlementUser(item)) : []
@@ -2198,9 +2175,6 @@ export default {
 			if (this.entitlementManagement.membershipOperationUserId !== normalized.id) {
 				this.entitlementManagement.membershipOperationId = ''
 				this.entitlementManagement.membershipOperationUserId = ''
-			}
-			if (!this.entitlementManagement.selectedUser || this.entitlementManagement.selectedUser.id !== normalized.id) {
-				this.resetBookBenefitOperation({ clearFormSecrets: true })
 			}
 			this.entitlementManagement.selectedUser = normalized
 			this.entitlementManagement.entitlement = null
@@ -6698,7 +6672,6 @@ button::after {
 	color: #a65a00;
 }
 
-.book-benefit-user-summary,
 .book-benefit-status-result,
 .book-benefit-code-result {
 	display: flex;

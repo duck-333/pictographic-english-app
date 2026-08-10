@@ -13,7 +13,7 @@ assert.equal(releaseSql, canonicalSql, 'server release migration must remain byt
 
 const expectedTables = [
   'book_benefit_campaigns',
-  'book_benefit_applications',
+  'book_benefit_issuances',
   'book_benefit_codes',
   'book_benefit_redemptions',
   'book_benefit_audit_events'
@@ -37,16 +37,14 @@ assert.match(releaseSql, /Execute the ALTER only when both columns and the index
 
 const requiredConstraints = [
   'UNIQUE KEY `uk_book_benefit_campaigns_key` (`campaign_key`)',
-  'UNIQUE KEY `uk_book_benefit_applications_no` (`application_no`)',
-  'UNIQUE KEY `uk_book_benefit_applications_campaign_user` (`campaign_id`, `applicant_user_id`)',
-  'UNIQUE KEY `uk_book_benefit_applications_campaign_phone` (`campaign_id`, `applicant_phone_identity_hash`)',
-  'UNIQUE KEY `uk_book_benefit_applications_campaign_order` (`campaign_id`, `approved_order_claim_hash`)',
-  'UNIQUE KEY `uk_book_benefit_applications_idempotency` (`create_idempotency_key`)',
+  'UNIQUE KEY `uk_book_benefit_issuances_no` (`issuance_no`)',
+  'UNIQUE KEY `uk_book_benefit_issuances_campaign_order` (`campaign_id`, `approved_order_claim_hash`)',
+  'UNIQUE KEY `uk_book_benefit_issuances_idempotency` (`create_idempotency_key`)',
   'UNIQUE KEY `uk_book_benefit_codes_hash` (`code_hash`)',
-  'UNIQUE KEY `uk_book_benefit_codes_application_generation` (`application_id`, `generation_no`)',
+  'UNIQUE KEY `uk_book_benefit_codes_issuance_generation` (`issuance_id`, `generation_no`)',
   'UNIQUE KEY `uk_book_benefit_codes_issue_idempotency` (`issue_idempotency_key`)',
   'UNIQUE KEY `uk_book_benefit_codes_replacement` (`replacement_code_id`)',
-  'UNIQUE KEY `uk_book_benefit_codes_active_application` (`active_application_id`)',
+  'UNIQUE KEY `uk_book_benefit_codes_active_issuance` (`active_issuance_id`)',
   'UNIQUE KEY `uk_book_benefit_redemptions_redemption_id` (`redemption_id`)',
   'UNIQUE KEY `uk_book_benefit_redemptions_code` (`code_id`)',
   'UNIQUE KEY `uk_book_benefit_redemptions_campaign_user` (`campaign_id`, `redeemer_user_id`)',
@@ -64,34 +62,34 @@ assert.match(releaseSql, /`code_hash` BINARY\(32\) NOT NULL/)
 assert.match(releaseSql, /`code_hash_version` VARCHAR\(16\) NOT NULL/)
 assert.match(
   releaseSql,
-  /`active_application_id` BIGINT UNSIGNED GENERATED ALWAYS AS \(\s*CASE WHEN `status` = 'issued' THEN `application_id` ELSE NULL END\s*\) VIRTUAL/
+  /`active_issuance_id` BIGINT UNSIGNED GENERATED ALWAYS AS \(\s*CASE WHEN `status` = 'issued' THEN `issuance_id` ELSE NULL END\s*\) VIRTUAL/
 )
 
-function activeApplicationId(status, applicationId) {
-  return status === 'issued' ? applicationId : null
+function activeIssuanceId(status, issuanceId) {
+  return status === 'issued' ? issuanceId : null
 }
 
-function insertCode(rows, status, applicationId) {
-  const activeId = activeApplicationId(status, applicationId)
-  if (activeId !== null && rows.some((row) => row.activeApplicationId === activeId)) {
+function insertCode(rows, status, issuanceId) {
+  const activeId = activeIssuanceId(status, issuanceId)
+  if (activeId !== null && rows.some((row) => row.activeIssuanceId === activeId)) {
     const error = new Error('simulated unique-index conflict')
     error.code = 'ER_DUP_ENTRY'
     throw error
   }
-  rows.push({ status, applicationId, activeApplicationId: activeId })
+  rows.push({ status, issuanceId, activeIssuanceId: activeId })
 }
 
 const issuedRows = []
 insertCode(issuedRows, 'issued', 42)
 assert.throws(() => insertCode(issuedRows, 'issued', 42), (error) => error.code === 'ER_DUP_ENTRY')
 issuedRows[0].status = 'voided'
-issuedRows[0].activeApplicationId = activeApplicationId('voided', 42)
+issuedRows[0].activeIssuanceId = activeIssuanceId('voided', 42)
 insertCode(issuedRows, 'issued', 42)
 
 const inactiveRows = []
 for (const status of ['redeemed', 'voided', 'expired', 'voided']) insertCode(inactiveRows, status, 42)
 assert.deepEqual(
-  inactiveRows.map((row) => row.activeApplicationId),
+  inactiveRows.map((row) => row.activeIssuanceId),
   [null, null, null, null],
   'non-issued rows remain NULL and rely on MySQL unique-index multiple-NULL semantics'
 )
@@ -121,24 +119,23 @@ const expectedColumns = new Map([
   ['book_benefit_campaigns', [
     'id', 'campaign_key', 'name', 'status', 'benefit_days', 'starts_at', 'ends_at', 'created_by', 'created_at', 'updated_at'
   ]],
-  ['book_benefit_applications', [
-    'id', 'application_no', 'campaign_id', 'applicant_user_id', 'applicant_phone_identity_hash',
-    'applicant_phone_hash_version', 'order_claim_type', 'approved_order_claim_hash', 'order_claim_hash_version',
+  ['book_benefit_issuances', [
+    'id', 'issuance_no', 'campaign_id', 'order_claim_type', 'approved_order_claim_hash', 'order_claim_hash_version',
     'order_channel', 'status', 'reviewed_by', 'review_reason_code', 'reviewed_at', 'create_idempotency_key',
     'created_at', 'updated_at'
   ]],
   ['book_benefit_codes', [
-    'id', 'application_id', 'generation_no', 'code_hash', 'code_hash_version', 'status', 'active_application_id',
+    'id', 'issuance_id', 'generation_no', 'code_hash', 'code_hash_version', 'status', 'active_issuance_id',
     'issue_idempotency_key', 'replacement_code_id', 'issued_by', 'issued_at', 'expires_at', 'redeemed_at',
     'voided_at', 'voided_by', 'void_reason_code', 'created_at', 'updated_at'
   ]],
   ['book_benefit_redemptions', [
-    'id', 'redemption_id', 'code_id', 'campaign_id', 'application_id', 'redeemer_user_id',
+    'id', 'redemption_id', 'code_id', 'campaign_id', 'issuance_id', 'redeemer_user_id',
     'redeemer_phone_identity_hash', 'redeemer_phone_hash_version', 'idempotency_key', 'membership_grant_id',
     'entitlement_transaction_id', 'redeemed_at', 'created_at'
   ]],
   ['book_benefit_audit_events', [
-    'id', 'event_id', 'campaign_id', 'application_id', 'code_id', 'redemption_record_id', 'event_type',
+    'id', 'event_id', 'campaign_id', 'issuance_id', 'code_id', 'redemption_record_id', 'event_type',
     'actor_type', 'actor_id', 'result', 'reason_code', 'created_at'
   ]]
 ])

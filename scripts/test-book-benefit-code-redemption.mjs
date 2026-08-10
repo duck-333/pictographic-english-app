@@ -37,10 +37,10 @@ function clone(value) {
 function initialState(overrides = {}) {
   const state = {
     campaigns: [{ id: '11', status: 'ended', benefit_days: 30 }],
-    applications: [{ id: '21', campaign_id: '11', status: 'approved' }],
+    issuances: [{ id: '21', campaign_id: '11', status: 'approved' }],
     codes: [{
       id: '31',
-      application_id: '21',
+      issuance_id: '21',
       code_hash: Buffer.from(CODE_HASH),
       code_hash_version: 'v1',
       status: 'issued',
@@ -100,7 +100,7 @@ function createDatabase(options = {}) {
 
   function operationFor(sql) {
     if (sql.includes('FROM book_benefit_redemptions') && sql.includes('WHERE idempotency_key = ?')) return 'findRedemptionByIdempotency'
-    if (sql.includes('FROM book_benefit_codes c') && sql.includes('JOIN book_benefit_applications')) return 'findCode'
+    if (sql.includes('FROM book_benefit_codes c') && sql.includes('JOIN book_benefit_issuances')) return 'findCode'
     if (sql.includes('FROM `user_phone_bindings`') && sql.includes('campaign_phone_identity_hash')) return 'findIdentity'
     if (sql.includes('FROM book_benefit_redemptions') && sql.includes('WHERE code_id = ?')) return 'findRedemptionConflict'
     if (sql.startsWith('INSERT INTO book_benefit_redemptions')) return 'insertRedemption'
@@ -172,16 +172,16 @@ function createDatabase(options = {}) {
         if (operation === 'findCode') {
           const code = state.codes.find((item) => Buffer.from(item.code_hash).equals(params[0]))
           if (!code) return [[]]
-          const application = state.applications.find((item) => item.id === code.application_id)
-          const campaign = application && state.campaigns.find((item) => item.id === application.campaign_id)
+          const issuance = state.issuances.find((item) => item.id === code.issuance_id)
+          const campaign = issuance && state.campaigns.find((item) => item.id === issuance.campaign_id)
           return [[{
             code_id: code.id,
-            code_application_id: code.application_id,
+            code_issuance_id: code.issuance_id,
             code_status: code.status,
             expires_at: code.expires_at,
-            application_id: application ? application.id : null,
-            campaign_id: application ? application.campaign_id : null,
-            application_status: application ? application.status : null,
+            issuance_id: issuance ? issuance.id : null,
+            campaign_id: issuance ? issuance.campaign_id : null,
+            issuance_status: issuance ? issuance.status : null,
             campaign_record_id: campaign ? campaign.id : null,
             benefit_days: campaign ? campaign.benefit_days : null
           }]]
@@ -203,7 +203,7 @@ function createDatabase(options = {}) {
           return [row ? [{ id: row.id, code_id: row.code_id, redeemer_user_id: row.redeemer_user_id }] : []]
         }
         if (operation === 'insertRedemption') {
-          const [redemptionId, codeId, campaignId, applicationId, userId, phoneHash, version,
+          const [redemptionId, codeId, campaignId, issuanceId, userId, phoneHash, version,
             idempotencyKey, grantId, transactionId, redeemedAt, createdAt] = params
           const duplicate = state.redemptions.some((item) =>
             item.redemption_id === redemptionId || item.code_id === String(codeId) ||
@@ -223,7 +223,7 @@ function createDatabase(options = {}) {
             redemption_id: redemptionId,
             code_id: String(codeId),
             campaign_id: String(campaignId),
-            application_id: String(applicationId),
+            issuance_id: String(issuanceId),
             redeemer_user_id: String(userId),
             redeemer_phone_identity_hash: Buffer.from(phoneHash),
             redeemer_phone_hash_version: version,
@@ -473,7 +473,7 @@ for (const invalid of ['', 'BF31-2345-6789-ABCD-EFGH', 'BF30-2345-6789-ABCD-EFG'
   const database = createDatabase()
   const result = await createTestStore(database).redeemBookBenefitCode(redemptionInput())
   assert.deepEqual(Object.keys(result).sort(), [
-    'applicationId', 'campaignId', 'codeId', 'grantId', 'idempotent', 'membershipExpireAt',
+    'campaignId', 'codeId', 'grantId', 'idempotent', 'issuanceId', 'membershipExpireAt',
     'membershipStartedAt', 'membershipStatus', 'membershipType', 'quotaBalance', 'redemptionId',
     'transactionId', 'transactionInsertId', 'userId'
   ].sort())
@@ -581,10 +581,10 @@ for (const [status, errorCode] of [
 
 {
   const state = initialState()
-  state.applications[0].status = 'pending'
+  state.issuances[0].status = 'cancelled'
   const database = createDatabase({ state })
   await assert.rejects(createTestStore(database).redeemBookBenefitCode(redemptionInput()),
-    (error) => error && error.code === 'BOOK_BENEFIT_APPLICATION_INVALID')
+    (error) => error && error.code === 'BOOK_BENEFIT_ISSUANCE_INVALID')
 }
 
 {
@@ -630,7 +630,7 @@ for (const binding of [
 for (const conflictKind of ['user', 'phone']) {
   const state = initialState()
   state.redemptions.push({
-    id: '88', redemption_id: 'existing', code_id: '99', campaign_id: '11', application_id: '29',
+    id: '88', redemption_id: 'existing', code_id: '99', campaign_id: '11', issuance_id: '29',
     redeemer_user_id: conflictKind === 'user' ? '42' : '99',
     redeemer_phone_identity_hash: conflictKind === 'phone' ? Buffer.alloc(32, 42) : Buffer.alloc(32, 99),
     idempotency_key: 'existing-operation', membership_grant_id: '77', entitlement_transaction_id: 'existing-tx'

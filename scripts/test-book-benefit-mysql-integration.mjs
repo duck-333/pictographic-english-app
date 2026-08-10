@@ -10,7 +10,7 @@ const EXPECTED_ALLOW_DESTRUCTIVE = 'local-docker-book-benefit-only'
 const SAFE_DATABASE_PATTERN = /^book_benefit_(?:test|partial)_[a-z0-9]+$/
 const REQUIRED_TABLES = [
   'book_benefit_campaigns',
-  'book_benefit_applications',
+  'book_benefit_issuances',
   'book_benefit_codes',
   'book_benefit_redemptions',
   'book_benefit_audit_events'
@@ -155,18 +155,16 @@ async function assertRequiredTables(connection, databaseName) {
   )
 }
 
-async function insertApplication(connection, input) {
+async function insertIssuance(connection, input) {
   const [result] = await connection.execute(
-    `INSERT INTO book_benefit_applications
-      (application_no, campaign_id, applicant_user_id, applicant_phone_identity_hash,
-       applicant_phone_hash_version, order_claim_type, approved_order_claim_hash,
-       order_claim_hash_version, order_channel, create_idempotency_key)
-     VALUES (?, ?, ?, ?, 'v1', 'standard', ?, ?, 'taobao', ?)`,
+    `INSERT INTO book_benefit_issuances
+      (issuance_no, campaign_id, order_claim_type, approved_order_claim_hash,
+       order_claim_hash_version, order_channel, status, reviewed_by, reviewed_at,
+       create_idempotency_key)
+     VALUES (?, ?, 'standard', ?, ?, 'taobao', 'approved', 'integration-test', UTC_TIMESTAMP(), ?)`,
     [
-      input.applicationNo,
+      input.issuanceNo,
       input.campaignId,
-      input.userId,
-      input.phoneHash,
       input.orderHash || null,
       input.orderHash ? 'v1' : null,
       input.idempotencyKey
@@ -175,7 +173,7 @@ async function insertApplication(connection, input) {
   return Number(result.insertId)
 }
 
-async function testApplicationConstraints(connection) {
+async function testIssuanceConstraints(connection) {
   await connection.query(
     `INSERT INTO book_benefit_campaigns (campaign_key, name, status)
      VALUES ('campaign-one', 'Campaign One', 'active'), ('campaign-two', 'Campaign Two', 'active')`
@@ -186,44 +184,32 @@ async function testApplicationConstraints(connection) {
   const campaignIds = Object.fromEntries(campaignRows.map((row) => [row.campaign_key, Number(row.id)]))
   const campaignOne = campaignIds['campaign-one']
   const campaignTwo = campaignIds['campaign-two']
-  const phoneA = binaryValue('phone-a')
-  const phoneB = binaryValue('phone-b')
-  const phoneC = binaryValue('phone-c')
-  const phoneD = binaryValue('phone-d')
   const orderA = binaryValue('order-a')
 
-  const firstApplicationId = await insertApplication(connection, {
-    applicationNo: 'application-1', campaignId: campaignOne, userId: 10, phoneHash: phoneA,
-    idempotencyKey: 'application-idempotency-1'
+  const firstIssuanceId = await insertIssuance(connection, {
+    issuanceNo: 'issuance-1', campaignId: campaignOne,
+    idempotencyKey: 'issuance-idempotency-1'
   })
-  await expectDuplicate('application campaign/user uniqueness', () => insertApplication(connection, {
-    applicationNo: 'application-user-duplicate', campaignId: campaignOne, userId: 10, phoneHash: phoneB,
-    idempotencyKey: 'application-idempotency-user-duplicate'
-  }))
-  await expectDuplicate('application campaign/phone uniqueness', () => insertApplication(connection, {
-    applicationNo: 'application-phone-duplicate', campaignId: campaignOne, userId: 11, phoneHash: phoneA,
-    idempotencyKey: 'application-idempotency-phone-duplicate'
-  }))
 
-  const differentCampaignApplicationId = await insertApplication(connection, {
-    applicationNo: 'application-different-campaign', campaignId: campaignTwo, userId: 10, phoneHash: phoneA,
-    idempotencyKey: 'application-idempotency-different-campaign'
+  const differentCampaignIssuanceId = await insertIssuance(connection, {
+    issuanceNo: 'issuance-different-campaign', campaignId: campaignTwo,
+    idempotencyKey: 'issuance-idempotency-different-campaign'
   })
-  const secondNullOrderApplicationId = await insertApplication(connection, {
-    applicationNo: 'application-null-order-2', campaignId: campaignOne, userId: 12, phoneHash: phoneB,
-    idempotencyKey: 'application-idempotency-null-order-2'
+  const secondNullOrderIssuanceId = await insertIssuance(connection, {
+    issuanceNo: 'issuance-null-order-2', campaignId: campaignOne,
+    idempotencyKey: 'issuance-idempotency-null-order-2'
   })
-  await insertApplication(connection, {
-    applicationNo: 'application-order-1', campaignId: campaignOne, userId: 13, phoneHash: phoneC,
-    orderHash: orderA, idempotencyKey: 'application-idempotency-order-1'
+  await insertIssuance(connection, {
+    issuanceNo: 'issuance-order-1', campaignId: campaignOne,
+    orderHash: orderA, idempotencyKey: 'issuance-idempotency-order-1'
   })
-  await expectDuplicate('application campaign/order uniqueness', () => insertApplication(connection, {
-    applicationNo: 'application-order-duplicate', campaignId: campaignOne, userId: 14, phoneHash: phoneD,
-    orderHash: orderA, idempotencyKey: 'application-idempotency-order-duplicate'
+  await expectDuplicate('issuance campaign/order uniqueness', () => insertIssuance(connection, {
+    issuanceNo: 'issuance-order-duplicate', campaignId: campaignOne,
+    orderHash: orderA, idempotencyKey: 'issuance-idempotency-order-duplicate'
   }))
 
   const [nullOrderRows] = await connection.execute(
-    'SELECT COUNT(*) AS row_count FROM book_benefit_applications WHERE campaign_id = ? AND approved_order_claim_hash IS NULL',
+    'SELECT COUNT(*) AS row_count FROM book_benefit_issuances WHERE campaign_id = ? AND approved_order_claim_hash IS NULL',
     [campaignOne]
   )
   assert(Number(nullOrderRows[0].row_count) >= 2, 'multiple NULL approved order claims must be allowed')
@@ -231,20 +217,20 @@ async function testApplicationConstraints(connection) {
   return {
     campaignOne,
     campaignTwo,
-    firstApplicationId,
-    secondNullOrderApplicationId,
-    differentCampaignApplicationId
+    firstIssuanceId,
+    secondNullOrderIssuanceId,
+    differentCampaignIssuanceId
   }
 }
 
 async function insertCode(connection, input) {
   const [result] = await connection.execute(
     `INSERT INTO book_benefit_codes
-      (application_id, generation_no, code_hash, code_hash_version, status,
+      (issuance_id, generation_no, code_hash, code_hash_version, status,
        issue_idempotency_key, replacement_code_id, issued_by)
      VALUES (?, ?, ?, 'v1', ?, ?, ?, 'integration-test')`,
     [
-      input.applicationId,
+      input.issuanceId,
       input.generationNo,
       input.codeHash,
       input.status,
@@ -255,29 +241,29 @@ async function insertCode(connection, input) {
   return Number(result.insertId)
 }
 
-async function testCodeConstraints(connection, applications) {
-  const appId = applications.firstApplicationId
+async function testCodeConstraints(connection, issuances) {
+  const issuanceId = issuances.firstIssuanceId
   const issuedCodeHash = binaryValue('code-issued-1')
   const replacementCodeHash = binaryValue('code-issued-2')
   const firstIssuedId = await insertCode(connection, {
-    applicationId: appId, generationNo: 1, codeHash: issuedCodeHash, status: 'issued',
+    issuanceId, generationNo: 1, codeHash: issuedCodeHash, status: 'issued',
     issueIdempotencyKey: 'issue-idempotency-1'
   })
 
-  await expectDuplicate('one issued code per application', () => insertCode(connection, {
-    applicationId: appId, generationNo: 2, codeHash: replacementCodeHash, status: 'issued',
+  await expectDuplicate('one issued code per issuance', () => insertCode(connection, {
+    issuanceId, generationNo: 2, codeHash: replacementCodeHash, status: 'issued',
     issueIdempotencyKey: 'issue-idempotency-2'
   }))
   await connection.execute('UPDATE book_benefit_codes SET status = ? WHERE id = ?', ['voided', firstIssuedId])
   const secondIssuedId = await insertCode(connection, {
-    applicationId: appId, generationNo: 2, codeHash: replacementCodeHash, status: 'issued',
+    issuanceId, generationNo: 2, codeHash: replacementCodeHash, status: 'issued',
     issueIdempotencyKey: 'issue-idempotency-2'
   })
 
   const inactiveIds = []
   for (const [offset, status] of ['redeemed', 'voided', 'expired'].entries()) {
     inactiveIds.push(await insertCode(connection, {
-      applicationId: appId,
+      issuanceId,
       generationNo: offset + 3,
       codeHash: binaryValue(`code-inactive-${status}`),
       status,
@@ -285,37 +271,37 @@ async function testCodeConstraints(connection, applications) {
     }))
   }
   const [inactiveRows] = await connection.query(
-    `SELECT status, active_application_id
+    `SELECT status, active_issuance_id
        FROM book_benefit_codes
       WHERE id IN (${inactiveIds.map(() => '?').join(', ')})`,
     inactiveIds
   )
   assert.equal(inactiveRows.length, 3)
-  assert(inactiveRows.every((row) => row.active_application_id === null))
+  assert(inactiveRows.every((row) => row.active_issuance_id === null))
 
   const [activeRows] = await connection.execute(
     `SELECT id FROM book_benefit_codes
-      WHERE application_id = ? AND active_application_id IS NOT NULL`,
-    [appId]
+      WHERE issuance_id = ? AND active_issuance_id IS NOT NULL`,
+    [issuanceId]
   )
   assert.deepEqual(activeRows.map((row) => Number(row.id)), [secondIssuedId])
 
   await expectDuplicate('code hash uniqueness', () => insertCode(connection, {
-    applicationId: applications.secondNullOrderApplicationId,
+    issuanceId: issuances.secondNullOrderIssuanceId,
     generationNo: 1,
     codeHash: replacementCodeHash,
     status: 'voided',
     issueIdempotencyKey: 'issue-idempotency-code-hash-duplicate'
   }))
-  await expectDuplicate('application generation uniqueness', () => insertCode(connection, {
-    applicationId: appId,
+  await expectDuplicate('issuance generation uniqueness', () => insertCode(connection, {
+    issuanceId,
     generationNo: 2,
     codeHash: binaryValue('code-generation-duplicate'),
     status: 'voided',
     issueIdempotencyKey: 'issue-idempotency-generation-duplicate'
   }))
   await expectDuplicate('issue idempotency uniqueness', () => insertCode(connection, {
-    applicationId: applications.secondNullOrderApplicationId,
+    issuanceId: issuances.secondNullOrderIssuanceId,
     generationNo: 2,
     codeHash: binaryValue('code-issue-idempotency-duplicate'),
     status: 'voided',
@@ -323,7 +309,7 @@ async function testCodeConstraints(connection, applications) {
   }))
 
   await insertCode(connection, {
-    applicationId: applications.secondNullOrderApplicationId,
+    issuanceId: issuances.secondNullOrderIssuanceId,
     generationNo: 3,
     codeHash: binaryValue('code-replacement-reference-1'),
     status: 'voided',
@@ -331,7 +317,7 @@ async function testCodeConstraints(connection, applications) {
     replacementCodeId: 9001
   })
   await expectDuplicate('replacement code uniqueness', () => insertCode(connection, {
-    applicationId: applications.differentCampaignApplicationId,
+    issuanceId: issuances.differentCampaignIssuanceId,
     generationNo: 1,
     codeHash: binaryValue('code-replacement-reference-2'),
     status: 'voided',
@@ -350,7 +336,7 @@ async function testCodeConstraints(connection, applications) {
 async function insertRedemption(connection, input) {
   const [result] = await connection.execute(
     `INSERT INTO book_benefit_redemptions
-      (redemption_id, code_id, campaign_id, application_id, redeemer_user_id,
+      (redemption_id, code_id, campaign_id, issuance_id, redeemer_user_id,
        redeemer_phone_identity_hash, redeemer_phone_hash_version, idempotency_key,
        membership_grant_id, entitlement_transaction_id, redeemed_at)
      VALUES (?, ?, ?, ?, ?, ?, 'v1', ?, ?, ?, UTC_TIMESTAMP())`,
@@ -358,7 +344,7 @@ async function insertRedemption(connection, input) {
       input.redemptionId,
       input.codeId,
       input.campaignId,
-      input.applicationId,
+      input.issuanceId,
       input.userId,
       input.phoneHash,
       input.idempotencyKey,
@@ -369,13 +355,13 @@ async function insertRedemption(connection, input) {
   return Number(result.insertId)
 }
 
-async function testRedemptionConstraints(connection, applications, codes) {
+async function testRedemptionConstraints(connection, issuances, codes) {
   const basePhone = binaryValue('redeemer-phone-base')
   const base = {
     redemptionId: 'redemption-1',
     codeId: codes.secondIssuedId,
-    campaignId: applications.campaignOne,
-    applicationId: applications.firstApplicationId,
+    campaignId: issuances.campaignOne,
+    issuanceId: issuances.firstIssuanceId,
     userId: 20,
     phoneHash: basePhone,
     idempotencyKey: 'redemption-idempotency-1',
@@ -387,8 +373,8 @@ async function testRedemptionConstraints(connection, applications, codes) {
     ...base,
     redemptionId: 'redemption-different-campaign',
     codeId: 800,
-    campaignId: applications.campaignTwo,
-    applicationId: applications.differentCampaignApplicationId,
+    campaignId: issuances.campaignTwo,
+    issuanceId: issuances.differentCampaignIssuanceId,
     idempotencyKey: 'redemption-idempotency-different-campaign',
     membershipGrantId: 501,
     entitlementTransactionId: 'entitlement-transaction-different-campaign'
@@ -446,15 +432,15 @@ function extractAllCreateTableStatements(sql) {
 
 async function inspectCodesSchema(connection, databaseName) {
   const requiredColumns = [
-    'id', 'application_id', 'generation_no', 'code_hash', 'code_hash_version', 'status',
-    'active_application_id', 'issue_idempotency_key', 'replacement_code_id'
+    'id', 'issuance_id', 'generation_no', 'code_hash', 'code_hash_version', 'status',
+    'active_issuance_id', 'issue_idempotency_key', 'replacement_code_id'
   ]
   const requiredIndexes = [
     'uk_book_benefit_codes_hash',
-    'uk_book_benefit_codes_application_generation',
+    'uk_book_benefit_codes_issuance_generation',
     'uk_book_benefit_codes_issue_idempotency',
     'uk_book_benefit_codes_replacement',
-    'uk_book_benefit_codes_active_application'
+    'uk_book_benefit_codes_active_issuance'
   ]
   const [columnRows] = await connection.execute(
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
@@ -529,9 +515,9 @@ async function runCompleteMigrationTest(config, databaseName, migration001, migr
       row.campaign_phone_identity_hash === null && row.campaign_phone_hash_version === null
     ))
 
-    const applications = await testApplicationConstraints(connection)
-    const codes = await testCodeConstraints(connection, applications)
-    await testRedemptionConstraints(connection, applications, codes)
+    const issuances = await testIssuanceConstraints(connection)
+    const codes = await testCodeConstraints(connection, issuances)
+    await testRedemptionConstraints(connection, issuances, codes)
 
     const [forbiddenBusinessTables] = await connection.execute(
       `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
@@ -576,15 +562,15 @@ async function runPartialTableTest(config, databaseName, migration001, migration
     await connection.query(
       `CREATE TABLE book_benefit_codes (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-        application_id BIGINT UNSIGNED NOT NULL,
+        issuance_id BIGINT UNSIGNED NOT NULL,
         PRIMARY KEY (id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
     )
     await connection.query(extractCreateTableStatement(migration007, 'book_benefit_codes'))
     const acceptance = await inspectCodesSchema(connection, databaseName)
     assert(acceptance.missingColumns.includes('code_hash'))
-    assert(acceptance.missingColumns.includes('active_application_id'))
-    assert(acceptance.missingIndexes.includes('uk_book_benefit_codes_active_application'))
+    assert(acceptance.missingColumns.includes('active_issuance_id'))
+    assert(acceptance.missingIndexes.includes('uk_book_benefit_codes_active_issuance'))
     return {
       partialTableRiskDetected: true,
       missingColumnCount: acceptance.missingColumns.length,
