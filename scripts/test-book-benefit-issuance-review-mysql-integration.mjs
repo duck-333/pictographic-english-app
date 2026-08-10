@@ -10,17 +10,15 @@ import mysql from 'mysql2/promise'
 const EXPECTED_HOST = '127.0.0.1'
 const EXPECTED_PORT = 3308
 const EXPECTED_CONFIRMATION = 'local-docker-book-benefit-review-only'
-const DATABASE_PATTERN = /^book_benefit_review_(?:complete|campaign_only|application_partial|enum_mismatch|index_mismatch|column_mismatch)_[a-f0-9]{12}$/
-const INDEX_NAME = 'idx_book_benefit_applications_campaign_status_created'
+const DATABASE_PATTERN = /^book_benefit_review_(?:complete|campaign_only|issuance_partial|enum_mismatch|index_mismatch|column_mismatch|legacy_application)_[a-f0-9]{12}$/
+const INDEX_NAME = 'idx_book_benefit_issuances_campaign_status_created'
 const INDEX_COLUMNS = ['campaign_id', 'status', 'created_at', 'id']
-const OLD_STATUS = "enum('pending','approved','rejected','cancelled')"
-const NEW_STATUS = "enum('pending','needs_more_info','approved','rejected','cancelled')"
-const OLD_CLAIM = "enum('standard','manual_exception')"
-const NEW_CLAIM = "enum('unreviewed','standard','manual_exception')"
+const STATUS = "enum('approved','cancelled')"
+const CLAIM = "enum('standard','manual_exception')"
 
 const foundationUrl = new URL('../database/migrations/007_create_book_benefit_redemption_foundation.sql', import.meta.url)
-const canonicalUrl = new URL('../database/migrations/008_extend_book_benefit_application_review.sql', import.meta.url)
-const releaseUrl = new URL('../server/migrations/008_extend_book_benefit_application_review.sql', import.meta.url)
+const canonicalUrl = new URL('../database/migrations/008_extend_book_benefit_issuance_review.sql', import.meta.url)
+const releaseUrl = new URL('../server/migrations/008_extend_book_benefit_issuance_review.sql', import.meta.url)
 
 function readConfig(env = process.env) {
   const host = String(env.BOOK_BENEFIT_REVIEW_TEST_DB_HOST || '').trim()
@@ -103,7 +101,7 @@ async function dropOwnedDatabase(rootConnection, config, databaseName, ownedData
 
 async function buildExact007(connection, foundationSql) {
   await connection.query(extractCreateTable(foundationSql, 'book_benefit_campaigns'))
-  await connection.query(extractCreateTable(foundationSql, 'book_benefit_applications'))
+  await connection.query(extractCreateTable(foundationSql, 'book_benefit_issuances'))
 }
 
 function normalizeColumn(row) {
@@ -126,8 +124,8 @@ async function readPreflight(connection, databaseName) {
        FROM INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_SCHEMA = ?
         AND ((TABLE_NAME = 'book_benefit_campaigns' AND COLUMN_NAME = 'rules_version')
-          OR (TABLE_NAME = 'book_benefit_applications' AND COLUMN_NAME IN
-            ('accepted_rules_version', 'rules_accepted_at', 'seller_verification_code',
+          OR (TABLE_NAME = 'book_benefit_issuances' AND COLUMN_NAME IN
+            ('qualification_rules_version', 'seller_verification_code',
              'customer_service_channel', 'status', 'order_claim_type')))
       ORDER BY TABLE_NAME, COLUMN_NAME`,
     [databaseName]
@@ -135,18 +133,24 @@ async function readPreflight(connection, databaseName) {
   const [indexRows] = await connection.execute(
     `SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME
        FROM INFORMATION_SCHEMA.STATISTICS
-      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'book_benefit_applications' AND INDEX_NAME = ?
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'book_benefit_issuances' AND INDEX_NAME = ?
       ORDER BY SEQ_IN_INDEX`,
     [databaseName, INDEX_NAME]
   )
   const campaignRows = columnRows.filter((row) => row.TABLE_NAME === 'book_benefit_campaigns')
-  const applicationRows = columnRows.filter((row) => row.TABLE_NAME === 'book_benefit_applications')
-  const applicationColumns = Object.fromEntries(applicationRows.map((row) => [row.COLUMN_NAME, normalizeColumn(row)]))
+  const issuanceRows = columnRows.filter((row) => row.TABLE_NAME === 'book_benefit_issuances')
+  const issuanceColumns = Object.fromEntries(issuanceRows.map((row) => [row.COLUMN_NAME, normalizeColumn(row)]))
+  const [legacyRows] = await connection.execute(
+    `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'book_benefit_applications'`,
+    [databaseName]
+  )
   return {
     campaignRules: normalizeColumn(campaignRows.find((row) => row.COLUMN_NAME === 'rules_version')),
-    applicationColumns,
-    status: applicationColumns.status || null,
-    claim: applicationColumns.order_claim_type || null,
+    issuanceColumns,
+    status: issuanceColumns.status || null,
+    claim: issuanceColumns.order_claim_type || null,
+    legacyApplicationTable: legacyRows.length > 0,
     index: indexRows.map((row) => ({
       name: row.INDEX_NAME,
       nonUnique: Number(row.NON_UNIQUE),
@@ -157,33 +161,30 @@ async function readPreflight(connection, databaseName) {
 }
 
 function classifyPreflight(state) {
-  const applicationColumns = { ...state.applicationColumns }
-  delete applicationColumns.status
-  delete applicationColumns.order_claim_type
-  const applicationNames = Object.keys(applicationColumns)
-  const exactOldEnums = state.status && state.claim &&
-    state.status.type === OLD_STATUS && state.status.nullable === 'NO' && state.status.defaultValue === 'pending' &&
-    state.claim.type === OLD_CLAIM && state.claim.nullable === 'NO' && state.claim.defaultValue === null
-  const exactNewEnums = state.status && state.claim &&
-    state.status.type === NEW_STATUS && state.status.nullable === 'NO' && state.status.defaultValue === 'pending' &&
-    state.claim.type === NEW_CLAIM && state.claim.nullable === 'NO' && state.claim.defaultValue === null
-  const expectedApplication = {
-    accepted_rules_version: expectedNullableColumn('varchar(32)'),
-    rules_accepted_at: expectedNullableColumn('datetime'),
+  if (state.legacyApplicationTable) return 'stop'
+  const issuanceColumns = { ...state.issuanceColumns }
+  delete issuanceColumns.status
+  delete issuanceColumns.order_claim_type
+  const issuanceNames = Object.keys(issuanceColumns)
+  const exactEnums = state.status && state.claim &&
+    state.status.type === STATUS && state.status.nullable === 'NO' && state.status.defaultValue === 'approved' &&
+    state.claim.type === CLAIM && state.claim.nullable === 'NO' && state.claim.defaultValue === null
+  const expectedIssuance = {
+    qualification_rules_version: expectedNullableColumn('varchar(32)'),
     seller_verification_code: expectedNullableColumn('varchar(32)'),
     customer_service_channel: expectedNullableColumn('varchar(32)')
   }
   const exactCampaign = JSON.stringify(state.campaignRules) === JSON.stringify(expectedNullableColumn('varchar(32)'))
-  const exactApplication = applicationNames.length === 4 && Object.entries(expectedApplication).every(
-    ([name, expected]) => JSON.stringify(applicationColumns[name]) === JSON.stringify(expected)
+  const exactIssuance = issuanceNames.length === 3 && Object.entries(expectedIssuance).every(
+    ([name, expected]) => JSON.stringify(issuanceColumns[name]) === JSON.stringify(expected)
   )
   const exactIndex = state.index.length === 4 && state.index.every((entry, offset) =>
     entry.name === INDEX_NAME && entry.nonUnique === 1 && entry.sequence === offset + 1 &&
     entry.column === INDEX_COLUMNS[offset]
   )
 
-  if (!state.campaignRules && applicationNames.length === 0 && state.index.length === 0 && exactOldEnums) return 'execute'
-  if (exactCampaign && exactApplication && exactIndex && exactNewEnums) return 'skip'
+  if (!state.campaignRules && issuanceNames.length === 0 && state.index.length === 0 && exactEnums) return 'execute'
+  if (exactCampaign && exactIssuance && exactIndex && exactEnums) return 'skip'
   return 'stop'
 }
 
@@ -198,22 +199,22 @@ async function expectDuplicate(label, action) {
   assert(caught.code === 'ER_DUP_ENTRY' || Number(caught.errno) === 1062, `${label}: unexpected error`)
 }
 
-async function insertApplication(connection, input) {
+async function insertIssuance(connection, input) {
   await connection.execute(
-    `INSERT INTO book_benefit_applications
-      (application_no, campaign_id, applicant_user_id, applicant_phone_identity_hash,
-       applicant_phone_hash_version, order_claim_type, approved_order_claim_hash,
-       order_claim_hash_version, order_channel, status, create_idempotency_key)
-     VALUES (?, ?, ?, ?, 'v1', ?, ?, ?, 'taobao', ?, ?)`,
+    `INSERT INTO book_benefit_issuances
+      (issuance_no, campaign_id, order_claim_type, approved_order_claim_hash,
+       order_claim_hash_version, order_channel, status, reviewed_by,
+       review_reason_code, reviewed_at, create_idempotency_key)
+     VALUES (?, ?, ?, ?, ?, 'taobao', ?, 'integration-test',
+             'verified_purchase', ?, ?)`,
     [
-      input.applicationNo,
+      input.issuanceNo,
       input.campaignId,
-      input.userId,
-      input.phoneHash,
       input.claimType,
       input.orderHash || null,
       input.orderHash ? 'v1' : null,
       input.status,
+      new Date('2026-08-08T02:00:00.000Z'),
       input.idempotencyKey
     ]
   )
@@ -229,25 +230,21 @@ async function runCompleteScenario(config, databaseName, foundationSql, migratio
     )
     const [[campaign]] = await connection.query('SELECT id FROM book_benefit_campaigns WHERE campaign_key = ?', ['review-campaign'])
     const oldRows = [
-      ['review-app-1', 101, 'pending', 'standard'],
-      ['review-app-2', 102, 'approved', 'manual_exception'],
-      ['review-app-3', 103, 'rejected', 'standard'],
-      ['review-app-4', 104, 'cancelled', 'manual_exception']
+      ['review-issuance-1', 'approved', 'standard'],
+      ['review-issuance-2', 'cancelled', 'manual_exception']
     ]
-    for (const [applicationNo, userId, status, claimType] of oldRows) {
-      await insertApplication(connection, {
-        applicationNo,
+    for (const [issuanceNo, status, claimType] of oldRows) {
+      await insertIssuance(connection, {
+        issuanceNo,
         campaignId: campaign.id,
-        userId,
-        phoneHash: hash(`phone-${userId}`),
-        orderHash: status === 'approved' ? hash(`order-${userId}`) : null,
+        orderHash: status === 'approved' ? hash(`order-${issuanceNo}`) : null,
         claimType,
         status,
-        idempotencyKey: `review-idempotency-${userId}`
+        idempotencyKey: `review-idempotency-${issuanceNo}`
       })
     }
     const [beforeRows] = await connection.query(
-      'SELECT id, application_no, status, order_claim_type FROM book_benefit_applications ORDER BY id'
+      'SELECT id, issuance_no, status, order_claim_type FROM book_benefit_issuances ORDER BY id'
     )
     assert.equal(classifyPreflight(await readPreflight(connection, databaseName)), 'execute')
 
@@ -260,36 +257,33 @@ async function runCompleteScenario(config, databaseName, foundationSql, migratio
     assert.equal(campaignAfterMigration.rules_version, null)
 
     const [afterRows] = await connection.query(
-      `SELECT id, application_no, status, order_claim_type, accepted_rules_version,
-              rules_accepted_at, seller_verification_code, customer_service_channel
-         FROM book_benefit_applications ORDER BY id`
+      `SELECT id, issuance_no, status, order_claim_type, qualification_rules_version,
+              seller_verification_code, customer_service_channel
+         FROM book_benefit_issuances ORDER BY id`
     )
     assert.deepEqual(
-      afterRows.map((row) => [Number(row.id), row.application_no, row.status, row.order_claim_type]),
-      beforeRows.map((row) => [Number(row.id), row.application_no, row.status, row.order_claim_type])
+      afterRows.map((row) => [Number(row.id), row.issuance_no, row.status, row.order_claim_type]),
+      beforeRows.map((row) => [Number(row.id), row.issuance_no, row.status, row.order_claim_type])
     )
     assert(afterRows.every((row) =>
-      row.accepted_rules_version === null && row.rules_accepted_at === null &&
+      row.qualification_rules_version === null &&
       row.seller_verification_code === null && row.customer_service_channel === null
     ))
 
     await connection.execute(
-      `UPDATE book_benefit_applications
-          SET status = 'needs_more_info', order_claim_type = 'unreviewed',
-              accepted_rules_version = 'rules-v1', rules_accepted_at = ?,
+      `UPDATE book_benefit_issuances
+          SET qualification_rules_version = 'rules-v1',
               seller_verification_code = 'seller-confirmed', customer_service_channel = 'wechat-service'
-        WHERE application_no = 'review-app-1'`,
-      [new Date('2026-08-08T03:00:00.000Z')]
+        WHERE issuance_no = 'review-issuance-1'`
     )
     const [[updated]] = await connection.query(
-      `SELECT status, order_claim_type, accepted_rules_version, rules_accepted_at,
+      `SELECT status, order_claim_type, qualification_rules_version,
               seller_verification_code, customer_service_channel
-         FROM book_benefit_applications WHERE application_no = 'review-app-1'`
+         FROM book_benefit_issuances WHERE issuance_no = 'review-issuance-1'`
     )
-    assert.equal(updated.status, 'needs_more_info')
-    assert.equal(updated.order_claim_type, 'unreviewed')
-    assert.equal(updated.accepted_rules_version, 'rules-v1')
-    assert(updated.rules_accepted_at instanceof Date)
+    assert.equal(updated.status, 'approved')
+    assert.equal(updated.order_claim_type, 'standard')
+    assert.equal(updated.qualification_rules_version, 'rules-v1')
     assert.equal(updated.seller_verification_code, 'seller-confirmed')
     assert.equal(updated.customer_service_channel, 'wechat-service')
 
@@ -299,31 +293,32 @@ async function runCompleteScenario(config, databaseName, foundationSql, migratio
 
     const duplicateBase = {
       campaignId: campaign.id,
-      claimType: 'unreviewed',
-      status: 'pending'
+      claimType: 'standard',
+      status: 'approved'
     }
-    await expectDuplicate('application number', () => insertApplication(connection, {
-      ...duplicateBase, applicationNo: 'review-app-2', userId: 201, phoneHash: hash('unique-phone-201'),
+    await expectDuplicate('issuance number', () => insertIssuance(connection, {
+      ...duplicateBase, issuanceNo: 'review-issuance-2',
       idempotencyKey: 'unique-idempotency-201'
     }))
-    await expectDuplicate('campaign user', () => insertApplication(connection, {
-      ...duplicateBase, applicationNo: 'unique-app-user', userId: 102, phoneHash: hash('unique-phone-202'),
-      idempotencyKey: 'unique-idempotency-202'
+    await expectDuplicate('create idempotency', () => insertIssuance(connection, {
+      ...duplicateBase, issuanceNo: 'unique-issuance-idempotency',
+      idempotencyKey: 'review-idempotency-review-issuance-2'
     }))
-    await expectDuplicate('campaign phone', () => insertApplication(connection, {
-      ...duplicateBase, applicationNo: 'unique-app-phone', userId: 203, phoneHash: hash('phone-103'),
-      idempotencyKey: 'unique-idempotency-203'
-    }))
-    await expectDuplicate('create idempotency', () => insertApplication(connection, {
-      ...duplicateBase, applicationNo: 'unique-app-idempotency', userId: 204, phoneHash: hash('unique-phone-204'),
-      idempotencyKey: 'review-idempotency-104'
-    }))
-    await expectDuplicate('campaign order', () => insertApplication(connection, {
-      ...duplicateBase, applicationNo: 'unique-app-order', userId: 205, phoneHash: hash('unique-phone-205'),
-      orderHash: hash('order-102'), idempotencyKey: 'unique-idempotency-205'
+    await expectDuplicate('campaign order', () => insertIssuance(connection, {
+      ...duplicateBase, issuanceNo: 'unique-issuance-order',
+      orderHash: hash('order-review-issuance-1'), idempotencyKey: 'unique-idempotency-205'
     }))
 
-    return { oldRowsPreserved: oldRows.length, exact008Recognized: true, originalUniqueConstraintsVerified: true }
+    await insertIssuance(connection, {
+      ...duplicateBase, issuanceNo: 'null-order-1', claimType: 'manual_exception',
+      idempotencyKey: 'null-order-idempotency-1'
+    })
+    await insertIssuance(connection, {
+      ...duplicateBase, issuanceNo: 'null-order-2', claimType: 'manual_exception',
+      idempotencyKey: 'null-order-idempotency-2'
+    })
+
+    return { oldRowsPreserved: oldRows.length, exact008Recognized: true, issuanceUniqueConstraintsVerified: true }
   } finally {
     await connection.end()
   }
@@ -333,28 +328,31 @@ async function runStateScenario(config, databaseName, foundationSql, migration00
   const connection = await createDatabaseConnection(config, databaseName)
   try {
     await buildExact007(connection, foundationSql)
-    const [campaignAlter, applicationAlter] = extractAlterStatements(migration008)
+    const [campaignAlter, issuanceAlter] = extractAlterStatements(migration008)
     if (scenario === 'campaign_only') await connection.query(campaignAlter)
-    if (scenario === 'application_partial') {
-      await connection.query('ALTER TABLE book_benefit_applications ADD COLUMN accepted_rules_version VARCHAR(32) NULL DEFAULT NULL')
+    if (scenario === 'issuance_partial') {
+      await connection.query('ALTER TABLE book_benefit_issuances ADD COLUMN qualification_rules_version VARCHAR(32) NULL DEFAULT NULL')
     }
     if (scenario === 'enum_mismatch') {
-      await connection.query("ALTER TABLE book_benefit_applications MODIFY COLUMN status ENUM('pending','approved','rejected','cancelled','other') NOT NULL DEFAULT 'pending'")
+      await connection.query("ALTER TABLE book_benefit_issuances MODIFY COLUMN status ENUM('approved','cancelled','other') NOT NULL DEFAULT 'approved'")
     }
     if (scenario === 'index_mismatch') {
       await connection.query(
-        `ALTER TABLE book_benefit_applications
+        `ALTER TABLE book_benefit_issuances
            ADD KEY ${INDEX_NAME} (campaign_id, created_at, status, id)`
       )
     }
     if (scenario === 'column_mismatch') {
       await connection.query(campaignAlter)
-      await connection.query(applicationAlter)
-      await connection.query('ALTER TABLE book_benefit_applications MODIFY COLUMN accepted_rules_version VARCHAR(64) NULL DEFAULT NULL')
+      await connection.query(issuanceAlter)
+      await connection.query('ALTER TABLE book_benefit_issuances MODIFY COLUMN qualification_rules_version VARCHAR(64) NULL DEFAULT NULL')
       assert.equal(classifyPreflight(await readPreflight(connection, databaseName)), 'stop')
-      await connection.query('ALTER TABLE book_benefit_applications MODIFY COLUMN accepted_rules_version VARCHAR(32) NOT NULL')
+      await connection.query('ALTER TABLE book_benefit_issuances MODIFY COLUMN qualification_rules_version VARCHAR(32) NOT NULL')
       assert.equal(classifyPreflight(await readPreflight(connection, databaseName)), 'stop')
-      await connection.query("ALTER TABLE book_benefit_applications MODIFY COLUMN accepted_rules_version VARCHAR(32) NULL DEFAULT 'rules-v0'")
+      await connection.query("ALTER TABLE book_benefit_issuances MODIFY COLUMN qualification_rules_version VARCHAR(32) NULL DEFAULT 'rules-v0'")
+    }
+    if (scenario === 'legacy_application') {
+      await connection.query('CREATE TABLE book_benefit_applications (id BIGINT UNSIGNED NOT NULL PRIMARY KEY) ENGINE=InnoDB')
     }
     assert.equal(classifyPreflight(await readPreflight(connection, databaseName)), 'stop')
     return true
@@ -387,7 +385,7 @@ function safeErrorCode(error) {
 
 export function formatSafeTopLevelError(error) {
   const lines = [
-    'Book-benefit application review integration test failed.',
+    'Book-benefit issuance review integration test failed.',
     `Error type: ${safeErrorName(error)}`
   ]
   const code = safeErrorCode(error)
@@ -543,7 +541,7 @@ function testSafeTopLevelErrorOutput() {
   )
   assert.equal(child.status, 1)
   assert.equal(child.stdout, '')
-  assert.match(child.stderr, /Book-benefit application review integration test failed\./)
+  assert.match(child.stderr, /Book-benefit issuance review integration test failed\./)
   assert.match(child.stderr, /Error type: Error/)
   assert.match(child.stderr, /Error code: SAFE_TEST_PRIMARY/)
   assert.match(child.stderr, /Cleanup failures: 1/)
@@ -608,7 +606,7 @@ function testSafeTopLevelFormatterFallback() {
     }
   )
   const expectedOutput =
-    'Book-benefit application review integration test failed.\n' +
+    'Book-benefit issuance review integration test failed.\n' +
     'Error details unavailable.\n'
 
   assert.equal(child.status, 1)
@@ -633,7 +631,8 @@ async function main() {
   const config = readConfig()
   const suffix = crypto.randomBytes(6).toString('hex')
   const databaseNames = Object.fromEntries([
-    'complete', 'campaign_only', 'application_partial', 'enum_mismatch', 'index_mismatch', 'column_mismatch'
+    'complete', 'campaign_only', 'issuance_partial', 'enum_mismatch', 'index_mismatch', 'column_mismatch',
+    'legacy_application'
   ].map((scenario) => [scenario, `book_benefit_review_${scenario}_${suffix}`]))
   for (const databaseName of Object.values(databaseNames)) assert.match(databaseName, DATABASE_PATTERN)
 
@@ -664,10 +663,10 @@ async function main() {
       await createOwnedDatabase(rootConnection, databaseName, ownedDatabases)
     }
     const complete = await runCompleteScenario(config, databaseNames.complete, foundationSql, migration008)
-    for (const scenario of ['campaign_only', 'application_partial', 'enum_mismatch', 'index_mismatch', 'column_mismatch']) {
+    for (const scenario of ['campaign_only', 'issuance_partial', 'enum_mismatch', 'index_mismatch', 'column_mismatch', 'legacy_application']) {
       await runStateScenario(config, databaseNames[scenario], foundationSql, migration008, scenario)
     }
-    result = { mysqlVersion: versionRow.version, complete, partialStatesRejected: 5 }
+    result = { mysqlVersion: versionRow.version, complete, partialStatesRejected: 6 }
   } catch (error) {
     primaryError = error
   } finally {
@@ -697,7 +696,7 @@ async function main() {
     primaryError = attachCleanupErrors(primaryError, cleanupErrors)
   }
   if (primaryError) throw primaryError
-  console.log('book-benefit application review MySQL 8.0.46 integration tests passed')
+  console.log('book-benefit issuance review MySQL 8.0.46 integration tests passed')
   console.log(JSON.stringify({ ...result, testDatabasesCleaned: true }, null, 2))
 }
 
@@ -732,7 +731,7 @@ try {
   process.exitCode = 1
 
   let safeOutput =
-    'Book-benefit application review integration test failed.\n' +
+    'Book-benefit issuance review integration test failed.\n' +
     'Error details unavailable.'
 
   try {

@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 
 import {
   createCampaignPhoneIdentity,
-  createManualExceptionOrderClaimHash,
+  createManualExceptionIssuanceClaimHash,
   createStandardOrderClaimHash,
   normalizeOrderChannel,
   normalizeOrderNumber
@@ -128,23 +128,23 @@ function testOrderClaims() {
     crypto.createHmac('sha256', orderSecret).update('taobao|AB123').digest()
   )
 
-  const manualFirst = createManualExceptionOrderClaimHash({
+  const manualFirst = createManualExceptionIssuanceClaimHash({
     campaignId: '7',
-    applicationId: '11'
+    issuanceId: '11'
   }, {
     secret: orderSecret,
     env: {}
   })
-  const manualSame = createManualExceptionOrderClaimHash({
+  const manualSame = createManualExceptionIssuanceClaimHash({
     campaignId: '007',
-    applicationId: 11
+    issuanceId: 11
   }, {
     secret: orderSecret,
     env: {}
   })
-  const manualDifferentApplication = createManualExceptionOrderClaimHash({
+  const manualDifferentIssuance = createManualExceptionIssuanceClaimHash({
     campaignId: '7',
-    applicationId: '12'
+    issuanceId: '12'
   }, {
     secret: orderSecret,
     env: {}
@@ -152,7 +152,7 @@ function testOrderClaims() {
 
   assert.equal(manualFirst.orderClaimHash.length, 32)
   assert.deepEqual(manualFirst.orderClaimHash, manualSame.orderClaimHash)
-  assert.notDeepEqual(manualFirst.orderClaimHash, manualDifferentApplication.orderClaimHash)
+  assert.notDeepEqual(manualFirst.orderClaimHash, manualDifferentIssuance.orderClaimHash)
   assert.deepEqual(
     manualFirst.orderClaimHash,
     crypto.createHmac('sha256', orderSecret).update('manual-exception:7:11').digest()
@@ -193,7 +193,7 @@ function testOrderClaims() {
   expectCode(() => normalizeOrderChannel('taobao|other'), 'BOOK_ORDER_CHANNEL_INVALID')
   expectCode(() => normalizeOrderNumber('AB|123'), 'BOOK_ORDER_NUMBER_INVALID')
   expectCode(
-    () => createManualExceptionOrderClaimHash({ campaignId: '0', applicationId: '11' }, {
+    () => createManualExceptionIssuanceClaimHash({ campaignId: '0', issuanceId: '11' }, {
       secret: orderSecret,
       env: {}
     }),

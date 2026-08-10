@@ -45,43 +45,38 @@ CREATE TABLE IF NOT EXISTS `book_benefit_campaigns` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Book-purchase benefit campaign definitions.';
 
-CREATE TABLE IF NOT EXISTS `book_benefit_applications` (
-  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Application primary key.',
-  `application_no` VARCHAR(64) NOT NULL COMMENT 'Globally unique public-safe application identifier.',
+CREATE TABLE IF NOT EXISTS `book_benefit_issuances` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Issuance primary key.',
+  `issuance_no` VARCHAR(64) NOT NULL COMMENT 'Globally unique public-safe issuance identifier.',
   `campaign_id` BIGINT UNSIGNED NOT NULL COMMENT 'book_benefit_campaigns.id service-layer reference.',
-  `applicant_user_id` BIGINT UNSIGNED NOT NULL COMMENT 'users.id service-layer reference; no foreign key until signedness aligns.',
-  `applicant_phone_identity_hash` BINARY(32) NOT NULL COMMENT 'Stable campaign phone identity HMAC; never phone plaintext.',
-  `applicant_phone_hash_version` VARCHAR(16) NOT NULL COMMENT 'Campaign phone identity hash version, initially v1.',
-  `order_claim_type` ENUM('standard', 'manual_exception') NOT NULL COMMENT 'Standard order claim or reviewed manual exception.',
-  `approved_order_claim_hash` BINARY(32) NULL DEFAULT NULL COMMENT 'Approved order claim HMAC; null until approval.',
-  `order_claim_hash_version` VARCHAR(16) NULL DEFAULT NULL COMMENT 'Order claim hash version when approved.',
+  `order_claim_type` ENUM('standard', 'manual_exception') NOT NULL COMMENT 'Reviewed standard order or manual exception.',
+  `approved_order_claim_hash` BINARY(32) NULL DEFAULT NULL COMMENT 'Approved order claim HMAC; temporarily null only while a manual-exception issuance is created in one transaction.',
+  `order_claim_hash_version` VARCHAR(16) NULL DEFAULT NULL COMMENT 'Order claim hash version.',
   `order_channel` VARCHAR(64) NULL DEFAULT NULL COMMENT 'Normalized non-secret channel identifier; no order number is stored.',
-  `status` ENUM('pending', 'approved', 'rejected', 'cancelled') NOT NULL DEFAULT 'pending' COMMENT 'Application review lifecycle.',
+  `status` ENUM('approved', 'cancelled') NOT NULL DEFAULT 'approved' COMMENT 'Approved issuance lifecycle.',
   `reviewed_by` VARCHAR(191) NULL DEFAULT NULL COMMENT 'Stable operator identifier; never an admin token.',
   `review_reason_code` VARCHAR(64) NULL DEFAULT NULL COMMENT 'Non-sensitive structured review reason.',
   `reviewed_at` DATETIME NULL DEFAULT NULL,
-  `create_idempotency_key` VARCHAR(191) NOT NULL COMMENT 'Globally unique application creation idempotency key.',
+  `create_idempotency_key` VARCHAR(191) NOT NULL COMMENT 'Globally unique unassigned-code issuance idempotency key.',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_book_benefit_applications_no` (`application_no`),
-  UNIQUE KEY `uk_book_benefit_applications_campaign_user` (`campaign_id`, `applicant_user_id`),
-  UNIQUE KEY `uk_book_benefit_applications_campaign_phone` (`campaign_id`, `applicant_phone_identity_hash`),
-  UNIQUE KEY `uk_book_benefit_applications_campaign_order` (`campaign_id`, `approved_order_claim_hash`),
-  UNIQUE KEY `uk_book_benefit_applications_idempotency` (`create_idempotency_key`),
-  KEY `idx_book_benefit_applications_status_created` (`status`, `created_at`)
+  UNIQUE KEY `uk_book_benefit_issuances_no` (`issuance_no`),
+  UNIQUE KEY `uk_book_benefit_issuances_campaign_order` (`campaign_id`, `approved_order_claim_hash`),
+  UNIQUE KEY `uk_book_benefit_issuances_idempotency` (`create_idempotency_key`),
+  KEY `idx_book_benefit_issuances_status_created` (`status`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='Reviewed applications for book-purchase membership benefits.';
+COMMENT='Administrator-reviewed issuance chains for unassigned book-benefit bearer codes.';
 
 CREATE TABLE IF NOT EXISTS `book_benefit_codes` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Redemption code record primary key.',
-  `application_id` BIGINT UNSIGNED NOT NULL COMMENT 'book_benefit_applications.id service-layer reference.',
-  `generation_no` INT UNSIGNED NOT NULL COMMENT 'Monotonic generation number within one application.',
+  `issuance_id` BIGINT UNSIGNED NOT NULL COMMENT 'book_benefit_issuances.id service-layer reference.',
+  `generation_no` INT UNSIGNED NOT NULL COMMENT 'Monotonic generation number within one issuance.',
   `code_hash` BINARY(32) NOT NULL COMMENT 'One-way redemption-code HMAC; plaintext or recoverable code is never stored.',
   `code_hash_version` VARCHAR(16) NOT NULL COMMENT 'Future REDEMPTION_CODE_HASH_SECRET version marker.',
   `status` ENUM('issued', 'redeemed', 'voided', 'expired') NOT NULL DEFAULT 'issued' COMMENT 'Code lifecycle.',
-  `active_application_id` BIGINT UNSIGNED GENERATED ALWAYS AS (
-    CASE WHEN `status` = 'issued' THEN `application_id` ELSE NULL END
+  `active_issuance_id` BIGINT UNSIGNED GENERATED ALWAYS AS (
+    CASE WHEN `status` = 'issued' THEN `issuance_id` ELSE NULL END
   ) VIRTUAL COMMENT 'Unique only while issued; NULL lifecycle rows do not conflict in MySQL unique indexes.',
   `issue_idempotency_key` VARCHAR(191) NOT NULL COMMENT 'Globally unique issuance idempotency key.',
   `replacement_code_id` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT 'Replacement code service-layer reference after this code is voided.',
@@ -96,11 +91,11 @@ CREATE TABLE IF NOT EXISTS `book_benefit_codes` (
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_book_benefit_codes_hash` (`code_hash`),
-  UNIQUE KEY `uk_book_benefit_codes_application_generation` (`application_id`, `generation_no`),
+  UNIQUE KEY `uk_book_benefit_codes_issuance_generation` (`issuance_id`, `generation_no`),
   UNIQUE KEY `uk_book_benefit_codes_issue_idempotency` (`issue_idempotency_key`),
   UNIQUE KEY `uk_book_benefit_codes_replacement` (`replacement_code_id`),
-  UNIQUE KEY `uk_book_benefit_codes_active_application` (`active_application_id`),
-  KEY `idx_book_benefit_codes_application_status` (`application_id`, `status`),
+  UNIQUE KEY `uk_book_benefit_codes_active_issuance` (`active_issuance_id`),
+  KEY `idx_book_benefit_codes_issuance_status` (`issuance_id`, `status`),
   KEY `idx_book_benefit_codes_status_expires` (`status`, `expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Hashed book-benefit redemption codes without plaintext or recoverable code material.';
@@ -110,7 +105,7 @@ CREATE TABLE IF NOT EXISTS `book_benefit_redemptions` (
   `redemption_id` VARCHAR(64) NOT NULL COMMENT 'Globally unique redemption business identifier.',
   `code_id` BIGINT UNSIGNED NOT NULL COMMENT 'book_benefit_codes.id service-layer reference.',
   `campaign_id` BIGINT UNSIGNED NOT NULL COMMENT 'book_benefit_campaigns.id service-layer reference.',
-  `application_id` BIGINT UNSIGNED NOT NULL COMMENT 'book_benefit_applications.id service-layer reference.',
+  `issuance_id` BIGINT UNSIGNED NOT NULL COMMENT 'book_benefit_issuances.id service-layer reference.',
   `redeemer_user_id` BIGINT UNSIGNED NOT NULL COMMENT 'users.id service-layer reference; no foreign key until signedness aligns.',
   `redeemer_phone_identity_hash` BINARY(32) NOT NULL COMMENT 'Stable campaign phone identity HMAC; never phone plaintext.',
   `redeemer_phone_hash_version` VARCHAR(16) NOT NULL COMMENT 'Campaign phone identity hash version.',
@@ -128,7 +123,7 @@ CREATE TABLE IF NOT EXISTS `book_benefit_redemptions` (
   UNIQUE KEY `uk_book_benefit_redemptions_membership_grant` (`membership_grant_id`),
   UNIQUE KEY `uk_book_benefit_redemptions_entitlement_transaction` (`entitlement_transaction_id`),
   KEY `idx_book_benefit_redemptions_campaign_created` (`campaign_id`, `created_at`),
-  KEY `idx_book_benefit_redemptions_application` (`application_id`)
+  KEY `idx_book_benefit_redemptions_issuance` (`issuance_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='One row per successful book-benefit redemption and resulting entitlement references.';
 
@@ -136,7 +131,7 @@ CREATE TABLE IF NOT EXISTS `book_benefit_audit_events` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Audit event primary key.',
   `event_id` VARCHAR(64) NOT NULL COMMENT 'Globally unique audit event identifier.',
   `campaign_id` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT 'Optional campaign service-layer reference.',
-  `application_id` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT 'Optional application service-layer reference.',
+  `issuance_id` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT 'Optional issuance service-layer reference.',
   `code_id` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT 'Optional code record service-layer reference; never code hash or plaintext.',
   `redemption_record_id` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT 'Optional successful redemption row service-layer reference.',
   `event_type` VARCHAR(64) NOT NULL COMMENT 'Stable event category.',
@@ -148,7 +143,7 @@ CREATE TABLE IF NOT EXISTS `book_benefit_audit_events` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_book_benefit_audit_events_event_id` (`event_id`),
   KEY `idx_book_benefit_audit_events_campaign_created` (`campaign_id`, `created_at`),
-  KEY `idx_book_benefit_audit_events_application_created` (`application_id`, `created_at`),
+  KEY `idx_book_benefit_audit_events_issuance_created` (`issuance_id`, `created_at`),
   KEY `idx_book_benefit_audit_events_code_created` (`code_id`, `created_at`),
   KEY `idx_book_benefit_audit_events_actor_created` (`actor_type`, `actor_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

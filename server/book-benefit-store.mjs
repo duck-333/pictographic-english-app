@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import mysql from 'mysql2/promise'
 
 import {
-  createManualExceptionOrderClaimHash,
+  createManualExceptionIssuanceClaimHash,
   createStandardOrderClaimHash
 } from './book-benefit-foundation.mjs'
 import {
@@ -11,7 +11,6 @@ import {
   normalizeBookBenefitRedemptionCode
 } from './book-benefit-code.mjs'
 import {
-  findBookBenefitAdminIdentityInTransaction,
   findCurrentCampaignPhoneIdentityInTransaction
 } from './identity-store.mjs'
 import { createUserEntitlementStore } from './user-entitlement-store.mjs'
@@ -40,9 +39,7 @@ const MANUAL_EXCEPTION_REASONS = new Set([
   'historical_evidence_unavailable',
   'customer_service_approved_exception'
 ])
-const ALLOWED_INPUT_FIELDS = new Set([
-  'campaignId',
-  'locator',
+const ALLOWED_ISSUE_INPUT_FIELDS = new Set([
   'orderClaimType',
   'orderChannel',
   'orderNumber',
@@ -129,7 +126,7 @@ function normalizeIssueInput(input = {}) {
     throw createStoreError('Book-benefit issue input is invalid.', 'BOOK_BENEFIT_INPUT_INVALID', 400)
   }
   for (const fieldName of Object.keys(input)) {
-    if (!ALLOWED_INPUT_FIELDS.has(fieldName)) {
+    if (!ALLOWED_ISSUE_INPUT_FIELDS.has(fieldName)) {
       throw createStoreError('Book-benefit issue input contains an unsupported field.', 'BOOK_BENEFIT_INPUT_INVALID', 400)
     }
   }
@@ -167,8 +164,6 @@ function normalizeIssueInput(input = {}) {
   }
 
   return {
-    campaignId: normalizePositiveId(input.campaignId, 'Campaign id'),
-    locator: input.locator,
     orderClaimType,
     orderChannel,
     orderNumber,
@@ -263,8 +258,8 @@ function stableIdentifier(prefix, domain, operationId, hexLength) {
   return `${prefix}${digest.slice(0, hexLength)}`
 }
 
-function applicationNumber(operationId) {
-  return stableIdentifier('BBA-', 'book-benefit-application:v1', operationId, 32).toUpperCase()
+function issuanceNumber(operationId) {
+  return stableIdentifier('BBI-', 'book-benefit-issuance:v1', operationId, 32).toUpperCase()
 }
 
 function auditEventId(operationId) {
@@ -347,43 +342,30 @@ function assertBufferIdentity(left, right) {
 }
 
 async function findIdempotentIssue(connection, input, options) {
-  const [applicationRows] = await connection.execute(
-    `SELECT id, application_no, campaign_id, applicant_user_id,
-            applicant_phone_identity_hash, applicant_phone_hash_version,
+  const [issuanceRows] = await connection.execute(
+    `SELECT id, issuance_no, campaign_id, qualification_rules_version,
             order_claim_type, approved_order_claim_hash, order_claim_hash_version,
-            order_channel, status, review_reason_code, seller_verification_code,
-            customer_service_channel
-       FROM book_benefit_applications
+            order_channel, status, reviewed_by, review_reason_code,
+            seller_verification_code, customer_service_channel
+       FROM book_benefit_issuances
       WHERE create_idempotency_key = ?
       LIMIT 1
       FOR UPDATE`,
     [input.operationId]
   )
-  const application = Array.isArray(applicationRows) && applicationRows.length ? applicationRows[0] : null
-  if (!application) return null
-  if (String(application.campaign_id) !== input.campaignId || application.status !== 'approved') {
-    throw createStoreError('Operation id conflicts with an existing application.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
-  }
-
-  const identity = await findBookBenefitAdminIdentityInTransaction(connection, input.locator, {
-    forUpdate: true,
-    phoneHashSecret: options.phoneHashSecret === undefined
-      ? process.env.PHONE_HASH_SECRET
-      : options.phoneHashSecret
-  })
-  const campaign = await findCampaignForUpdate(connection, input.campaignId)
+  const issuance = Array.isArray(issuanceRows) && issuanceRows.length ? issuanceRows[0] : null
+  if (!issuance) return null
+  const campaign = await findConfiguredCampaignForUpdate(connection, options)
   if (
-    !campaign ||
-    Number(campaign.benefit_days) !== 30 ||
-    String(application.applicant_user_id) !== identity.userId ||
-    application.applicant_phone_hash_version !== 'v1' ||
-    identity.campaignPhoneHashVersion !== 'v1' ||
-    !assertBufferIdentity(application.applicant_phone_identity_hash, identity.campaignPhoneIdentityHash) ||
-    application.order_claim_type !== input.orderClaimType ||
-    application.seller_verification_code !== input.sellerVerificationCode ||
-    application.customer_service_channel !== input.customerServiceChannel
+    issuance.status !== 'approved' ||
+    String(issuance.campaign_id) !== campaign.campaignId ||
+    issuance.qualification_rules_version !== campaign.rulesVersion ||
+    issuance.reviewed_by !== input.operatorId ||
+    issuance.order_claim_type !== input.orderClaimType ||
+    issuance.seller_verification_code !== input.sellerVerificationCode ||
+    issuance.customer_service_channel !== input.customerServiceChannel
   ) {
-    throw createStoreError('Operation id conflicts with an existing application.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
+    throw createStoreError('Operation id conflicts with an existing issuance.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
   }
   let expectedClaim = null
   if (input.orderClaimType === 'standard') {
@@ -397,16 +379,16 @@ async function findIdempotentIssue(connection, input, options) {
       env: options.secretEnv || process.env
     })
     if (
-      application.order_channel !== expectedClaim.normalizedChannel ||
-      application.order_claim_hash_version !== expectedClaim.hashVersion ||
-      !assertBufferIdentity(application.approved_order_claim_hash, expectedClaim.orderClaimHash)
+      issuance.order_channel !== expectedClaim.normalizedChannel ||
+      issuance.order_claim_hash_version !== expectedClaim.hashVersion ||
+      !assertBufferIdentity(issuance.approved_order_claim_hash, expectedClaim.orderClaimHash)
     ) {
-      throw createStoreError('Operation id conflicts with an existing application.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
+      throw createStoreError('Operation id conflicts with an existing issuance.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
     }
   } else {
-    expectedClaim = createManualExceptionOrderClaimHash({
-      campaignId: input.campaignId,
-      applicationId: application.id
+    expectedClaim = createManualExceptionIssuanceClaimHash({
+      campaignId: campaign.campaignId,
+      issuanceId: issuance.id
     }, {
       secret: options.orderClaimHashSecret === undefined
         ? process.env.BOOK_ORDER_CLAIM_HASH_SECRET
@@ -414,17 +396,17 @@ async function findIdempotentIssue(connection, input, options) {
       env: options.secretEnv || process.env
     })
     if (
-      application.review_reason_code !== input.manualExceptionReasonCode ||
-      application.order_channel !== null ||
-      application.order_claim_hash_version !== expectedClaim.hashVersion ||
-      !assertBufferIdentity(application.approved_order_claim_hash, expectedClaim.orderClaimHash)
+      issuance.review_reason_code !== input.manualExceptionReasonCode ||
+      issuance.order_channel !== null ||
+      issuance.order_claim_hash_version !== expectedClaim.hashVersion ||
+      !assertBufferIdentity(issuance.approved_order_claim_hash, expectedClaim.orderClaimHash)
     ) {
-      throw createStoreError('Operation id conflicts with an existing application.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
+      throw createStoreError('Operation id conflicts with an existing issuance.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
     }
   }
 
   const [codeRows] = await connection.execute(
-    `SELECT id, application_id, status, expires_at
+    `SELECT id, issuance_id, status, expires_at
        FROM book_benefit_codes
       WHERE issue_idempotency_key = ?
       LIMIT 1
@@ -432,11 +414,11 @@ async function findIdempotentIssue(connection, input, options) {
     [input.operationId]
   )
   const code = Array.isArray(codeRows) && codeRows.length ? codeRows[0] : null
-  if (!code || String(code.application_id) !== String(application.id) || code.status !== 'issued') {
+  if (!code || String(code.issuance_id) !== String(issuance.id) || code.status !== 'issued') {
     throw createStoreError('Existing code issuance is incomplete.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
   }
   const [auditRows] = await connection.execute(
-    `SELECT id, application_id, code_id, event_type, result
+    `SELECT id, issuance_id, code_id, event_type, result
        FROM book_benefit_audit_events
       WHERE event_id = ?
       LIMIT 1
@@ -446,9 +428,9 @@ async function findIdempotentIssue(connection, input, options) {
   const audit = Array.isArray(auditRows) && auditRows.length ? auditRows[0] : null
   if (
     !audit ||
-    String(audit.application_id) !== String(application.id) ||
+    String(audit.issuance_id) !== String(issuance.id) ||
     String(audit.code_id) !== String(code.id) ||
-    audit.event_type !== 'qualification_approved_code_issued' ||
+    audit.event_type !== 'unassigned_code_issued' ||
     audit.result !== 'succeeded'
   ) {
     throw createStoreError('Existing code issuance is incomplete.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
@@ -458,12 +440,11 @@ async function findIdempotentIssue(connection, input, options) {
     throw createStoreError('Existing code issuance is incomplete.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
   }
   return {
-    applicationId: String(application.id),
-    applicationNo: application.application_no,
+    issuanceId: String(issuance.id),
+    issuanceNo: issuance.issuance_no,
     codeId: String(code.id),
     codeExpiresAt,
-    campaignId: input.campaignId,
-    userId: String(application.applicant_user_id),
+    campaignId: campaign.campaignId,
     status: 'ISSUED_CODE_PLAINTEXT_UNAVAILABLE'
   }
 }
@@ -489,6 +470,19 @@ function configuredCampaignKey(options = {}) {
     throw createStoreError('Configured book-benefit campaign key is invalid.', 'BOOK_BENEFIT_CAMPAIGN_CONFIG_INVALID', 500)
   }
   return key
+}
+
+async function findConfiguredCampaignForUpdate(connection, options = {}) {
+  const key = configuredCampaignKey(options)
+  const [rows] = await connection.execute(
+    `SELECT id, campaign_key, name, status, benefit_days, rules_version, starts_at, ends_at
+       FROM book_benefit_campaigns
+      WHERE campaign_key = ?
+      LIMIT 1
+      FOR UPDATE`,
+    [key]
+  )
+  return mapConfiguredCampaign(Array.isArray(rows) && rows.length ? rows[0] : null, key)
 }
 
 function mapConfiguredCampaign(row, expectedKey) {
@@ -531,24 +525,24 @@ async function findConfiguredCampaign(connection, options = {}) {
 
 async function getIssueOperationStatus(connection, input, options) {
   const campaign = await findConfiguredCampaign(connection, options)
-  const [applicationRows] = await connection.execute(
-    `SELECT id, application_no, campaign_id, applicant_user_id, status
-       FROM book_benefit_applications
+  const [issuanceRows] = await connection.execute(
+    `SELECT id, issuance_no, campaign_id, status
+       FROM book_benefit_issuances
       WHERE create_idempotency_key = ?
       LIMIT 1`,
     [input.operationId]
   )
-  const application = Array.isArray(applicationRows) && applicationRows.length ? applicationRows[0] : null
-  if (!application) return { status: 'not_found' }
+  const issuance = Array.isArray(issuanceRows) && issuanceRows.length ? issuanceRows[0] : null
+  if (!issuance) return { status: 'not_found' }
   const base = {
-    applicationNo: application.application_no,
-    userId: String(application.applicant_user_id)
+    issuanceId: String(issuance.id),
+    issuanceNo: issuance.issuance_no
   }
-  if (String(application.campaign_id) !== campaign.campaignId || application.status !== 'approved') {
+  if (String(issuance.campaign_id) !== campaign.campaignId || issuance.status !== 'approved') {
     return { ...base, status: 'inconsistent' }
   }
   const [codeRows] = await connection.execute(
-    `SELECT id, application_id, status, replacement_code_id, expires_at
+    `SELECT id, issuance_id, status, replacement_code_id, expires_at
        FROM book_benefit_codes
       WHERE issue_idempotency_key = ?
       LIMIT 1`,
@@ -556,7 +550,7 @@ async function getIssueOperationStatus(connection, input, options) {
   )
   const code = Array.isArray(codeRows) && codeRows.length ? codeRows[0] : null
   const [auditRows] = await connection.execute(
-    `SELECT application_id, code_id, event_type, result
+    `SELECT issuance_id, code_id, event_type, result
        FROM book_benefit_audit_events
       WHERE event_id = ?
       LIMIT 1`,
@@ -565,10 +559,10 @@ async function getIssueOperationStatus(connection, input, options) {
   const audit = Array.isArray(auditRows) && auditRows.length ? auditRows[0] : null
   if (
     !code || !audit ||
-    String(code.application_id) !== String(application.id) ||
-    String(audit.application_id) !== String(application.id) ||
+    String(code.issuance_id) !== String(issuance.id) ||
+    String(audit.issuance_id) !== String(issuance.id) ||
     String(audit.code_id) !== String(code.id) ||
-    audit.event_type !== 'qualification_approved_code_issued' ||
+    audit.event_type !== 'unassigned_code_issued' ||
     audit.result !== 'succeeded'
   ) {
     return { ...base, status: 'inconsistent' }
@@ -582,14 +576,14 @@ async function getIssueOperationStatus(connection, input, options) {
   }
   if (code.status === 'voided' && code.replacement_code_id !== null) {
     const [replacementRows] = await connection.execute(
-      `SELECT id, application_id, expires_at
+      `SELECT id, issuance_id, expires_at
          FROM book_benefit_codes
         WHERE id = ?
         LIMIT 1`,
       [code.replacement_code_id]
     )
     const replacement = Array.isArray(replacementRows) && replacementRows.length ? replacementRows[0] : null
-    if (!replacement || String(replacement.application_id) !== String(application.id)) {
+    if (!replacement || String(replacement.issuance_id) !== String(issuance.id)) {
       return { ...codeBase, status: 'inconsistent' }
     }
     let replacementExpiresAt = null
@@ -608,7 +602,7 @@ async function getIssueOperationStatus(connection, input, options) {
 async function findReplacementByOperationForUpdate(connection, operationId) {
   const issueKey = replacementIssueIdempotencyKey(operationId)
   const [replacementRows] = await connection.execute(
-    `SELECT id, application_id, generation_no, status, expires_at, issue_idempotency_key
+    `SELECT id, issuance_id, generation_no, status, expires_at, issue_idempotency_key
        FROM book_benefit_codes
       WHERE issue_idempotency_key = ?
       LIMIT 1
@@ -618,14 +612,14 @@ async function findReplacementByOperationForUpdate(connection, operationId) {
   const replacement = Array.isArray(replacementRows) && replacementRows.length ? replacementRows[0] : null
   if (!replacement) return null
   const [originalRows] = await connection.execute(
-    `SELECT c.id, c.application_id, c.generation_no, c.status, c.replacement_code_id,
-            c.void_reason_code, a.campaign_id, a.applicant_user_id, a.status AS application_status,
+    `SELECT c.id, c.issuance_id, c.generation_no, c.status, c.replacement_code_id,
+            c.void_reason_code, i.campaign_id, i.status AS issuance_status,
             p.id AS campaign_record_id, p.status AS campaign_status, p.benefit_days,
             p.starts_at, p.ends_at,
             r.id AS redemption_record_id
        FROM book_benefit_codes c
-       JOIN book_benefit_applications a ON a.id = c.application_id
-       JOIN book_benefit_campaigns p ON p.id = a.campaign_id
+       JOIN book_benefit_issuances i ON i.id = c.issuance_id
+       JOIN book_benefit_campaigns p ON p.id = i.campaign_id
        LEFT JOIN book_benefit_redemptions r ON r.code_id = c.id
       WHERE c.replacement_code_id = ?
       LIMIT 1
@@ -641,9 +635,8 @@ function replacementResult(original, replacement, plaintextCode, status) {
     originalCodeId: String(original.id),
     replacementCodeId: String(replacement.id),
     codeExpiresAt: asDate(replacement.expires_at, 'Replacement code expiration time'),
-    applicationId: String(original.application_id),
+    issuanceId: String(original.issuance_id),
     campaignId: String(original.campaign_id),
-    userId: String(original.applicant_user_id),
     generationNo: Number(replacement.generation_no),
     status
   }
@@ -666,17 +659,17 @@ async function replaceIssuedBookBenefitCodeInTransaction(connection, input, opti
       String(original.replacement_code_id) !== String(replacement.id) ||
       original.void_reason_code !== input.reasonCode ||
       original.redemption_record_id !== null ||
-      original.application_status !== 'approved' ||
+      original.issuance_status !== 'approved' ||
       String(original.campaign_id) !== String(original.campaign_record_id) ||
       Number(original.benefit_days) !== 30 ||
       replacement.status !== 'issued' ||
-      String(replacement.application_id) !== String(original.application_id) ||
+      String(replacement.issuance_id) !== String(original.issuance_id) ||
       replacementGeneration !== originalGeneration + 1
     ) {
       throw createStoreError('Replacement operation conflicts with an existing record.', 'BOOK_BENEFIT_OPERATION_CONFLICT', 409)
     }
     const [auditRows] = await connection.execute(
-      `SELECT application_id, code_id, event_type, actor_type, actor_id, result, reason_code
+      `SELECT issuance_id, code_id, event_type, actor_type, actor_id, result, reason_code
          FROM book_benefit_audit_events
         WHERE event_id = ?
         LIMIT 1
@@ -686,7 +679,7 @@ async function replaceIssuedBookBenefitCodeInTransaction(connection, input, opti
     const audit = Array.isArray(auditRows) && auditRows.length ? auditRows[0] : null
     if (
       !audit ||
-      String(audit.application_id) !== String(original.application_id) ||
+      String(audit.issuance_id) !== String(original.issuance_id) ||
       String(audit.code_id) !== String(replacement.id) ||
       audit.event_type !== 'issued_code_replaced' ||
       audit.actor_type !== 'admin' ||
@@ -705,14 +698,14 @@ async function replaceIssuedBookBenefitCodeInTransaction(connection, input, opti
   }
 
   const [rows] = await connection.execute(
-    `SELECT c.id, c.application_id, c.generation_no, c.status, c.replacement_code_id,
-            a.id AS application_record_id, a.campaign_id, a.applicant_user_id,
-            a.status AS application_status, p.id AS campaign_record_id,
+    `SELECT c.id, c.issuance_id, c.generation_no, c.status, c.replacement_code_id,
+            i.id AS issuance_record_id, i.campaign_id,
+            i.status AS issuance_status, p.id AS campaign_record_id,
             p.status AS campaign_status, p.benefit_days, p.starts_at, p.ends_at,
             c.expires_at, r.id AS redemption_record_id
        FROM book_benefit_codes c
-       JOIN book_benefit_applications a ON a.id = c.application_id
-       JOIN book_benefit_campaigns p ON p.id = a.campaign_id
+       JOIN book_benefit_issuances i ON i.id = c.issuance_id
+       JOIN book_benefit_campaigns p ON p.id = i.campaign_id
        LEFT JOIN book_benefit_redemptions r ON r.code_id = c.id
       WHERE c.id = ?
       LIMIT 1
@@ -727,9 +720,9 @@ async function replaceIssuedBookBenefitCodeInTransaction(connection, input, opti
     throw createStoreError('Book-benefit code cannot be replaced.', 'BOOK_BENEFIT_CODE_UNAVAILABLE', 409)
   }
   if (
-    String(original.application_id) !== String(original.application_record_id) ||
+    String(original.issuance_id) !== String(original.issuance_record_id) ||
     String(original.campaign_id) !== String(original.campaign_record_id) ||
-    original.application_status !== 'approved' ||
+    original.issuance_status !== 'approved' ||
     Number(original.benefit_days) !== 30
   ) {
     throw createStoreError('Book-benefit code relationship is invalid.', 'BOOK_BENEFIT_RELATION_INVALID', 409)
@@ -779,12 +772,12 @@ async function replaceIssuedBookBenefitCodeInTransaction(connection, input, opti
   assertSingleRow(voidResult, 'Original book-benefit code')
   const [insertResult] = await connection.execute(
     `INSERT INTO book_benefit_codes (
-       application_id, generation_no, code_hash, code_hash_version, status,
+       issuance_id, generation_no, code_hash, code_hash_version, status,
        issue_idempotency_key, replacement_code_id, issued_by, issued_at, expires_at,
        redeemed_at, voided_at, voided_by, void_reason_code, created_at, updated_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      original.application_id,
+      original.issuance_id,
       originalGeneration + 1,
       codeIdentity.codeHash,
       codeIdentity.hashVersion,
@@ -812,13 +805,13 @@ async function replaceIssuedBookBenefitCodeInTransaction(connection, input, opti
   assertSingleRow(linkResult, 'Original book-benefit code replacement link')
   const [auditResult] = await connection.execute(
     `INSERT INTO book_benefit_audit_events (
-       event_id, campaign_id, application_id, code_id, redemption_record_id,
+       event_id, campaign_id, issuance_id, code_id, redemption_record_id,
        event_type, actor_type, actor_id, result, reason_code, created_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       replacementAuditEventId(input.operationId),
       original.campaign_id,
-      original.application_id,
+      original.issuance_id,
       replacementCodeId,
       null,
       'issued_code_replaced',
@@ -840,7 +833,7 @@ async function replaceIssuedBookBenefitCodeInTransaction(connection, input, opti
 
 async function findRedemptionByIdempotencyKey(connection, idempotencyKey) {
   const [rows] = await connection.execute(
-    `SELECT id, redemption_id, code_id, campaign_id, application_id, redeemer_user_id,
+    `SELECT id, redemption_id, code_id, campaign_id, issuance_id, redeemer_user_id,
             redeemer_phone_identity_hash, redeemer_phone_hash_version,
             membership_grant_id, entitlement_transaction_id
        FROM book_benefit_redemptions
@@ -854,12 +847,12 @@ async function findRedemptionByIdempotencyKey(connection, idempotencyKey) {
 
 async function findRedeemableCodeForUpdate(connection, codeHash) {
   const [rows] = await connection.execute(
-    `SELECT c.id AS code_id, c.application_id AS code_application_id, c.status AS code_status,
-            c.expires_at, a.id AS application_id, a.campaign_id, a.status AS application_status,
+    `SELECT c.id AS code_id, c.issuance_id AS code_issuance_id, c.status AS code_status,
+            c.expires_at, i.id AS issuance_id, i.campaign_id, i.status AS issuance_status,
             p.id AS campaign_record_id, p.benefit_days
        FROM book_benefit_codes c
-       LEFT JOIN book_benefit_applications a ON a.id = c.application_id
-       LEFT JOIN book_benefit_campaigns p ON p.id = a.campaign_id
+       LEFT JOIN book_benefit_issuances i ON i.id = c.issuance_id
+       LEFT JOIN book_benefit_campaigns p ON p.id = i.campaign_id
       WHERE c.code_hash = ? AND c.code_hash_version = 'v1'
       LIMIT 1
       FOR UPDATE`,
@@ -887,16 +880,16 @@ function assertRedeemableCode(row, now) {
     throw createStoreError('Book-benefit code has expired.', 'BOOK_BENEFIT_CODE_EXPIRED', 409)
   }
   if (
-    row.application_id === null || row.application_id === undefined ||
+    row.issuance_id === null || row.issuance_id === undefined ||
     row.campaign_id === null || row.campaign_id === undefined ||
     row.campaign_record_id === null || row.campaign_record_id === undefined ||
-    String(row.code_application_id) !== String(row.application_id) ||
+    String(row.code_issuance_id) !== String(row.issuance_id) ||
     String(row.campaign_id) !== String(row.campaign_record_id)
   ) {
     throw createStoreError('Book-benefit code relationship is invalid.', 'BOOK_BENEFIT_RELATION_INVALID', 409)
   }
-  if (row.application_status !== 'approved') {
-    throw createStoreError('Book-benefit application is not approved.', 'BOOK_BENEFIT_APPLICATION_INVALID', 409)
+  if (row.issuance_status !== 'approved') {
+    throw createStoreError('Book-benefit issuance is not approved.', 'BOOK_BENEFIT_ISSUANCE_INVALID', 409)
   }
   if (Number(row.benefit_days) !== 30) {
     throw createStoreError('Book-benefit campaign duration is invalid.', 'BOOK_BENEFIT_CAMPAIGN_INVALID', 409)
@@ -927,7 +920,7 @@ function createRedemptionResult(redemption, membership, idempotent) {
     redemptionId: redemption.redemption_id,
     codeId: String(redemption.code_id),
     campaignId: String(redemption.campaign_id),
-    applicationId: String(redemption.application_id),
+    issuanceId: String(redemption.issuance_id),
     userId: String(redemption.redeemer_user_id),
     grantId: String(membership.grantId),
     transactionId: membership.transactionId,
@@ -957,7 +950,7 @@ async function redeemBookBenefitCodeInTransaction(connection, input, options, en
       !code ||
       existing.redemption_id !== redemptionId(input.operationId) ||
       String(existing.code_id) !== String(code.code_id) ||
-      String(existing.application_id) !== String(code.application_id) ||
+      String(existing.issuance_id) !== String(code.issuance_id) ||
       String(existing.campaign_id) !== String(code.campaign_id) ||
       String(existing.redeemer_user_id) !== input.userId
     ) {
@@ -1034,7 +1027,7 @@ async function redeemBookBenefitCodeInTransaction(connection, input, options, en
   const businessRedemptionId = redemptionId(input.operationId)
   const [redemptionInsert] = await connection.execute(
     `INSERT INTO book_benefit_redemptions (
-       redemption_id, code_id, campaign_id, application_id, redeemer_user_id,
+       redemption_id, code_id, campaign_id, issuance_id, redeemer_user_id,
        redeemer_phone_identity_hash, redeemer_phone_hash_version, idempotency_key,
        membership_grant_id, entitlement_transaction_id, redeemed_at, created_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1042,7 +1035,7 @@ async function redeemBookBenefitCodeInTransaction(connection, input, options, en
       businessRedemptionId,
       code.code_id,
       code.campaign_id,
-      code.application_id,
+      code.issuance_id,
       input.userId,
       identity.campaignPhoneIdentityHash,
       identity.campaignPhoneHashVersion,
@@ -1063,13 +1056,13 @@ async function redeemBookBenefitCodeInTransaction(connection, input, options, en
   assertSingleRow(codeUpdate, 'Book-benefit code')
   const [auditInsert] = await connection.execute(
     `INSERT INTO book_benefit_audit_events (
-       event_id, campaign_id, application_id, code_id, redemption_record_id,
+       event_id, campaign_id, issuance_id, code_id, redemption_record_id,
        event_type, actor_type, actor_id, result, reason_code, created_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       redemptionAuditEventId(input.operationId),
       code.campaign_id,
-      code.application_id,
+      code.issuance_id,
       code.code_id,
       redemptionRecordId,
       'code_redeemed_membership_granted',
@@ -1086,52 +1079,39 @@ async function redeemBookBenefitCodeInTransaction(connection, input, options, en
     redemption_id: businessRedemptionId,
     code_id: code.code_id,
     campaign_id: code.campaign_id,
-    application_id: code.application_id,
+    issuance_id: code.issuance_id,
     redeemer_user_id: input.userId
   }, membership, false)
 }
 
-async function insertApplication(connection, values) {
+async function insertIssuance(connection, values) {
   const [result] = await connection.execute(
-    `INSERT INTO book_benefit_applications (
-       application_no, campaign_id, applicant_user_id,
-       applicant_phone_identity_hash, applicant_phone_hash_version,
-       order_claim_type, approved_order_claim_hash, order_claim_hash_version,
-       order_channel, status, reviewed_by, review_reason_code, reviewed_at,
-       create_idempotency_key, accepted_rules_version, rules_accepted_at,
-       seller_verification_code, customer_service_channel, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO book_benefit_issuances (
+       issuance_no, campaign_id, qualification_rules_version, order_claim_type,
+       approved_order_claim_hash, order_claim_hash_version, order_channel, status,
+       reviewed_by, review_reason_code, reviewed_at, seller_verification_code,
+       customer_service_channel, create_idempotency_key, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     values
   )
-  return assertInsertId(result, 'Book-benefit application')
+  return assertInsertId(result, 'Book-benefit issuance')
 }
 
-async function issueApprovedBookBenefitCodeInTransaction(connection, input, options) {
+async function issueUnassignedBookBenefitCodeInTransaction(connection, input, options) {
   const existing = await findIdempotentIssue(connection, input, options)
   if (existing) return existing
 
-  const identity = await findBookBenefitAdminIdentityInTransaction(
-    connection,
-    input.locator,
-    {
-      forUpdate: true,
-      phoneHashSecret: options.phoneHashSecret === undefined
-        ? process.env.PHONE_HASH_SECRET
-        : options.phoneHashSecret
-    }
-  )
-  const campaign = await findCampaignForUpdate(connection, input.campaignId)
-  assertCampaignAvailable(campaign, input.campaignId, input.now)
+  const campaign = await findConfiguredCampaignForUpdate(connection, options)
+  assertCampaignAvailable({
+    id: campaign.campaignId,
+    status: campaign.status,
+    benefit_days: campaign.benefitDays,
+    starts_at: campaign.startsAt,
+    ends_at: campaign.endsAt
+  }, campaign.campaignId, input.now)
 
-  const appNo = applicationNumber(input.operationId)
-  const commonApplicationValues = [
-    appNo,
-    input.campaignId,
-    identity.userId,
-    identity.campaignPhoneIdentityHash,
-    identity.campaignPhoneHashVersion
-  ]
-  let applicationId = ''
+  const issuanceNo = issuanceNumber(input.operationId)
+  let issuanceId = ''
 
   if (input.orderClaimType === 'standard') {
     const orderClaim = createStandardOrderClaimHash({
@@ -1143,8 +1123,10 @@ async function issueApprovedBookBenefitCodeInTransaction(connection, input, opti
         : options.orderClaimHashSecret,
       env: options.secretEnv || process.env
     })
-    applicationId = await insertApplication(connection, [
-      ...commonApplicationValues,
+    issuanceId = await insertIssuance(connection, [
+      issuanceNo,
+      campaign.campaignId,
+      campaign.rulesVersion,
       'standard',
       orderClaim.orderClaimHash,
       orderClaim.hashVersion,
@@ -1153,36 +1135,34 @@ async function issueApprovedBookBenefitCodeInTransaction(connection, input, opti
       input.operatorId,
       null,
       input.now,
-      input.operationId,
-      null,
-      null,
       input.sellerVerificationCode,
       input.customerServiceChannel,
+      input.operationId,
       input.now,
       input.now
     ])
   } else {
-    applicationId = await insertApplication(connection, [
-      ...commonApplicationValues,
-      'unreviewed',
+    issuanceId = await insertIssuance(connection, [
+      issuanceNo,
+      campaign.campaignId,
+      campaign.rulesVersion,
+      'manual_exception',
       null,
       null,
       null,
-      'pending',
-      null,
-      null,
-      null,
-      input.operationId,
-      null,
-      null,
+      'approved',
+      input.operatorId,
+      input.manualExceptionReasonCode,
+      input.now,
       input.sellerVerificationCode,
       input.customerServiceChannel,
+      input.operationId,
       input.now,
       input.now
     ])
-    const orderClaim = createManualExceptionOrderClaimHash({
-      campaignId: input.campaignId,
-      applicationId
+    const orderClaim = createManualExceptionIssuanceClaimHash({
+      campaignId: campaign.campaignId,
+      issuanceId
     }, {
       secret: options.orderClaimHashSecret === undefined
         ? process.env.BOOK_ORDER_CLAIM_HASH_SECRET
@@ -1190,24 +1170,17 @@ async function issueApprovedBookBenefitCodeInTransaction(connection, input, opti
       env: options.secretEnv || process.env
     })
     const [updateResult] = await connection.execute(
-      `UPDATE book_benefit_applications
-          SET order_claim_type = ?, approved_order_claim_hash = ?, order_claim_hash_version = ?,
-              status = ?, reviewed_by = ?, review_reason_code = ?, reviewed_at = ?, updated_at = ?
-        WHERE id = ? AND status = ?`,
+      `UPDATE book_benefit_issuances
+          SET approved_order_claim_hash = ?, order_claim_hash_version = ?, updated_at = ?
+        WHERE id = ? AND status = 'approved' AND approved_order_claim_hash IS NULL`,
       [
-        'manual_exception',
         orderClaim.orderClaimHash,
         orderClaim.hashVersion,
-        'approved',
-        input.operatorId,
-        input.manualExceptionReasonCode,
         input.now,
-        input.now,
-        applicationId,
-        'pending'
+        issuanceId
       ]
     )
-    assertSingleRow(updateResult, 'Book-benefit application')
+    assertSingleRow(updateResult, 'Book-benefit issuance')
   }
 
   const plaintextCode = generateBookBenefitRedemptionCode()
@@ -1220,12 +1193,12 @@ async function issueApprovedBookBenefitCodeInTransaction(connection, input, opti
   const codeExpiresAt = new Date(input.now.getTime() + CODE_VALIDITY_MILLISECONDS)
   const [codeInsertResult] = await connection.execute(
     `INSERT INTO book_benefit_codes (
-       application_id, generation_no, code_hash, code_hash_version, status,
+       issuance_id, generation_no, code_hash, code_hash_version, status,
        issue_idempotency_key, replacement_code_id, issued_by, issued_at, expires_at,
        redeemed_at, voided_at, voided_by, void_reason_code, created_at, updated_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      applicationId,
+      issuanceId,
       1,
       codeIdentity.codeHash,
       codeIdentity.hashVersion,
@@ -1247,16 +1220,16 @@ async function issueApprovedBookBenefitCodeInTransaction(connection, input, opti
 
   const [auditInsertResult] = await connection.execute(
     `INSERT INTO book_benefit_audit_events (
-       event_id, campaign_id, application_id, code_id, redemption_record_id,
+       event_id, campaign_id, issuance_id, code_id, redemption_record_id,
        event_type, actor_type, actor_id, result, reason_code, created_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       auditEventId(input.operationId),
-      input.campaignId,
-      applicationId,
+      campaign.campaignId,
+      issuanceId,
       codeId,
       null,
-      'qualification_approved_code_issued',
+      'unassigned_code_issued',
       'admin',
       input.operatorId,
       'succeeded',
@@ -1267,13 +1240,12 @@ async function issueApprovedBookBenefitCodeInTransaction(connection, input, opti
   assertSingleRow(auditInsertResult, 'Book-benefit audit event')
 
   return {
-    applicationId,
-    applicationNo: appNo,
+    issuanceId,
+    issuanceNo,
     codeId,
     plaintextCode,
     codeExpiresAt,
-    campaignId: input.campaignId,
-    userId: identity.userId,
+    campaignId: campaign.campaignId,
     status: 'issued'
   }
 }
@@ -1282,11 +1254,9 @@ function mapDuplicateError(error) {
   if (!error || error.code !== 'ER_DUP_ENTRY') return error
   const detail = String(error.constraint || error.sqlMessage || error.message || '')
   const mappings = [
-    ['uk_book_benefit_applications_campaign_user', 'BOOK_BENEFIT_CAMPAIGN_USER_CONFLICT'],
-    ['uk_book_benefit_applications_campaign_phone', 'BOOK_BENEFIT_CAMPAIGN_PHONE_CONFLICT'],
-    ['uk_book_benefit_applications_campaign_order', 'BOOK_BENEFIT_ORDER_CONFLICT'],
+    ['uk_book_benefit_issuances_campaign_order', 'BOOK_BENEFIT_ORDER_CONFLICT'],
     ['uk_book_benefit_codes_hash', 'BOOK_BENEFIT_CODE_HASH_CONFLICT'],
-    ['uk_book_benefit_applications_idempotency', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
+    ['uk_book_benefit_issuances_idempotency', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
     ['uk_book_benefit_codes_issue_idempotency', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
     ['uk_book_benefit_audit_events_event_id', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
     ['uk_membership_grants_idempotency', 'BOOK_BENEFIT_OPERATION_CONFLICT'],
@@ -1333,7 +1303,7 @@ export function createBookBenefitStore(options = {}) {
     return pool
   }
 
-  async function issueApprovedBookBenefitCode(rawInput = {}) {
+  async function issueUnassignedBookBenefitCode(rawInput = {}) {
     const input = normalizeIssueInput(rawInput)
     const connection = await getPool().getConnection()
     let transactionStarted = false
@@ -1344,7 +1314,7 @@ export function createBookBenefitStore(options = {}) {
     try {
       await connection.beginTransaction()
       transactionStarted = true
-      result = await issueApprovedBookBenefitCodeInTransaction(connection, input, options)
+      result = await issueUnassignedBookBenefitCodeInTransaction(connection, input, options)
       await connection.commit()
       transactionStarted = false
       transactionCommitted = true
@@ -1488,7 +1458,7 @@ export function createBookBenefitStore(options = {}) {
   }
 
   return {
-    issueApprovedBookBenefitCode,
+    issueUnassignedBookBenefitCode,
     redeemBookBenefitCode,
     getConfiguredBookBenefitCampaign,
     getBookBenefitIssueOperationStatus,

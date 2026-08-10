@@ -129,13 +129,13 @@ export function createStandardOrderClaimHash(input = {}, options = {}) {
   }
 }
 
-export function createManualExceptionOrderClaimHash(input = {}, options = {}) {
+export function createManualExceptionIssuanceClaimHash(input = {}, options = {}) {
   const campaignId = normalizeUnsignedId(input.campaignId, 'Campaign id')
-  const applicationId = normalizeUnsignedId(input.applicationId, 'Application id')
+  const issuanceId = normalizeUnsignedId(input.issuanceId, 'Issuance id')
   const secret = resolveOrderClaimSecret(options)
 
   return {
-    orderClaimHash: hmacSha256Buffer(secret, `manual-exception:${campaignId}:${applicationId}`),
+    orderClaimHash: hmacSha256Buffer(secret, `manual-exception:${campaignId}:${issuanceId}`),
     hashVersion: HASH_VERSION
   }
 }

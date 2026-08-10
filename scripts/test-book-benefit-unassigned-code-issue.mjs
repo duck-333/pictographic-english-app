@@ -5,19 +5,14 @@ import {
   generateBookBenefitRedemptionCode,
   hashBookBenefitRedemptionCode
 } from '../server/book-benefit-code.mjs'
-import { createManualExceptionOrderClaimHash } from '../server/book-benefit-foundation.mjs'
+import { createManualExceptionIssuanceClaimHash } from '../server/book-benefit-foundation.mjs'
 import { createBookBenefitStore } from '../server/book-benefit-store.mjs'
-import { hashPhone } from '../server/identity-store.mjs'
 
 const NOW = new Date('2026-08-09T03:04:05.000Z')
-const PHONE_SECRET = 'fake-book-benefit-phone-secret-for-tests-only'
 const ORDER_SECRET = 'fake-book-benefit-order-secret-32-bytes-for-tests-only'
 const CODE_SECRET = 'fake-redemption-code-secret-32-bytes-for-tests-only'
-const FULL_PHONE = '+86 100 0000 0000'
 const ORDER_NUMBER = 'FAKE-ORDER-900001'
-const CAMPAIGN_HASH = Buffer.alloc(32, 0x45)
 const SECRET_ENV = {
-  PHONE_HASH_SECRET: PHONE_SECRET,
   BOOK_ORDER_CLAIM_HASH_SECRET: ORDER_SECRET,
   CAMPAIGN_PHONE_IDENTITY_HASH_SECRET: 'different-fake-campaign-secret-32-bytes',
   JWT_SECRET: 'different-fake-jwt-secret-32-bytes',
@@ -40,11 +35,10 @@ function cloneRecord(record) {
 function cloneDatabase(database) {
   return {
     campaigns: database.campaigns.map(cloneRecord),
-    phoneBindings: database.phoneBindings.map(cloneRecord),
-    applications: database.applications.map(cloneRecord),
+    issuances: database.issuances.map(cloneRecord),
     codes: database.codes.map(cloneRecord),
     audits: database.audits.map(cloneRecord),
-    nextApplicationId: database.nextApplicationId,
+    nextIssuanceId: database.nextIssuanceId,
     nextCodeId: database.nextCodeId,
     nextAuditId: database.nextAuditId
   }
@@ -54,36 +48,21 @@ function createDatabase(overrides = {}) {
   return {
     campaigns: overrides.campaigns || [{
       id: '1',
+      campaign_key: 'book-benefit-30d-v1',
+      name: '购书用户30天会员福利',
       status: 'active',
       benefit_days: 30,
       starts_at: new Date('2026-08-01T00:00:00.000Z'),
       ends_at: new Date('2026-09-01T00:00:00.000Z'),
-      rules_version: null
+      rules_version: 'book-benefit-rules-v1'
     }],
-    phoneBindings: overrides.phoneBindings || [{
-      id: '11',
-      user_id: '10',
-      phone_hash: hashPhone(FULL_PHONE, { secret: PHONE_SECRET }).phoneHash,
-      phone_masked: '100****0000',
-      campaign_phone_identity_hash: Buffer.from(CAMPAIGN_HASH),
-      campaign_phone_hash_version: 'v1',
-      status: 'active',
-      last_verified_at: new Date('2026-08-08T00:00:00.000Z')
-    }],
-    applications: overrides.applications || [],
+    issuances: overrides.issuances || [],
     codes: overrides.codes || [],
     audits: overrides.audits || [],
-    nextApplicationId: overrides.nextApplicationId || 101,
+    nextIssuanceId: overrides.nextIssuanceId || 101,
     nextCodeId: overrides.nextCodeId || 201,
     nextAuditId: overrides.nextAuditId || 301
   }
-}
-
-function phoneBindingColumns() {
-  return [
-    { Field: 'campaign_phone_identity_hash', Type: 'binary(32)', Extra: '' },
-    { Field: 'campaign_phone_hash_version', Type: 'varchar(16)', Extra: '' }
-  ]
 }
 
 function parseInsertColumns(sql) {
@@ -96,12 +75,6 @@ function rowFromInsert(sql, values) {
   const columns = parseInsertColumns(sql)
   assert.equal(columns.length, values.length)
   return Object.fromEntries(columns.map((column, index) => [column, cloneValue(values[index])]))
-}
-
-function compareLatest(left, right) {
-  const timeDifference = new Date(right.last_verified_at).getTime() - new Date(left.last_verified_at).getTime()
-  if (timeDifference !== 0) return timeDifference
-  return Number(BigInt(right.id) - BigInt(left.id))
 }
 
 function duplicateError(indexName) {
@@ -153,8 +126,7 @@ function createFakeConnection(sharedDatabase, scenario = {}) {
     },
     async query(sql) {
       calls.push({ type: 'query', sql, values: [] })
-      assert.match(sql, /SHOW COLUMNS FROM `user_phone_bindings`/)
-      return [phoneBindingColumns()]
+      throw new Error('Issuance must not query identity schema')
     },
     async execute(sql, values = []) {
       const savedValues = values.map(cloneValue)
@@ -162,8 +134,8 @@ function createFakeConnection(sharedDatabase, scenario = {}) {
       const compact = sql.replace(/\s+/g, ' ').trim()
       const database = activeDatabase()
 
-      if (/FROM book_benefit_applications WHERE create_idempotency_key = \?/i.test(compact)) {
-        const row = database.applications.find((item) => item.create_idempotency_key === values[0])
+      if (/FROM book_benefit_issuances WHERE create_idempotency_key = \?/i.test(compact)) {
+        const row = database.issuances.find((item) => item.create_idempotency_key === values[0])
         return [row ? [cloneRecord(row)] : []]
       }
       if (/FROM book_benefit_codes WHERE issue_idempotency_key = \?/i.test(compact)) {
@@ -174,68 +146,43 @@ function createFakeConnection(sharedDatabase, scenario = {}) {
         const row = database.audits.find((item) => item.event_id === values[0])
         return [row ? [cloneRecord(row)] : []]
       }
-      if (/FROM `user_phone_bindings`/i.test(compact) && /WHERE phone_hash = \?/i.test(compact)) {
-        const row = database.phoneBindings.find(
-          (item) => item.status === 'active' && item.phone_hash === values[0]
-        )
-        return [row ? [{ id: row.id, user_id: row.user_id, phone_hash: row.phone_hash }] : []]
-      }
-      if (/FROM `user_phone_bindings`/i.test(compact) && /WHERE user_id = \?/i.test(compact)) {
-        const row = database.phoneBindings
-          .filter((item) => item.status === 'active' && String(item.user_id) === String(values[0]))
-          .sort(compareLatest)[0]
-        return [row ? [cloneRecord(row)] : []]
-      }
       if (/FROM book_benefit_campaigns/i.test(compact)) {
         maybeFail('campaign')
-        const row = database.campaigns.find((item) => String(item.id) === String(values[0]))
+        const row = database.campaigns.find((item) =>
+          /campaign_key = \?/i.test(compact)
+            ? item.campaign_key === values[0]
+            : String(item.id) === String(values[0])
+        )
         return [row ? [cloneRecord(row)] : []]
       }
-      if (/INSERT INTO book_benefit_applications/i.test(compact)) {
-        maybeFail('application')
+      if (/INSERT INTO book_benefit_issuances/i.test(compact)) {
+        maybeFail('issuance')
         const row = rowFromInsert(sql, values)
-        if (database.applications.some((item) =>
-          String(item.campaign_id) === String(row.campaign_id) &&
-          String(item.applicant_user_id) === String(row.applicant_user_id)
-        )) {
-          throw duplicateError('uk_book_benefit_applications_campaign_user')
-        }
-        if (database.applications.some((item) =>
-          String(item.campaign_id) === String(row.campaign_id) &&
-          Buffer.from(item.applicant_phone_identity_hash).equals(row.applicant_phone_identity_hash)
-        )) {
-          throw duplicateError('uk_book_benefit_applications_campaign_phone')
-        }
-        if (row.approved_order_claim_hash && database.applications.some((item) =>
+        if (row.approved_order_claim_hash && database.issuances.some((item) =>
           String(item.campaign_id) === String(row.campaign_id) &&
           item.approved_order_claim_hash &&
           Buffer.from(item.approved_order_claim_hash).equals(row.approved_order_claim_hash)
         )) {
-          throw duplicateError('uk_book_benefit_applications_campaign_order')
+          throw duplicateError('uk_book_benefit_issuances_campaign_order')
         }
-        if (database.applications.some((item) =>
+        if (database.issuances.some((item) =>
           item.create_idempotency_key === row.create_idempotency_key
         )) {
-          throw duplicateError('uk_book_benefit_applications_idempotency')
+          throw duplicateError('uk_book_benefit_issuances_idempotency')
         }
-        row.id = String(database.nextApplicationId++)
-        database.applications.push(row)
+        row.id = String(database.nextIssuanceId++)
+        database.issuances.push(row)
         return [{ insertId: row.id, affectedRows: 1 }]
       }
-      if (/UPDATE book_benefit_applications/i.test(compact)) {
-        maybeFail('application_update')
-        const applicationId = String(values[8])
-        const row = database.applications.find((item) => String(item.id) === applicationId)
-        if (!row || row.status !== values[9]) return [{ affectedRows: 0 }]
+      if (/UPDATE book_benefit_issuances/i.test(compact)) {
+        maybeFail('issuance_update')
+        const issuanceId = String(values[3])
+        const row = database.issuances.find((item) => String(item.id) === issuanceId)
+        if (!row || row.status !== 'approved' || row.approved_order_claim_hash !== null) return [{ affectedRows: 0 }]
         Object.assign(row, {
-          order_claim_type: values[0],
-          approved_order_claim_hash: cloneValue(values[1]),
-          order_claim_hash_version: values[2],
-          status: values[3],
-          reviewed_by: values[4],
-          review_reason_code: values[5],
-          reviewed_at: cloneValue(values[6]),
-          updated_at: cloneValue(values[7])
+          approved_order_claim_hash: cloneValue(values[0]),
+          order_claim_hash_version: values[1],
+          updated_at: cloneValue(values[2])
         })
         return [{ affectedRows: 1 }]
       }
@@ -277,7 +224,6 @@ function createStore(database, scenario = {}) {
     pool,
     store: createBookBenefitStore({
       pool,
-      phoneHashSecret: PHONE_SECRET,
       orderClaimHashSecret: ORDER_SECRET,
       redemptionCodeHashSecret: CODE_SECRET,
       secretEnv: SECRET_ENV
@@ -287,8 +233,6 @@ function createStore(database, scenario = {}) {
 
 function standardInput(overrides = {}) {
   return {
-    campaignId: '1',
-    locator: { userId: '10' },
     orderClaimType: 'standard',
     orderChannel: 'taobao',
     orderNumber: ORDER_NUMBER,
@@ -303,8 +247,6 @@ function standardInput(overrides = {}) {
 
 function manualInput(overrides = {}) {
   return {
-    campaignId: '1',
-    locator: { userId: '10' },
     orderClaimType: 'manual_exception',
     manualExceptionReasonCode: 'historical_evidence_unavailable',
     sellerVerificationCode: 'unverified',
@@ -323,22 +265,19 @@ function assertConnectionLifecycle(connection, expected) {
 
 function assertReturnWhitelist(result, includesPlaintext) {
   const expectedKeys = [
-    'applicationId',
-    'applicationNo',
     'campaignId',
     'codeExpiresAt',
     'codeId',
-    'status',
-    'userId'
+    'issuanceId',
+    'issuanceNo',
+    'status'
   ]
   if (includesPlaintext) expectedKeys.push('plaintextCode')
   assert.deepEqual(Object.keys(result).sort(), expectedKeys.sort())
   const serialized = JSON.stringify(result)
-  assert.equal(serialized.includes(FULL_PHONE), false)
   assert.equal(serialized.includes(ORDER_NUMBER), false)
   assert.equal(serialized.includes(CODE_SECRET), false)
   assert.equal(serialized.includes(ORDER_SECRET), false)
-  assert.equal(serialized.includes(CAMPAIGN_HASH.toString('hex')), false)
 }
 
 function allExecuteCalls(pool) {
@@ -350,7 +289,6 @@ function assertNoSensitivePersistentValues(pool, plaintextCode) {
   for (const call of allExecuteCalls(pool)) {
     for (const value of call.values) {
       if (typeof value !== 'string') continue
-      assert.equal(value.includes(FULL_PHONE), false)
       assert.equal(value.includes(ORDER_NUMBER), false)
       assert.equal(value.includes(plaintextCode), false)
       assert.equal(value.includes(CODE_SECRET), false)
@@ -406,7 +344,7 @@ async function testStandardSuccess() {
       assert.equal(settled, false)
     }
   })
-  const promise = store.issueApprovedBookBenefitCode(standardInput())
+  const promise = store.issueUnassignedBookBenefitCode(standardInput())
   promise.finally(() => { settled = true })
   const result = await promise
   assert.equal(settled, true)
@@ -415,25 +353,21 @@ async function testStandardSuccess() {
   assert.equal(result.codeExpiresAt.getTime() - NOW.getTime(), 30 * 24 * 60 * 60 * 1000)
   assertReturnWhitelist(result, true)
 
-  assert.equal(database.applications.length, 1)
+  assert.equal(database.issuances.length, 1)
   assert.equal(database.codes.length, 1)
   assert.equal(database.audits.length, 1)
-  const application = database.applications[0]
-  assert.equal(application.status, 'approved')
-  assert.equal(application.order_claim_type, 'standard')
-  assert.equal(application.order_channel, 'taobao')
-  assert.equal(application.applicant_user_id, '10')
-  assert.deepEqual(application.applicant_phone_identity_hash, CAMPAIGN_HASH)
-  assert.equal(application.applicant_phone_hash_version, 'v1')
-  assert.equal(application.reviewed_by, 'admin-1')
-  assert.deepEqual(application.reviewed_at, NOW)
-  assert.equal(application.seller_verification_code, 'official_store')
-  assert.equal(application.customer_service_channel, 'taobao_cs')
-  assert(Buffer.isBuffer(application.approved_order_claim_hash))
-  assert.equal(application.approved_order_claim_hash.length, 32)
-  assert.equal(application.accepted_rules_version, null)
-  assert.equal(application.rules_accepted_at, null)
-  assert.equal(application.create_idempotency_key, 'issue-operation-1')
+  const issuance = database.issuances[0]
+  assert.equal(issuance.status, 'approved')
+  assert.equal(issuance.order_claim_type, 'standard')
+  assert.equal(issuance.order_channel, 'taobao')
+  assert.equal(issuance.qualification_rules_version, 'book-benefit-rules-v1')
+  assert.equal(issuance.reviewed_by, 'admin-1')
+  assert.deepEqual(issuance.reviewed_at, NOW)
+  assert.equal(issuance.seller_verification_code, 'official_store')
+  assert.equal(issuance.customer_service_channel, 'taobao_cs')
+  assert(Buffer.isBuffer(issuance.approved_order_claim_hash))
+  assert.equal(issuance.approved_order_claim_hash.length, 32)
+  assert.equal(issuance.create_idempotency_key, 'issue-operation-1')
   const code = database.codes[0]
   assert.equal(code.generation_no, 1)
   assert.equal(code.status, 'issued')
@@ -443,7 +377,7 @@ async function testStandardSuccess() {
   assert.equal(code.replacement_code_id, null)
   assert.equal(code.issue_idempotency_key, 'issue-operation-1')
   assert.equal(code.issued_by, 'admin-1')
-  assert.equal(database.audits[0].event_type, 'qualification_approved_code_issued')
+  assert.equal(database.audits[0].event_type, 'unassigned_code_issued')
   assert.match(database.audits[0].event_id, /^bbev_[a-f0-9]{59}$/)
   assert.equal(database.audits[0].actor_type, 'admin')
   assert.equal(database.audits[0].actor_id, 'admin-1')
@@ -459,27 +393,25 @@ async function testStandardSuccess() {
 async function testManualSuccess() {
   const database = createDatabase()
   const { store, pool } = createStore(database)
-  const result = await store.issueApprovedBookBenefitCode(manualInput())
-  const application = database.applications[0]
-  assert.equal(application.id, result.applicationId)
-  assert.equal(application.status, 'approved')
-  assert.equal(application.order_claim_type, 'manual_exception')
-  assert.equal(application.order_channel, null)
-  assert.equal(application.review_reason_code, 'historical_evidence_unavailable')
-  assert.equal(application.reviewed_by, 'admin-1')
-  assert.deepEqual(application.reviewed_at, NOW)
-  assert.equal(application.seller_verification_code, 'unverified')
-  assert.equal(application.customer_service_channel, 'wechat_official_cs')
-  assert.equal(application.accepted_rules_version, null)
-  assert.equal(application.rules_accepted_at, null)
-  const expectedClaim = createManualExceptionOrderClaimHash({
+  const result = await store.issueUnassignedBookBenefitCode(manualInput())
+  const issuance = database.issuances[0]
+  assert.equal(issuance.id, result.issuanceId)
+  assert.equal(issuance.status, 'approved')
+  assert.equal(issuance.order_claim_type, 'manual_exception')
+  assert.equal(issuance.order_channel, null)
+  assert.equal(issuance.review_reason_code, 'historical_evidence_unavailable')
+  assert.equal(issuance.reviewed_by, 'admin-1')
+  assert.deepEqual(issuance.reviewed_at, NOW)
+  assert.equal(issuance.seller_verification_code, 'unverified')
+  assert.equal(issuance.customer_service_channel, 'wechat_official_cs')
+  const expectedClaim = createManualExceptionIssuanceClaimHash({
     campaignId: '1',
-    applicationId: result.applicationId
+    issuanceId: result.issuanceId
   }, {
     secret: ORDER_SECRET,
     env: SECRET_ENV
   })
-  assert.deepEqual(application.approved_order_claim_hash, expectedClaim.orderClaimHash)
+  assert.deepEqual(issuance.approved_order_claim_hash, expectedClaim.orderClaimHash)
   assert.equal(database.audits[0].reason_code, 'historical_evidence_unavailable')
   const transactionCallTypes = pool.connections[0].calls.map((call) => call.type)
   assert(transactionCallTypes.indexOf('commit') > transactionCallTypes.findIndex(
@@ -488,20 +420,13 @@ async function testManualSuccess() {
   assertConnectionLifecycle(pool.connections[0], { begin: 1, commit: 1, rollback: 0, release: 1 })
 }
 
-async function testPhoneLocatorUsesTrustedHelper() {
+async function testIssuanceDoesNotUseIdentityLookup() {
   const database = createDatabase()
   const { store, pool } = createStore(database)
-  const result = await store.issueApprovedBookBenefitCode(standardInput({
-    locator: { phone: FULL_PHONE },
-    operationId: 'phone-locator-operation'
-  }))
-  assert.equal(result.userId, '10')
-  const calls = allExecuteCalls(pool)
-  assert(calls.some((call) => /FROM `user_phone_bindings`/.test(call.sql) && /phone_hash/.test(call.sql)))
-  assert(calls.some((call) => /ORDER BY last_verified_at DESC, id DESC/.test(call.sql)))
-  assert(calls.filter((call) => /FROM `user_phone_bindings`/.test(call.sql)).every(
-    (call) => /FOR UPDATE$/.test(call.sql.trim())
-  ))
+  await store.issueUnassignedBookBenefitCode(standardInput())
+  const calls = pool.connections[0].calls
+  assert.equal(calls.some((call) => call.type === 'query'), false)
+  assert.equal(calls.some((call) => /user_phone_bindings|phone_hash|applicant/i.test(call.sql || '')), false)
 }
 
 async function testCampaignFailures() {
@@ -510,27 +435,27 @@ async function testCampaignFailures() {
     [[{ ...createDatabase().campaigns[0], status: 'paused' }], 'BOOK_BENEFIT_CAMPAIGN_NOT_ACTIVE'],
     [[{ ...createDatabase().campaigns[0], starts_at: new Date('2026-08-10T00:00:00.000Z') }], 'BOOK_BENEFIT_CAMPAIGN_NOT_STARTED'],
     [[{ ...createDatabase().campaigns[0], ends_at: new Date('2026-08-09T00:00:00.000Z') }], 'BOOK_BENEFIT_CAMPAIGN_ENDED'],
-    [[{ ...createDatabase().campaigns[0], benefit_days: 31 }], 'BOOK_BENEFIT_CAMPAIGN_INVALID']
+    [[{ ...createDatabase().campaigns[0], benefit_days: 31 }], 'BOOK_BENEFIT_CAMPAIGN_CONFIG_INVALID']
   ]
   for (const [campaigns, code] of cases) {
     const database = createDatabase({ campaigns })
     const { store, pool } = createStore(database)
     await assert.rejects(
-      () => store.issueApprovedBookBenefitCode(standardInput()),
+      () => store.issueUnassignedBookBenefitCode(standardInput()),
       (error) => error.code === code
     )
-    assert.equal(database.applications.length, 0)
+    assert.equal(database.issuances.length, 0)
     assertConnectionLifecycle(pool.connections[0], { begin: 1, commit: 0, rollback: 1, release: 1 })
   }
 }
 
 async function testAtomicFailures() {
-  for (const failStep of ['application', 'application_update', 'code', 'audit']) {
+  for (const failStep of ['issuance', 'issuance_update', 'code', 'audit']) {
     const database = createDatabase()
     const { store, pool } = createStore(database, { failStep })
-    const input = failStep === 'application_update' ? manualInput() : standardInput()
-    await assert.rejects(() => store.issueApprovedBookBenefitCode(input))
-    assert.equal(database.applications.length, 0)
+    const input = failStep === 'issuance_update' ? manualInput() : standardInput()
+    await assert.rejects(() => store.issueUnassignedBookBenefitCode(input))
+    assert.equal(database.issuances.length, 0)
     assert.equal(database.codes.length, 0)
     assert.equal(database.audits.length, 0)
     assertConnectionLifecycle(pool.connections[0], { begin: 1, commit: 0, rollback: 1, release: 1 })
@@ -540,38 +465,36 @@ async function testAtomicFailures() {
 async function testIdempotentReplay() {
   const database = createDatabase()
   const { store, pool } = createStore(database)
-  const first = await store.issueApprovedBookBenefitCode(standardInput())
-  const replay = await store.issueApprovedBookBenefitCode(standardInput())
+  const first = await store.issueUnassignedBookBenefitCode(standardInput())
+  const replay = await store.issueUnassignedBookBenefitCode(standardInput())
   assert.equal(replay.status, 'ISSUED_CODE_PLAINTEXT_UNAVAILABLE')
   assert.equal(Object.hasOwn(replay, 'plaintextCode'), false)
-  assert.equal(replay.applicationId, first.applicationId)
+  assert.equal(replay.issuanceId, first.issuanceId)
   assert.equal(replay.codeId, first.codeId)
-  assert.equal(database.applications.length, 1)
+  assert.equal(database.issuances.length, 1)
   assert.equal(database.codes.length, 1)
   assert.equal(database.audits.length, 1)
   assertReturnWhitelist(replay, false)
   assert.equal(allExecuteCalls({ connections: [pool.connections[1]] }).some(
-    (call) => /INSERT INTO book_benefit_(applications|codes|audit_events)/i.test(call.sql)
+    (call) => /INSERT INTO book_benefit_(issuances|codes|audit_events)/i.test(call.sql)
   ), false)
   assertConnectionLifecycle(pool.connections[1], { begin: 1, commit: 1, rollback: 0, release: 1 })
 }
 
 async function testDuplicateConflicts() {
   const cases = [
-    ['application', 'uk_book_benefit_applications_campaign_user', 'BOOK_BENEFIT_CAMPAIGN_USER_CONFLICT'],
-    ['application', 'uk_book_benefit_applications_campaign_phone', 'BOOK_BENEFIT_CAMPAIGN_PHONE_CONFLICT'],
-    ['application', 'uk_book_benefit_applications_campaign_order', 'BOOK_BENEFIT_ORDER_CONFLICT'],
+    ['issuance', 'uk_book_benefit_issuances_campaign_order', 'BOOK_BENEFIT_ORDER_CONFLICT'],
     ['code', 'uk_book_benefit_codes_hash', 'BOOK_BENEFIT_CODE_HASH_CONFLICT'],
-    ['application', 'unknown_unique_index', 'BOOK_BENEFIT_CONCURRENT_CONFLICT']
+    ['issuance', 'unknown_unique_index', 'BOOK_BENEFIT_CONCURRENT_CONFLICT']
   ]
   for (const [duplicateStep, duplicateIndex, expectedCode] of cases) {
     const database = createDatabase()
     const { store, pool } = createStore(database, { duplicateStep, duplicateIndex })
     await assert.rejects(
-      () => store.issueApprovedBookBenefitCode(standardInput()),
+      () => store.issueUnassignedBookBenefitCode(standardInput()),
       (error) => error.code === expectedCode && !error.message.includes(duplicateIndex)
     )
-    assert.equal(database.applications.length, 0)
+    assert.equal(database.issuances.length, 0)
     assert.equal(database.codes.length, 0)
     assert.equal(database.audits.length, 0)
     assert.equal(pool.connections.length, 1)
@@ -580,60 +503,23 @@ async function testDuplicateConflicts() {
 }
 
 async function testRealUniqueConstraintConflicts() {
-  const userConflictDatabase = createDatabase()
-  const userConflict = createStore(userConflictDatabase)
-  await userConflict.store.issueApprovedBookBenefitCode(standardInput())
-  await assert.rejects(
-    () => userConflict.store.issueApprovedBookBenefitCode(standardInput({
-      operationId: 'second-user-operation',
-      orderNumber: 'FAKE-ORDER-900002'
-    })),
-    (error) => error.code === 'BOOK_BENEFIT_CAMPAIGN_USER_CONFLICT'
-  )
-  assert.equal(userConflictDatabase.applications.length, 1)
-
-  const secondBinding = {
-    id: '12',
-    user_id: '20',
-    phone_hash: hashPhone('+86 100 0000 0002', { secret: PHONE_SECRET }).phoneHash,
-    phone_masked: '100****0002',
-    campaign_phone_identity_hash: Buffer.from(CAMPAIGN_HASH),
-    campaign_phone_hash_version: 'v1',
-    status: 'active',
-    last_verified_at: new Date('2026-08-08T00:00:00.000Z')
-  }
-  const phoneConflictDatabase = createDatabase({
-    phoneBindings: [...createDatabase().phoneBindings, secondBinding]
-  })
-  const phoneConflict = createStore(phoneConflictDatabase)
-  await phoneConflict.store.issueApprovedBookBenefitCode(standardInput())
-  await assert.rejects(
-    () => phoneConflict.store.issueApprovedBookBenefitCode(standardInput({
-      locator: { userId: '20' },
-      operationId: 'second-phone-operation',
-      orderNumber: 'FAKE-ORDER-900003'
-    })),
-    (error) => error.code === 'BOOK_BENEFIT_CAMPAIGN_PHONE_CONFLICT'
-  )
-  assert.equal(phoneConflictDatabase.applications.length, 1)
-
-  const distinctBinding = {
-    ...secondBinding,
-    campaign_phone_identity_hash: Buffer.alloc(32, 0x46)
-  }
-  const orderConflictDatabase = createDatabase({
-    phoneBindings: [...createDatabase().phoneBindings, distinctBinding]
-  })
+  const orderConflictDatabase = createDatabase()
   const orderConflict = createStore(orderConflictDatabase)
-  await orderConflict.store.issueApprovedBookBenefitCode(standardInput())
+  await orderConflict.store.issueUnassignedBookBenefitCode(standardInput())
   await assert.rejects(
-    () => orderConflict.store.issueApprovedBookBenefitCode(standardInput({
-      locator: { userId: '20' },
+    () => orderConflict.store.issueUnassignedBookBenefitCode(standardInput({
       operationId: 'second-order-operation'
     })),
     (error) => error.code === 'BOOK_BENEFIT_ORDER_CONFLICT'
   )
-  assert.equal(orderConflictDatabase.applications.length, 1)
+  assert.equal(orderConflictDatabase.issuances.length, 1)
+
+  const differentOrder = await orderConflict.store.issueUnassignedBookBenefitCode(standardInput({
+    operationId: 'different-order-operation',
+    orderNumber: 'FAKE-ORDER-900002'
+  }))
+  assert.equal(differentOrder.status, 'issued')
+  assert.equal(orderConflictDatabase.issuances.length, 2)
 }
 
 async function testConnectionErrorPriority() {
@@ -641,10 +527,10 @@ async function testConnectionErrorPriority() {
   const releaseError = new Error('fake release failure')
   const committed = createStore(committedDatabase, { releaseError })
   await assert.rejects(
-    () => committed.store.issueApprovedBookBenefitCode(standardInput()),
+    () => committed.store.issueUnassignedBookBenefitCode(standardInput()),
     (error) => error === releaseError
   )
-  assert.equal(committedDatabase.applications.length, 1)
+  assert.equal(committedDatabase.issuances.length, 1)
   assertConnectionLifecycle(committed.pool.connections[0], {
     begin: 1,
     commit: 1,
@@ -655,7 +541,7 @@ async function testConnectionErrorPriority() {
   const failedDatabase = createDatabase()
   const failed = createStore(failedDatabase, { failStep: 'code', releaseError })
   await assert.rejects(
-    () => failed.store.issueApprovedBookBenefitCode(standardInput()),
+    () => failed.store.issueUnassignedBookBenefitCode(standardInput()),
     (error) => error.message === 'fake code failure'
   )
   assertConnectionLifecycle(failed.pool.connections[0], {
@@ -668,10 +554,10 @@ async function testConnectionErrorPriority() {
   const commitDatabase = createDatabase()
   const commitFailed = createStore(commitDatabase, { failStep: 'commit' })
   await assert.rejects(
-    () => commitFailed.store.issueApprovedBookBenefitCode(standardInput()),
+    () => commitFailed.store.issueUnassignedBookBenefitCode(standardInput()),
     (error) => error.message === 'fake commit failure'
   )
-  assert.equal(commitDatabase.applications.length, 0)
+  assert.equal(commitDatabase.issuances.length, 0)
   assertConnectionLifecycle(commitFailed.pool.connections[0], {
     begin: 1,
     commit: 1,
@@ -687,7 +573,7 @@ async function testConnectionErrorPriority() {
     releaseError
   })
   await assert.rejects(
-    () => rollbackFailed.store.issueApprovedBookBenefitCode(standardInput()),
+    () => rollbackFailed.store.issueUnassignedBookBenefitCode(standardInput()),
     (error) => error.message === 'fake code failure'
   )
   assertConnectionLifecycle(rollbackFailed.pool.connections[0], {
@@ -700,9 +586,14 @@ async function testConnectionErrorPriority() {
 
 async function testSafeInputAndLogging() {
   const prohibitedFields = [
+    'userId',
+    'locator',
+    'phone',
+    'phoneHash',
+    'campaignPhoneIdentityHash',
     'applicantPhoneIdentityHash',
     'codeHash',
-    'applicationId',
+    'issuanceId',
     'codeId',
     'plaintextCode',
     'reviewedAt',
@@ -711,7 +602,7 @@ async function testSafeInputAndLogging() {
   for (const field of prohibitedFields) {
     const database = createDatabase()
     const { store, pool } = createStore(database)
-    await assert.rejects(() => store.issueApprovedBookBenefitCode(standardInput({ [field]: 'fake-value' })))
+    await assert.rejects(() => store.issueUnassignedBookBenefitCode(standardInput({ [field]: 'fake-value' })))
     assert.equal(pool.connections.length, 0)
   }
   for (const invalidInput of [
@@ -724,7 +615,7 @@ async function testSafeInputAndLogging() {
   ]) {
     const database = createDatabase()
     const { store, pool } = createStore(database)
-    await assert.rejects(() => store.issueApprovedBookBenefitCode(invalidInput))
+    await assert.rejects(() => store.issueUnassignedBookBenefitCode(invalidInput))
     assert.equal(pool.connections.length, 0)
   }
 
@@ -739,33 +630,30 @@ async function testSafeInputAndLogging() {
   let successDatabase = null
   try {
     successDatabase = createDatabase()
-    successResult = await createStore(successDatabase).store.issueApprovedBookBenefitCode(standardInput())
+    successResult = await createStore(successDatabase).store.issueUnassignedBookBenefitCode(standardInput())
     const failureDatabase = createDatabase()
     await assert.rejects(() => createStore(failureDatabase, { failStep: 'audit' })
-      .store.issueApprovedBookBenefitCode(standardInput()))
+      .store.issueUnassignedBookBenefitCode(standardInput()))
   } finally {
     for (const [name, method] of Object.entries(originalMethods)) console[name] = method
   }
   const output = captured.join('\n')
   for (const sensitiveValue of [
-    FULL_PHONE,
     ORDER_NUMBER,
     CODE_SECRET,
-    ORDER_SECRET,
-    PHONE_SECRET,
-    CAMPAIGN_HASH.toString('hex')
+    ORDER_SECRET
   ]) {
     assert.equal(output.includes(sensitiveValue), false)
   }
   assert.equal(output.includes(successResult.plaintextCode), false)
   assert.equal(output.includes(successDatabase.codes[0].code_hash.toString('hex')), false)
-  assert.equal(output.includes(successDatabase.applications[0].approved_order_claim_hash.toString('hex')), false)
+  assert.equal(output.includes(successDatabase.issuances[0].approved_order_claim_hash.toString('hex')), false)
 }
 
 await testCodePrimitive()
 await testStandardSuccess()
 await testManualSuccess()
-await testPhoneLocatorUsesTrustedHelper()
+await testIssuanceDoesNotUseIdentityLookup()
 await testCampaignFailures()
 await testAtomicFailures()
 await testIdempotentReplay()
@@ -774,4 +662,4 @@ await testRealUniqueConstraintConflicts()
 await testConnectionErrorPriority()
 await testSafeInputAndLogging()
 
-console.log('book-benefit qualification approval and code issue tests passed')
+console.log('book-benefit unassigned code issuance tests passed')

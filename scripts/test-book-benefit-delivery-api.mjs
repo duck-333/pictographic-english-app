@@ -33,13 +33,13 @@ function createFakeBookBenefitStore() {
       if (behavior.campaignError) throw behavior.campaignError
       return { ...CAMPAIGN }
     },
-    async issueApprovedBookBenefitCode(input) {
+    async issueUnassignedBookBenefitCode(input) {
       calls.push(['issue', input])
       if (behavior.issueError) throw behavior.issueError
       return behavior.issueResult || {
-        applicationId: '91', applicationNo: 'BBA-SAFE-001', codeId: '92',
+        issuanceId: '91', issuanceNo: 'BBI-SAFE-001', codeId: '92',
         plaintextCode: 'BOOK-FAKE-ONE-TIME', codeExpiresAt: new Date('2026-09-11T03:00:00.000Z'),
-        campaignId: '7', userId: USER_ID, status: 'issued'
+        campaignId: '7', status: 'issued'
       }
     },
     async getBookBenefitIssueOperationStatus(input) {
@@ -52,15 +52,15 @@ function createFakeBookBenefitStore() {
       if (behavior.replaceError) throw behavior.replaceError
       return behavior.replaceResult || {
         originalCodeId: '92', replacementCodeId: '93', plaintextCode: 'BOOK-FAKE-REPLACEMENT',
-        codeExpiresAt: new Date('2026-09-11T03:00:00.000Z'), applicationId: '91', campaignId: '7',
-        userId: USER_ID, generationNo: 2, status: 'issued'
+        codeExpiresAt: new Date('2026-09-11T03:00:00.000Z'), issuanceId: '91', campaignId: '7',
+        generationNo: 2, status: 'issued'
       }
     },
     async redeemBookBenefitCode(input) {
       calls.push(['redeem', input])
       if (behavior.redeemError) throw behavior.redeemError
       return behavior.redeemResult || {
-        redemptionId: 'private-redemption', codeId: '92', campaignId: '7', applicationId: '91',
+        redemptionId: 'private-redemption', codeId: '92', campaignId: '7', issuanceId: '91',
         grantId: 'private-grant', transactionId: 'private-transaction', userId: USER_ID,
         membershipType: 'monthly', membershipStatus: 'active',
         membershipStartedAt: new Date('2026-08-12T03:00:00.000Z'),
@@ -153,7 +153,7 @@ async function testCampaignApi() {
 }
 
 const STANDARD_ISSUE_BODY = {
-  operationId: 'issue-http-001', userId: USER_ID, orderClaimType: 'standard',
+  operationId: 'issue-http-001', orderClaimType: 'standard',
   orderChannel: 'taobao', orderNumber: 'FAKE-ORDER-DELIVERY-001',
   sellerVerificationCode: 'official_store', customerServiceChannel: 'taobao_cs'
 }
@@ -171,10 +171,11 @@ async function testIssueApi() {
   assert.equal(response.headers['cache-control'], 'no-store')
   assert.equal(response.headers.pragma, 'no-cache')
   assert.equal(response.headers.expires, '0')
-  assertOnlyKeys(response.body, ['ok', 'applicationNo', 'codeId', 'plaintextCode', 'codeExpiresAt', 'userId', 'status'])
+  assertOnlyKeys(response.body, ['ok', 'issuanceNo', 'codeId', 'plaintextCode', 'codeExpiresAt', 'status'])
   const issueCall = bookBenefitStore.calls.find(([kind]) => kind === 'issue')[1]
-  assert.equal(issueCall.campaignId, CAMPAIGN.campaignId)
-  assert.deepEqual(issueCall.locator, { userId: USER_ID })
+  assert.equal(issueCall.campaignId, undefined)
+  assert.equal(issueCall.locator, undefined)
+  assert.equal(issueCall.userId, undefined)
   assert.equal(issueCall.operatorId, 'legacy-admin')
   assert.equal(issueCall.operationId, STANDARD_ISSUE_BODY.operationId)
   assert.equal(issueCall.orderNumber, STANDARD_ISSUE_BODY.orderNumber)
@@ -182,7 +183,8 @@ async function testIssueApi() {
 
   const privilegedFields = [
     'campaignId', 'campaignKey', 'benefitDays', 'membershipDays', 'sourceType', 'codeHash',
-    'phoneHash', 'campaignPhoneIdentityHash', 'operatorId', 'now', 'metadata', 'screenshot'
+    'userId', 'locator', 'phone', 'phoneHash', 'campaignPhoneIdentityHash',
+    'campaignPhoneHashVersion', 'operatorId', 'now', 'metadata', 'screenshot'
   ]
   for (const fieldName of privilegedFields) {
     const before = bookBenefitStore.calls.length
@@ -209,7 +211,7 @@ async function testIssueApi() {
   const manual = await invoke(handler, {
     method: 'POST', url: '/api/admin/book-benefits/codes/issue', headers: adminHeaders(),
     body: {
-      operationId: 'issue-http-manual-001', userId: USER_ID, orderClaimType: 'manual_exception',
+      operationId: 'issue-http-manual-001', orderClaimType: 'manual_exception',
       manualExceptionReasonCode: 'customer_service_approved_exception', sellerVerificationCode: 'unverified',
       customerServiceChannel: 'wechat_official_cs'
     }
@@ -217,7 +219,7 @@ async function testIssueApi() {
   assert.equal(manual.statusCode, 200)
 
   bookBenefitStore.behavior.issueResult = {
-    applicationNo: 'BBA-SAFE-001', codeId: '92', codeExpiresAt: NOW, userId: USER_ID,
+    issuanceId: '91', issuanceNo: 'BBI-SAFE-001', codeId: '92', codeExpiresAt: NOW,
     plaintextCode: 'MUST-NOT-RETURN', status: 'ISSUED_CODE_PLAINTEXT_UNAVAILABLE'
   }
   const replay = await invoke(handler, {
@@ -245,9 +247,9 @@ async function testIssueStatusApi() {
   assert.equal(bookBenefitStore.calls.length, 0)
   for (const result of [
     { status: 'not_found' },
-    { status: 'issued_plaintext_unavailable', applicationNo: 'BBA-1', codeId: '2', userId: USER_ID, codeExpiresAt: NOW, plaintextCode: 'NO' },
-    { status: 'replaced', applicationNo: 'BBA-1', codeId: '2', replacementCodeId: '3', userId: USER_ID, codeExpiresAt: NOW, plaintextCode: 'NO' },
-    { status: 'inconsistent', applicationNo: 'BBA-1', userId: USER_ID, sql: 'NO' }
+    { status: 'issued_plaintext_unavailable', issuanceId: '1', issuanceNo: 'BBI-1', codeId: '2', codeExpiresAt: NOW, plaintextCode: 'NO' },
+    { status: 'replaced', issuanceId: '1', issuanceNo: 'BBI-1', codeId: '2', replacementCodeId: '3', codeExpiresAt: NOW, plaintextCode: 'NO' },
+    { status: 'inconsistent', issuanceId: '1', issuanceNo: 'BBI-1', sql: 'NO' }
   ]) {
     bookBenefitStore.behavior.statusResult = result
     const response = await invoke(handler, {
@@ -274,7 +276,7 @@ async function testReplacementApi() {
   assert.equal(response.statusCode, 200)
   assert.equal(response.headers['cache-control'], 'no-store')
   assert.equal(response.headers.pragma, 'no-cache')
-  assertOnlyKeys(response.body, ['ok', 'originalCodeId', 'replacementCodeId', 'plaintextCode', 'codeExpiresAt', 'applicationId', 'userId', 'generationNo', 'status'])
+  assertOnlyKeys(response.body, ['ok', 'originalCodeId', 'replacementCodeId', 'plaintextCode', 'codeExpiresAt', 'issuanceId', 'generationNo', 'status'])
   const input = bookBenefitStore.calls.find(([kind]) => kind === 'replace')[1]
   assert.equal(input.operatorId, 'legacy-admin')
   assert.equal(input.now.toISOString(), NOW.toISOString())
@@ -293,7 +295,7 @@ async function testReplacementApi() {
 
   bookBenefitStore.behavior.replaceResult = {
     originalCodeId: '92', replacementCodeId: '93', plaintextCode: 'MUST-NOT-RETURN', codeExpiresAt: NOW,
-    applicationId: '91', userId: USER_ID, generationNo: 2, status: 'REPLACEMENT_CODE_PLAINTEXT_UNAVAILABLE'
+    issuanceId: '91', generationNo: 2, status: 'REPLACEMENT_CODE_PLAINTEXT_UNAVAILABLE'
   }
   const replay = await invoke(handler, {
     method: 'POST', url: '/api/admin/book-benefits/codes/replace', body, headers: adminHeaders()
@@ -380,21 +382,21 @@ async function testStatusStoreIsReadOnly() {
           id: '7', campaign_key: 'book-benefit-30d-v1', name: CAMPAIGN.name, status: 'active',
           benefit_days: 30, rules_version: 'book-benefit-rules-v1', starts_at: null, ends_at: null
         }]]
-        if (statement.includes('FROM book_benefit_applications')) {
+        if (statement.includes('FROM book_benefit_issuances')) {
           if (wanted === 'not_found') return [[]]
-          return [[{ id: '91', application_no: 'BBA-1', campaign_id: '7', applicant_user_id: USER_ID, status: 'approved' }]]
+          return [[{ id: '91', issuance_no: 'BBI-1', campaign_id: '7', status: 'approved' }]]
         }
         if (statement.includes('WHERE issue_idempotency_key')) {
           if (wanted === 'inconsistent') return [[]]
           return [[{
-            id: '92', application_id: '91', status: wanted === 'replaced' ? 'voided' : 'issued',
+            id: '92', issuance_id: '91', status: wanted === 'replaced' ? 'voided' : 'issued',
             replacement_code_id: wanted === 'replaced' ? '93' : null, expires_at: NOW
           }]]
         }
         if (statement.includes('FROM book_benefit_audit_events')) {
-          return [[{ application_id: '91', code_id: '92', event_type: 'qualification_approved_code_issued', result: 'succeeded' }]]
+          return [[{ issuance_id: '91', code_id: '92', event_type: 'unassigned_code_issued', result: 'succeeded' }]]
         }
-        if (statement.includes('WHERE id = ?')) return [[{ id: '93', application_id: '91', expires_at: NOW }]]
+        if (statement.includes('WHERE id = ?')) return [[{ id: '93', issuance_id: '91', expires_at: NOW }]]
         throw new Error('Unexpected fake query')
       },
       release() {}

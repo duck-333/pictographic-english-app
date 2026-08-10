@@ -35,7 +35,6 @@ const BOOK_BENEFIT_MANUAL_REASON_CODES = new Set([
 const BOOK_BENEFIT_REPLACEMENT_REASON_CODES = new Set(['plaintext_unavailable', 'delivery_failed'])
 const BOOK_BENEFIT_ISSUE_FIELDS = new Set([
   'operationId',
-  'userId',
   'orderClaimType',
   'orderChannel',
   'orderNumber',
@@ -513,7 +512,6 @@ function normalizeBookBenefitWhitelist(value, allowedValues) {
 function normalizeBookBenefitIssueBody(body) {
   assertBookBenefitBody(body, BOOK_BENEFIT_ISSUE_FIELDS)
   const operationId = normalizeBookBenefitOperationId(body.operationId)
-  const userId = normalizeBookBenefitPositiveId(body.userId)
   const orderClaimType = normalizeBookBenefitWhitelist(body.orderClaimType, new Set(['standard', 'manual_exception']))
   const sellerVerificationCode = normalizeBookBenefitWhitelist(body.sellerVerificationCode, BOOK_BENEFIT_SELLER_CODES)
   const customerServiceChannel = normalizeBookBenefitWhitelist(
@@ -529,7 +527,6 @@ function normalizeBookBenefitIssueBody(body) {
     }
     return {
       operationId,
-      userId,
       orderClaimType,
       orderChannel: normalizeBookBenefitWhitelist(body.orderChannel, BOOK_BENEFIT_ORDER_CHANNELS),
       orderNumber: body.orderNumber,
@@ -541,7 +538,6 @@ function normalizeBookBenefitIssueBody(body) {
   if (body.orderChannel !== undefined || body.orderNumber !== undefined) throw createBookBenefitRequestError()
   return {
     operationId,
-    userId,
     orderClaimType,
     manualExceptionReasonCode: normalizeBookBenefitWhitelist(
       body.manualExceptionReasonCode,
@@ -590,10 +586,9 @@ function toSafeBookBenefitCampaignPayload(campaign) {
 
 function toSafeBookBenefitIssuePayload(result) {
   const payload = {
-    applicationNo: result.applicationNo,
+    issuanceNo: result.issuanceNo,
     codeId: result.codeId,
     codeExpiresAt: result.codeExpiresAt,
-    userId: result.userId,
     status: result.status
   }
   if (result.status === 'issued' && typeof result.plaintextCode === 'string') {
@@ -604,7 +599,7 @@ function toSafeBookBenefitIssuePayload(result) {
 
 function toSafeBookBenefitIssueStatusPayload(result) {
   const payload = { status: result.status }
-  for (const fieldName of ['applicationNo', 'codeId', 'replacementCodeId', 'userId', 'codeExpiresAt']) {
+  for (const fieldName of ['issuanceId', 'issuanceNo', 'codeId', 'replacementCodeId', 'codeExpiresAt']) {
     if (result[fieldName] !== undefined) payload[fieldName] = result[fieldName]
   }
   return payload
@@ -615,8 +610,7 @@ function toSafeBookBenefitReplacementPayload(result) {
     originalCodeId: result.originalCodeId,
     replacementCodeId: result.replacementCodeId,
     codeExpiresAt: result.codeExpiresAt,
-    applicationId: result.applicationId,
-    userId: result.userId,
+    issuanceId: result.issuanceId,
     generationNo: result.generationNo,
     status: result.status
   }
@@ -657,7 +651,7 @@ const ADMIN_BOOK_BENEFIT_ERROR_MESSAGES = {
   BOOK_BENEFIT_CODE_VOIDED: 'The book-benefit code has been voided.',
   BOOK_BENEFIT_CODE_EXPIRED: 'The book-benefit code has expired.',
   BOOK_BENEFIT_REPLACEMENT_LIMIT: 'The replacement limit has been reached.',
-  BOOK_BENEFIT_APPLICATION_INVALID: 'The book-benefit application is not eligible.',
+  BOOK_BENEFIT_ISSUANCE_INVALID: 'The book-benefit issuance is not eligible.',
   BOOK_BENEFIT_RELATION_INVALID: 'Book-benefit records are inconsistent.'
 }
 
@@ -1081,10 +1075,7 @@ export function createApiHandler(options = {}) {
         }
         try {
           const input = normalizeBookBenefitIssueBody(await readJsonBody(req))
-          const campaign = await bookBenefitStore.getConfiguredBookBenefitCampaign()
-          const result = await bookBenefitStore.issueApprovedBookBenefitCode({
-            campaignId: campaign.campaignId,
-            locator: { userId: input.userId },
+          const result = await bookBenefitStore.issueUnassignedBookBenefitCode({
             orderClaimType: input.orderClaimType,
             orderChannel: input.orderChannel,
             orderNumber: input.orderNumber,
