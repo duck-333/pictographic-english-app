@@ -7,6 +7,15 @@ import { inspect } from 'node:util'
 
 import mysql from 'mysql2/promise'
 
+import {
+  attachBookBenefitCleanupErrors,
+  createOwnedBookBenefitDatabase,
+  dropOwnedBookBenefitDatabase,
+  formatBookBenefitMysqlTestError,
+  readBookBenefitMysqlTestConfig,
+  verifyBookBenefitMysqlTestServer
+} from './book-benefit-mysql-test-support.mjs'
+
 const EXPECTED_HOST = '127.0.0.1'
 const EXPECTED_PORT = 3308
 const EXPECTED_CONFIRMATION = 'local-docker-book-benefit-review-only'
@@ -21,22 +30,11 @@ const canonicalUrl = new URL('../database/migrations/008_extend_book_benefit_iss
 const releaseUrl = new URL('../server/migrations/008_extend_book_benefit_issuance_review.sql', import.meta.url)
 
 function readConfig(env = process.env) {
-  const host = String(env.BOOK_BENEFIT_REVIEW_TEST_DB_HOST || '').trim()
-  const rawPort = String(env.BOOK_BENEFIT_REVIEW_TEST_DB_PORT || '').trim()
-  const user = String(env.BOOK_BENEFIT_REVIEW_TEST_DB_USER || '').trim()
-  const password = String(env.BOOK_BENEFIT_REVIEW_TEST_DB_PASSWORD || '')
-  const confirmation = String(env.BOOK_BENEFIT_REVIEW_TEST_ALLOW_DESTRUCTIVE || '').trim()
-
-  assert.equal(host, EXPECTED_HOST, `review integration host must be exactly ${EXPECTED_HOST}`)
-  assert.equal(rawPort, String(EXPECTED_PORT), `review integration port must be exactly ${EXPECTED_PORT}`)
-  assert(user, 'BOOK_BENEFIT_REVIEW_TEST_DB_USER is required')
-  assert(password, 'BOOK_BENEFIT_REVIEW_TEST_DB_PASSWORD is required')
-  assert.equal(
-    confirmation,
-    EXPECTED_CONFIRMATION,
-    'BOOK_BENEFIT_REVIEW_TEST_ALLOW_DESTRUCTIVE confirmation does not match'
-  )
-  return { host, port: EXPECTED_PORT, user, password, confirmation }
+  return readBookBenefitMysqlTestConfig(env, {
+    prefix: 'BOOK_BENEFIT_REVIEW_TEST',
+    confirmation: EXPECTED_CONFIRMATION,
+    label: 'review'
+  })
 }
 
 function quoteDatabase(databaseName) {
@@ -81,22 +79,16 @@ async function createDatabaseConnection(config, databaseName) {
 }
 
 async function createOwnedDatabase(rootConnection, databaseName, ownedDatabases) {
-  assert.match(databaseName, DATABASE_PATTERN)
-  assert(!ownedDatabases.has(databaseName))
-  await rootConnection.query(
-    `CREATE DATABASE ${quoteDatabase(databaseName)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
-  )
-  ownedDatabases.add(databaseName)
+  await createOwnedBookBenefitDatabase(rootConnection, databaseName, ownedDatabases, DATABASE_PATTERN)
 }
 
 async function dropOwnedDatabase(rootConnection, config, databaseName, ownedDatabases) {
-  assert.equal(config.host, EXPECTED_HOST)
-  assert.equal(config.port, EXPECTED_PORT)
-  assert.equal(config.confirmation, EXPECTED_CONFIRMATION)
-  assert.match(databaseName, DATABASE_PATTERN)
-  assert(ownedDatabases.has(databaseName), 'refusing to drop a database not owned by this process')
-  await rootConnection.query(`DROP DATABASE ${quoteDatabase(databaseName)}`)
-  ownedDatabases.delete(databaseName)
+  await dropOwnedBookBenefitDatabase(rootConnection, config, {
+    databaseName,
+    ownedDatabases,
+    databasePattern: DATABASE_PATTERN,
+    confirmation: EXPECTED_CONFIRMATION
+  })
 }
 
 async function buildExact007(connection, foundationSql) {
@@ -361,86 +353,16 @@ async function runStateScenario(config, databaseName, foundationSql, migration00
   }
 }
 
-function describeCleanupError(error) {
-  const rawName = error && typeof error.name === 'string' ? error.name : 'UnknownError'
-  const name = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(rawName) ? rawName : 'UnknownError'
-  const rawCode = error && (typeof error.code === 'string' || typeof error.code === 'number')
-    ? String(error.code)
-    : ''
-  const code = /^[A-Za-z0-9_.-]{1,64}$/.test(rawCode) ? ` code=${rawCode}` : ''
-  return `${name}${code}`
-}
-
-function safeErrorName(error) {
-  const rawName = error && typeof error.name === 'string' ? error.name : 'UnknownError'
-  return /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(rawName) ? rawName : 'UnknownError'
-}
-
-function safeErrorCode(error) {
-  const rawCode = error && (typeof error.code === 'string' || typeof error.code === 'number')
-    ? String(error.code)
-    : ''
-  return /^[A-Za-z0-9_.-]{1,64}$/.test(rawCode) ? rawCode : ''
-}
-
 export function formatSafeTopLevelError(error) {
-  const lines = [
-    'Book-benefit issuance review integration test failed.',
-    `Error type: ${safeErrorName(error)}`
-  ]
-  const code = safeErrorCode(error)
-  if (code) lines.push(`Error code: ${code}`)
-
-  const cleanupErrors = error && Array.isArray(error.cleanupErrors)
-    ? error.cleanupErrors
-    : []
-  if (cleanupErrors.length) {
-    lines.push(`Cleanup failures: ${cleanupErrors.length}`)
-    cleanupErrors.forEach((cleanupError, index) => {
-      lines.push(`Cleanup ${index + 1}: ${describeCleanupError(cleanupError)}`)
-    })
-  }
-  return lines.join('\n')
+  return formatBookBenefitMysqlTestError(error, {
+    heading: 'Book-benefit issuance review integration test failed.'
+  })
 }
 
 export function attachCleanupErrors(primaryError, cleanupErrors = []) {
-  const errors = Array.isArray(cleanupErrors) ? [...cleanupErrors] : []
-  if (!errors.length) return primaryError || null
-
-  let finalError = primaryError
-  if (!finalError) {
-    finalError = errors.length === 1 && errors[0] instanceof Error
-      ? errors[0]
-      : new AggregateError(errors, 'Multiple cleanup failures occurred.')
-  }
-
-  if (!Object.prototype.hasOwnProperty.call(finalError, 'cleanupErrors')) {
-    Object.defineProperty(finalError, 'cleanupErrors', {
-      configurable: false,
-      enumerable: false,
-      writable: false,
-      value: Object.freeze([...errors])
-    })
-  }
-  if (!Object.prototype.hasOwnProperty.call(finalError, inspect.custom)) {
-    Object.defineProperty(finalError, inspect.custom, {
-      configurable: false,
-      enumerable: false,
-      writable: false,
-      value() {
-        return formatSafeTopLevelError(this)
-      }
-    })
-  }
-
-  const summary = [
-    `Cleanup failures also occurred (${errors.length}):`,
-    ...errors.map((error, index) => `  [${index + 1}] ${describeCleanupError(error)}`)
-  ].join('\n')
-  if (typeof finalError.stack === 'string' && !finalError.stack.includes('Cleanup failures also occurred (')) {
-    finalError.stack = `${finalError.stack}\n${summary}`
-  }
-  return finalError
+  return attachBookBenefitCleanupErrors(primaryError, cleanupErrors, {
+    heading: 'Book-benefit issuance review integration test failed.'
+  })
 }
 
 function testCleanupErrorAttachment() {
@@ -655,9 +577,7 @@ async function main() {
   let primaryError = null
   let result = null
   try {
-    const [[versionRow]] = await rootConnection.query('SELECT VERSION() AS version, DATABASE() AS current_database')
-    assert.match(String(versionRow.version), /^8\.0\.46(?:[-+.]|$)/, 'integration test requires MySQL 8.0.46')
-    assert.equal(versionRow.current_database, null)
+    const mysqlVersion = await verifyBookBenefitMysqlTestServer(rootConnection)
 
     for (const databaseName of Object.values(databaseNames)) {
       await createOwnedDatabase(rootConnection, databaseName, ownedDatabases)
@@ -666,7 +586,7 @@ async function main() {
     for (const scenario of ['campaign_only', 'issuance_partial', 'enum_mismatch', 'index_mismatch', 'column_mismatch', 'legacy_application']) {
       await runStateScenario(config, databaseNames[scenario], foundationSql, migration008, scenario)
     }
-    result = { mysqlVersion: versionRow.version, complete, partialStatesRejected: 6 }
+    result = { mysqlVersion, complete, partialStatesRejected: 6 }
   } catch (error) {
     primaryError = error
   } finally {
