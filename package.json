@@ -29,6 +29,7 @@
     "test:book-benefit-issuance-review-migration": "node scripts/test-book-benefit-issuance-review-migration.mjs",
     "test:book-benefit-issuance-review-mysql-integration": "node scripts/test-book-benefit-issuance-review-mysql-integration.mjs",
     "test:book-benefit-production-preflight": "node scripts/test-book-benefit-production-preflight.mjs",
+    "test:book-benefit-production-exact-schema": "node scripts/test-book-benefit-production-exact-schema.mjs",
     "test:book-benefit-schema-manifest": "node scripts/test-book-benefit-schema-manifest.mjs",
     "test:book-benefit-schema-manifest-mysql-integration": "node scripts/test-book-benefit-schema-manifest-mysql-integration.mjs",
     "test:book-benefit-phone-identity-binding": "node scripts/test-book-benefit-phone-identity-binding.mjs",

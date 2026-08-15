@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 
 import mysql from 'mysql2/promise'
 
@@ -11,6 +11,14 @@ import {
   hashBookBenefitSchemaManifest,
   summarizeBookBenefitSchemaManifest
 } from './book-benefit-schema-manifest.mjs'
+import {
+  BOOK_BENEFIT_EXPECTED_ARTIFACT_URL,
+  buildBookBenefitExpectedArtifact,
+  compareBookBenefitExpectedArtifact,
+  parseExpectedArtifactWriteMode,
+  readBookBenefitExpectedArtifact,
+  serializeBookBenefitExpectedArtifact
+} from './book-benefit-production-exact-schema.mjs'
 import {
   assertBookBenefitMigrationCopies,
   attachBookBenefitCleanupErrors,
@@ -222,6 +230,7 @@ function testCleanupHelpers() {
 
 async function main() {
   testCleanupHelpers()
+  const writeExpectedArtifact = parseExpectedArtifactWriteMode(process.argv.slice(2))
   const config = readBookBenefitMysqlTestConfig(process.env, {
     prefix: 'BOOK_BENEFIT_MANIFEST_TEST',
     confirmation: CONFIRMATION,
@@ -261,6 +270,27 @@ async function main() {
     const { expected007, expected008 } = await buildExpectedManifests(
       config, names.expected, phoneBindingsSql, migration007, migration008
     )
+    const artifactForbiddenValues = [
+      config.host,
+      config.user,
+      config.password,
+      ...Object.values(names)
+    ]
+    const generatedArtifact = buildBookBenefitExpectedArtifact(expected007, expected008, {
+      forbiddenValues: artifactForbiddenValues
+    })
+    if (writeExpectedArtifact) {
+      await writeFile(
+        BOOK_BENEFIT_EXPECTED_ARTIFACT_URL,
+        serializeBookBenefitExpectedArtifact(generatedArtifact, {
+          forbiddenValues: artifactForbiddenValues
+        }),
+        { encoding: 'utf8', flag: 'w' }
+      )
+    } else {
+      const committedArtifact = await readBookBenefitExpectedArtifact()
+      compareBookBenefitExpectedArtifact(generatedArtifact, committedArtifact)
+    }
     const actual007 = await buildActual007(
       config, names.actual, phoneBindingsSql, migration007, expected007, expected008
     )
@@ -275,7 +305,8 @@ async function main() {
       expected007: summarizeBookBenefitSchemaManifest(expected007),
       expected008: summarizeBookBenefitSchemaManifest(expected008),
       actual007Classification: classifyBookBenefitSchemaManifest(actual007, expected007, expected008),
-      actual008Classification: classifyBookBenefitSchemaManifest(actual008, expected007, expected008)
+      actual008Classification: classifyBookBenefitSchemaManifest(actual008, expected007, expected008),
+      expectedArtifactWritten: writeExpectedArtifact
     }
   } catch (error) {
     primaryError = error
