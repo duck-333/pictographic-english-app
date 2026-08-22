@@ -1,6 +1,8 @@
 import crypto from 'crypto'
 import mysql from 'mysql2/promise'
 
+import { createIdentityConflictDiagnostic } from './identity-conflict-diagnostic.mjs'
+
 const DEFAULT_DB_HOST = '127.0.0.1'
 const DEFAULT_DB_PORT = 3306
 const DEFAULT_DB_NAME = 'baxiaota'
@@ -27,17 +29,37 @@ function isDuplicateEntryError(error) {
   return Boolean(error && error.code === 'ER_DUP_ENTRY')
 }
 
-function createIdentityConflictError() {
-  return createIdentityStoreError('Identity binding conflict.', {
+function createIdentityConflictError(diagnosticLine = null) {
+  const error = createIdentityStoreError('Identity binding conflict.', {
     code: 'IDENTITY_CONFLICT',
     statusCode: 409
   })
+  if (diagnosticLine) {
+    Object.defineProperty(error, 'identityConflictDiagnosticLine', {
+      value: diagnosticLine
+    })
+  }
+  return error
 }
 
 function wait(milliseconds) {
   return new Promise((resolve) => {
     setTimeout(resolve, milliseconds)
   })
+}
+
+async function rollbackIdentityConflict(connection) {
+  try {
+    await connection.rollback()
+    return false
+  } catch {
+    try {
+      connection.destroy()
+    } catch {
+      // A failed rollback must never return this connection to the pool.
+    }
+    return true
+  }
 }
 
 function getDbConfig(options = {}) {
@@ -538,6 +560,11 @@ export function createIdentityStore(options = {}) {
   let pool = options.pool || null
   const now = options.now || (() => new Date())
   const campaignPhoneIdentityFactory = options.campaignPhoneIdentityFactory || createDefaultCampaignPhoneIdentity
+  const identityConflictDiagnostic = createIdentityConflictDiagnostic({
+    env: options.identityConflictDiagnosticEnv || process.env,
+    logger: options.identityConflictDiagnosticLogger,
+    randomUUID: options.identityConflictDiagnosticRandomUUID
+  })
 
   function getPool() {
     if (pool) return pool
@@ -601,6 +628,7 @@ export function createIdentityStore(options = {}) {
 
     const connection = await getPool().getConnection()
     const timestamp = now()
+    let connectionDisposed = false
     try {
       await connection.beginTransaction()
       const result = await resolveIdentityInTransaction(connection, {
@@ -613,6 +641,11 @@ export function createIdentityStore(options = {}) {
       await connection.commit()
       return result
     } catch (error) {
+      if (error && error.code === 'IDENTITY_CONFLICT') {
+        connectionDisposed = await rollbackIdentityConflict(connection)
+        await identityConflictDiagnostic.emit(error.identityConflictDiagnosticLine)
+        throw error
+      }
       await connection.rollback()
       if (isDuplicateEntryError(error)) {
         return resolveDuplicateIdentity({
@@ -624,7 +657,7 @@ export function createIdentityStore(options = {}) {
       }
       throw error
     } finally {
-      connection.release()
+      if (!connectionDisposed) connection.release()
     }
   }
 
@@ -635,7 +668,13 @@ export function createIdentityStore(options = {}) {
     })
     const resolution = resolveIdentityConflict(bindings)
     if (resolution.conflict) {
-      throw createIdentityConflictError()
+      const diagnosticLine = await identityConflictDiagnostic.collect(connection, {
+        aUserId: bindings.wechatBinding.userId,
+        bUserId: bindings.phoneBinding.userId,
+        requestUnionid: options.unionid,
+        aStoredUnionid: bindings.wechatBinding.unionid
+      })
+      throw createIdentityConflictError(diagnosticLine)
     }
 
     if (resolution.action === 'create_user' && !options.allowCreateUser) {
@@ -670,6 +709,7 @@ export function createIdentityStore(options = {}) {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       if (attempt > 0) await wait(25)
       const retryConnection = await getPool().getConnection()
+      let retryConnectionDisposed = false
       try {
         await retryConnection.beginTransaction()
         const result = await resolveIdentityInTransaction(retryConnection, {
@@ -685,6 +725,11 @@ export function createIdentityStore(options = {}) {
           isNew: false
         }
       } catch (error) {
+        if (error && error.code === 'IDENTITY_CONFLICT') {
+          retryConnectionDisposed = await rollbackIdentityConflict(retryConnection)
+          await identityConflictDiagnostic.emit(error.identityConflictDiagnosticLine)
+          throw error
+        }
         await retryConnection.rollback()
         const shouldRetry =
           error.code === 'IDENTITY_DUPLICATE_RETRY_PENDING' ||
@@ -697,7 +742,7 @@ export function createIdentityStore(options = {}) {
         }
         throw error
       } finally {
-        retryConnection.release()
+        if (!retryConnectionDisposed) retryConnection.release()
       }
     }
 
