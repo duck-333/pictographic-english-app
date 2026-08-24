@@ -162,13 +162,18 @@ function createDiagnostic(options = {}) {
 async function collectLine(options = {}) {
   const connection = createDiagnosticConnection(options)
   const diagnostic = createDiagnostic(options)
-  const line = await diagnostic.collect(connection, {
+  const result = await diagnostic.collect(connection, {
     aUserId: A_ID,
     bUserId: B_ID,
     requestUnionid: options.aUnionid,
     aStoredUnionid: options.aStoredUnionid
   })
-  return { connection, diagnostic, line }
+  return {
+    connection,
+    diagnostic,
+    result,
+    line: result ? result.line : null
+  }
 }
 
 async function testStrictDefaultOff() {
@@ -184,9 +189,9 @@ async function testStrictDefaultOff() {
         return MARKER
       }
     })
-    const line = await diagnostic.collect(connection, { aUserId: A_ID, bUserId: B_ID })
-    await diagnostic.emit(line)
-    assert.equal(line, null)
+    const result = await diagnostic.collect(connection, { aUserId: A_ID, bUserId: B_ID })
+    await diagnostic.emit(result)
+    assert.equal(result, null)
     assert.equal(connection.calls.length, 0)
     assert.equal(markerCalls, 0)
     assert.equal(logCalls, 0)
@@ -225,12 +230,13 @@ async function testFixedLineAndBusinessClassification() {
     recent_word_count: 4,
     book_redemption_count: 1
   })
-  const { connection, line } = await collectLine({
+  const { connection, result, line } = await collectLine({
     aUnionid: A_UNIONID,
     bUnionids: [A_UNIONID],
     businessRows: [createBusinessRow(), bBusiness]
   })
   assert.equal(connection.calls.length, 4)
+  assert.equal(result.marker, MARKER)
   assert(connection.calls.every((call) => /^\s*SELECT\b/i.test(call.sql)))
   assert.equal(
     line,
@@ -335,7 +341,7 @@ async function testSelectAndLoggerFailuresAreContained() {
     logger: () => { logCalls += 1 }
   })
   assert.equal(failed.line, null)
-  await failed.diagnostic.emit(failed.line)
+  await failed.diagnostic.emit(failed.result)
   assert.equal(logCalls, 0)
 
   const successful = await collectLine({ aUnionid: A_UNIONID, bUnionids: [A_UNIONID] })
@@ -344,7 +350,7 @@ async function testSelectAndLoggerFailuresAreContained() {
       throw new Error('private logger failure sentinel')
     }
   })
-  await assert.doesNotReject(() => loggerFailure.emit(successful.line))
+  await assert.doesNotReject(() => loggerFailure.emit(successful.result))
 }
 
 function createIdentityConnection(options = {}) {
@@ -480,39 +486,91 @@ async function testIdentityStoreIntegration() {
     bUnionids: [A_UNIONID],
     businessRows: [createBusinessRow(), createBusinessRow()]
   })
-  await resolveConflict(createConflictStore(connection, {
+  const error = await resolveConflict(createConflictStore(connection, {
     logger: (line) => {
       connection.events.push('log')
       logs.push(line)
     }
   }))
   assert.equal(logs.length, 1)
+  assert.equal(error.diagnosticMarker, MARKER)
+  assert.match(logs[0], new RegExp(`OPERATION_MARKER=${error.diagnosticMarker}`))
   assert.equal(connection.diagnosticCalls.length, 4)
   assert.deepEqual(connection.events.slice(-3), ['rollback', 'log', 'release'])
 
   const disabledLogs = []
   const disabledConnection = createIdentityConnection()
-  await resolveConflict(createConflictStore(disabledConnection, {
+  const disabledError = await resolveConflict(createConflictStore(disabledConnection, {
     env: {},
     logger: (line) => disabledLogs.push(line)
   }))
   assert.equal(disabledConnection.diagnosticCalls.length, 0)
   assert.equal(disabledLogs.length, 0)
+  assert.equal(Object.prototype.hasOwnProperty.call(disabledError, 'diagnosticMarker'), false)
   assert.deepEqual(disabledConnection.events.slice(-2), ['rollback', 'release'])
 
   const failedConnection = createIdentityConnection({ failSelect: true })
-  await resolveConflict(createConflictStore(failedConnection, {
+  const failedError = await resolveConflict(createConflictStore(failedConnection, {
     logger: () => assert.fail('failed diagnostic must not log')
   }))
+  assert.equal(Object.prototype.hasOwnProperty.call(failedError, 'diagnosticMarker'), false)
   assert.deepEqual(failedConnection.events.slice(-2), ['rollback', 'release'])
 
   const loggerFailureConnection = createIdentityConnection()
-  await resolveConflict(createConflictStore(loggerFailureConnection, {
+  const loggerFailureError = await resolveConflict(createConflictStore(loggerFailureConnection, {
     logger: async () => {
       throw new Error('private logger failure sentinel')
     }
   }))
+  assert.equal(Object.prototype.hasOwnProperty.call(loggerFailureError, 'diagnosticMarker'), false)
   assert.deepEqual(loggerFailureConnection.events.slice(-2), ['rollback', 'release'])
+}
+
+async function testSubsequentConflictDoesNotReceiveMarker() {
+  const logs = []
+  const connection = createIdentityConnection({
+    bUnionids: [A_UNIONID],
+    businessRows: [createBusinessRow(), createBusinessRow()]
+  })
+  const store = createConflictStore(connection, {
+    logger: (line) => logs.push(line)
+  })
+  const firstError = await resolveConflict(store)
+  const secondError = await resolveConflict(store)
+  assert.equal(firstError.diagnosticMarker, MARKER)
+  assert.equal(Object.prototype.hasOwnProperty.call(secondError, 'diagnosticMarker'), false)
+  assert.equal(logs.length, 1)
+  assert.match(logs[0], new RegExp(`OPERATION_MARKER=${firstError.diagnosticMarker}`))
+}
+
+async function testConcurrentConflictsHaveAtMostOneMatchingMarker() {
+  const connections = [
+    createIdentityConnection({
+      bUnionids: [A_UNIONID],
+      businessRows: [createBusinessRow(), createBusinessRow()]
+    }),
+    createIdentityConnection({
+      bUnionids: [A_UNIONID],
+      businessRows: [createBusinessRow(), createBusinessRow()]
+    })
+  ]
+  const logs = []
+  const store = createIdentityStore({
+    pool: { getConnection: async () => connections.shift() },
+    phoneHashSecret: 'phone-secret-private-sentinel',
+    campaignPhoneIdentityFactory: async () => ({
+      campaignPhoneIdentityHash: Buffer.alloc(32, 0x2a),
+      hashVersion: 'v1'
+    }),
+    identityConflictDiagnosticEnv: { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: 'true' },
+    identityConflictDiagnosticLogger: (line) => logs.push(line),
+    identityConflictDiagnosticRandomUUID: () => MARKER
+  })
+  const errors = await Promise.all([resolveConflict(store), resolveConflict(store)])
+  const markedErrors = errors.filter((error) => Object.prototype.hasOwnProperty.call(error, 'diagnosticMarker'))
+  assert.equal(markedErrors.length, 1)
+  assert.equal(logs.length, 1)
+  assert.match(logs[0], new RegExp(`OPERATION_MARKER=${markedErrors[0].diagnosticMarker}`))
 }
 
 async function testRollbackRejectPreservesConflictAndDisposesConnection() {
@@ -527,6 +585,7 @@ async function testRollbackRejectPreservesConflictAndDisposesConnection() {
   }))
   assert.equal(error.code, 'IDENTITY_CONFLICT')
   assert.equal(error.statusCode, 409)
+  assert.equal(error.diagnosticMarker, MARKER)
   assert.equal(logs.length, 1)
   assert.deepEqual(connection.events.slice(-2), ['rollback', 'destroy'])
   assert(connection.events.includes('destroy'))
@@ -558,6 +617,7 @@ async function testRetryRollbackRejectPreservesConflictAndDisposesConnection() {
   })
   const error = await resolveConflict(store)
   assert.equal(error.code, 'IDENTITY_CONFLICT')
+  assert.equal(error.diagnosticMarker, MARKER)
   assert.deepEqual(firstConnection.events.slice(-2), ['rollback', 'release'])
   assert(retryConnection.events.includes('destroy'))
   assert.equal(retryConnection.events.includes('release'), false)
@@ -573,7 +633,7 @@ async function testLoggerErrorPrivacy() {
     businessRows: [createBusinessRow(), createBusinessRow()]
   })
   const logs = []
-  await resolveConflict(createConflictStore(connection, {
+  const error = await resolveConflict(createConflictStore(connection, {
     logger: async (line) => {
       logs.push(line)
       const error = new Error(LOGGER_MESSAGE)
@@ -582,6 +642,7 @@ async function testLoggerErrorPrivacy() {
     }
   }))
   assert.equal(logs.length, 1)
+  assert.equal(Object.prototype.hasOwnProperty.call(error, 'diagnosticMarker'), false)
   for (const sentinel of FORBIDDEN_SENTINELS) {
     assert.equal(logs.join('\n').includes(sentinel), false)
   }
@@ -595,6 +656,8 @@ await testUnionidOutcomes()
 await testSingleUseAndConcurrency()
 await testSelectAndLoggerFailuresAreContained()
 await testIdentityStoreIntegration()
+await testSubsequentConflictDoesNotReceiveMarker()
+await testConcurrentConflictsHaveAtMostOneMatchingMarker()
 await testRollbackRejectPreservesConflictAndDisposesConnection()
 await testRetryRollbackRejectPreservesConflictAndDisposesConnection()
 await testLoggerErrorPrivacy()

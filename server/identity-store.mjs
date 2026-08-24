@@ -29,17 +29,26 @@ function isDuplicateEntryError(error) {
   return Boolean(error && error.code === 'ER_DUP_ENTRY')
 }
 
-function createIdentityConflictError(diagnosticLine = null) {
+function createIdentityConflictError(diagnostic = null) {
   const error = createIdentityStoreError('Identity binding conflict.', {
     code: 'IDENTITY_CONFLICT',
     statusCode: 409
   })
-  if (diagnosticLine) {
-    Object.defineProperty(error, 'identityConflictDiagnosticLine', {
-      value: diagnosticLine
+  if (diagnostic) {
+    Object.defineProperty(error, 'identityConflictDiagnostic', {
+      value: diagnostic
     })
   }
   return error
+}
+
+async function emitIdentityConflictDiagnostic(error, diagnostic) {
+  const marker = await diagnostic.emit(error && error.identityConflictDiagnostic)
+  if (marker) {
+    Object.defineProperty(error, 'diagnosticMarker', {
+      value: marker
+    })
+  }
 }
 
 function wait(milliseconds) {
@@ -643,7 +652,7 @@ export function createIdentityStore(options = {}) {
     } catch (error) {
       if (error && error.code === 'IDENTITY_CONFLICT') {
         connectionDisposed = await rollbackIdentityConflict(connection)
-        await identityConflictDiagnostic.emit(error.identityConflictDiagnosticLine)
+        await emitIdentityConflictDiagnostic(error, identityConflictDiagnostic)
         throw error
       }
       await connection.rollback()
@@ -668,13 +677,13 @@ export function createIdentityStore(options = {}) {
     })
     const resolution = resolveIdentityConflict(bindings)
     if (resolution.conflict) {
-      const diagnosticLine = await identityConflictDiagnostic.collect(connection, {
+      const diagnostic = await identityConflictDiagnostic.collect(connection, {
         aUserId: bindings.wechatBinding.userId,
         bUserId: bindings.phoneBinding.userId,
         requestUnionid: options.unionid,
         aStoredUnionid: bindings.wechatBinding.unionid
       })
-      throw createIdentityConflictError(diagnosticLine)
+      throw createIdentityConflictError(diagnostic)
     }
 
     if (resolution.action === 'create_user' && !options.allowCreateUser) {
@@ -727,7 +736,7 @@ export function createIdentityStore(options = {}) {
       } catch (error) {
         if (error && error.code === 'IDENTITY_CONFLICT') {
           retryConnectionDisposed = await rollbackIdentityConflict(retryConnection)
-          await identityConflictDiagnostic.emit(error.identityConflictDiagnosticLine)
+          await emitIdentityConflictDiagnostic(error, identityConflictDiagnostic)
           throw error
         }
         await retryConnection.rollback()
