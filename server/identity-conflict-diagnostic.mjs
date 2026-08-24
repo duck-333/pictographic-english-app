@@ -252,24 +252,31 @@ export function createIdentityConflictDiagnostic(options = {}) {
       const bUnionids = await collectBUnionids(connection, bUserId)
       const aBusiness = await collectBusinessSummary(connection, aUserId)
       const bBusiness = await collectBusinessSummary(connection, bUserId)
-      return formatDiagnosticLine(
+      return {
         marker,
-        bindingCounts,
-        { aUnionid, bUnionids },
-        aBusiness,
-        bBusiness
-      )
+        line: formatDiagnosticLine(
+          marker,
+          bindingCounts,
+          { aUnionid, bUnionids },
+          aBusiness,
+          bBusiness
+        )
+      }
     } catch {
       return null
     }
   }
 
-  async function emit(line) {
-    if (!line) return
+  async function emit(diagnostic) {
+    if (!diagnostic || !isUuid(diagnostic.marker) || typeof diagnostic.line !== 'string') return null
+    const expectedPrefix = `IDENTITY_CONFLICT_DIAGNOSTIC OPERATION_MARKER=${diagnostic.marker} `
+    if (!diagnostic.line.startsWith(expectedPrefix)) return null
     try {
-      await logger(line)
+      await logger(diagnostic.line)
+      return diagnostic.marker
     } catch {
       // Diagnostic logging must never change the existing conflict response.
+      return null
     }
   }
 

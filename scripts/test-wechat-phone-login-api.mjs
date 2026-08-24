@@ -4,6 +4,8 @@ import { once } from 'node:events'
 
 import { createApiHandler } from '../server/index.mjs'
 
+const DIAGNOSTIC_MARKER = '123e4567-e89b-42d3-a456-426614174000'
+
 function createError(message, options = {}) {
   const error = new Error(message)
   error.code = options.code
@@ -316,6 +318,58 @@ async function testIdentityConflict() {
   })
 }
 
+async function testIdentityConflictDiagnosticMarker() {
+  await withServer({
+    wechatLoginClient: {
+      async code2Session() {
+        return {
+          openid: 'openid-secret',
+          unionid: 'unionid-secret'
+        }
+      },
+      async phoneCode2Number() {
+        return {
+          phoneNumber: '+8613800138000',
+          purePhoneNumber: '13800138000',
+          countryCode: '86'
+        }
+      }
+    },
+    identityStore: {
+      async resolveWechatPhoneIdentity() {
+        const error = createError('Identity binding conflict.', {
+          code: 'IDENTITY_CONFLICT',
+          statusCode: 409
+        })
+        Object.defineProperty(error, 'diagnosticMarker', {
+          value: DIAGNOSTIC_MARKER
+        })
+        throw error
+      }
+    }
+  }, async (baseUrl) => {
+    const result = await readJson(await fetch(`${baseUrl}/api/auth/wechat-phone-login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        loginCode: 'login-code-1',
+        phoneCode: 'phone-code-1'
+      })
+    }))
+
+    assert.equal(result.status, 409)
+    assert.deepEqual(result.body, {
+      ok: false,
+      code: 'IDENTITY_CONFLICT',
+      message: 'Identity binding conflict.',
+      diagnosticMarker: DIAGNOSTIC_MARKER
+    })
+    assertSafeAuthResponse(result.body)
+  })
+}
+
 async function testRawDatabaseErrorIsSanitized() {
   await withServer({
     wechatLoginClient: {
@@ -423,6 +477,7 @@ await testMissingLoginCode()
 await testMissingPhoneCode()
 await testWechatConfigMissing()
 await testIdentityConflict()
+await testIdentityConflictDiagnosticMarker()
 await testRawDatabaseErrorIsSanitized()
 await testExistingWechatLoginCompatibility()
 

@@ -218,11 +218,16 @@ function isDatabaseErrorCode(code) {
 
 function getPublicPhoneLoginError(error) {
   const rawCode = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+  const diagnosticMarker = error && typeof error.diagnosticMarker === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(error.diagnosticMarker)
+    ? error.diagnosticMarker
+    : ''
 
   if (Object.prototype.hasOwnProperty.call(SAFE_PHONE_LOGIN_ERROR_MESSAGES, rawCode)) {
     return {
       statusCode: normalizeErrorStatusCode(error && error.statusCode),
-      code: rawCode
+      code: rawCode,
+      ...(rawCode === 'IDENTITY_CONFLICT' && diagnosticMarker ? { diagnosticMarker } : {})
     }
   }
 
@@ -258,7 +263,8 @@ function sendPhoneLoginError(res, error) {
   sendJson(res, publicError.statusCode, {
     ok: false,
     code: publicError.code,
-    message: SAFE_PHONE_LOGIN_ERROR_MESSAGES[publicError.code]
+    message: SAFE_PHONE_LOGIN_ERROR_MESSAGES[publicError.code],
+    ...(publicError.diagnosticMarker ? { diagnosticMarker: publicError.diagnosticMarker } : {})
   })
 }
 
