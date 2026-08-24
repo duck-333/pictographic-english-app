@@ -572,7 +572,8 @@ export function createIdentityStore(options = {}) {
   const identityConflictDiagnostic = createIdentityConflictDiagnostic({
     env: options.identityConflictDiagnosticEnv || process.env,
     logger: options.identityConflictDiagnosticLogger,
-    randomUUID: options.identityConflictDiagnosticRandomUUID
+    randomUUID: options.identityConflictDiagnosticRandomUUID,
+    fileSwitchChecker: options.identityConflictDiagnosticFileSwitchChecker
   })
 
   function getPool() {

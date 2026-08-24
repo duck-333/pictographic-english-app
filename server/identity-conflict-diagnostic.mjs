@@ -1,6 +1,8 @@
 import crypto from 'crypto'
+import { lstat } from 'node:fs/promises'
 
 const ENABLED_VALUE = 'true'
+const FILE_SWITCH_PATH = '/home/ubuntu/.identity-conflict-diagnostic-enabled'
 const MEMBERSHIP_TRANSACTION_TYPES = [
   'TAOBAO_BOOK_MEMBERSHIP_GRANT',
   'MEMBERSHIP_ACTIVATED',
@@ -55,6 +57,23 @@ function toBoolean(value) {
 
 function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+export async function isIdentityConflictDiagnosticSwitchFileEnabled(options = {}) {
+  const lstatFile = options.lstat || lstat
+  try {
+    const stats = await lstatFile(FILE_SWITCH_PATH)
+    return Boolean(
+      stats &&
+      typeof stats.isSymbolicLink === 'function' &&
+      !stats.isSymbolicLink() &&
+      typeof stats.isFile === 'function' &&
+      stats.isFile() &&
+      stats.size === 0
+    )
+  } catch {
+    return false
+  }
 }
 
 async function executeSelect(connection, sql, values) {
@@ -233,16 +252,27 @@ function formatDiagnosticLine(marker, bindingCounts, unionids, aBusiness, bBusin
 
 export function createIdentityConflictDiagnostic(options = {}) {
   const env = options.env || process.env
-  const enabled = env.IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED === ENABLED_VALUE
+  const fileSwitchChecker = options.fileSwitchChecker || isIdentityConflictDiagnosticSwitchFileEnabled
   const logger = options.logger || console.warn
   const randomUUID = options.randomUUID || (() => crypto.randomUUID())
   let claimed = false
 
   async function collect(connection, input = {}) {
-    if (!enabled || claimed) return null
+    if (claimed) return null
     const aUserId = normalizeString(input.aUserId)
     const bUserId = normalizeString(input.bUserId)
     if (!aUserId || !bUserId || aUserId === bUserId) return null
+    const envEnabled = env.IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED === ENABLED_VALUE
+    if (!envEnabled) {
+      let fileEnabled = false
+      try {
+        fileEnabled = await fileSwitchChecker() === true
+      } catch {
+        fileEnabled = false
+      }
+      if (!fileEnabled || claimed) return null
+    }
+    if (claimed) return null
     claimed = true
 
     try {

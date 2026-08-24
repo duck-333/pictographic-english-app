@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 
-import { createIdentityConflictDiagnostic } from '../server/identity-conflict-diagnostic.mjs'
+import {
+  createIdentityConflictDiagnostic,
+  isIdentityConflictDiagnosticSwitchFileEnabled
+} from '../server/identity-conflict-diagnostic.mjs'
 import { createIdentityStore, resolveIdentityConflict } from '../server/identity-store.mjs'
 
 const MARKER = '123e4567-e89b-42d3-a456-426614174000'
@@ -22,6 +25,7 @@ const ROLLBACK_MESSAGE = 'rollback-error-private-sentinel'
 const ROLLBACK_STACK = 'rollback-stack-private-sentinel'
 const LOGGER_MESSAGE = 'logger-error-private-sentinel'
 const LOGGER_STACK = 'logger-stack-private-sentinel'
+const FILE_STAT_MESSAGE = 'file-stat-private-sentinel'
 const FORBIDDEN_SENTINELS = [
   A_ID,
   B_ID,
@@ -40,7 +44,8 @@ const FORBIDDEN_SENTINELS = [
   ROLLBACK_MESSAGE,
   ROLLBACK_STACK,
   LOGGER_MESSAGE,
-  LOGGER_STACK
+  LOGGER_STACK,
+  FILE_STAT_MESSAGE
 ]
 
 function createBusinessRow(overrides = {}) {
@@ -155,7 +160,8 @@ function createDiagnostic(options = {}) {
   return createIdentityConflictDiagnostic({
     env: options.env || { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: 'true' },
     logger: options.logger || (() => {}),
-    randomUUID: options.randomUUID || (() => MARKER)
+    randomUUID: options.randomUUID || (() => MARKER),
+    fileSwitchChecker: options.fileSwitchChecker || (async () => false)
   })
 }
 
@@ -198,10 +204,102 @@ async function testStrictDefaultOff() {
   }
 }
 
-async function testSameIdentityDoesNothing() {
+function createFileStats(options = {}) {
+  return {
+    size: options.size === undefined ? 0 : options.size,
+    isSymbolicLink: () => options.symlink === true,
+    isFile: () => options.file !== false
+  }
+}
+
+async function testFixedFileSwitchContract() {
+  const expectedPath = '/home/ubuntu/.identity-conflict-diagnostic-enabled'
+  for (const scenario of [
+    { name: 'empty regular file', stats: createFileStats(), expected: true },
+    { name: 'symlink', stats: createFileStats({ symlink: true }), expected: false },
+    { name: 'non-regular file', stats: createFileStats({ file: false }), expected: false },
+    { name: 'non-empty file', stats: createFileStats({ size: 1 }), expected: false }
+  ]) {
+    let checkedPath = ''
+    const enabled = await isIdentityConflictDiagnosticSwitchFileEnabled({
+      lstat: async (filePath) => {
+        checkedPath = filePath
+        return scenario.stats
+      }
+    })
+    assert.equal(checkedPath, expectedPath, scenario.name)
+    assert.equal(enabled, scenario.expected, scenario.name)
+  }
+
+  assert.equal(await isIdentityConflictDiagnosticSwitchFileEnabled({
+    lstat: async () => {
+      throw new Error(FILE_STAT_MESSAGE)
+    }
+  }), false)
+}
+
+async function testEnvironmentAndFileSwitchActivation() {
+  let fileChecks = 0
+  const envEnabled = await collectLine({
+    env: { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: 'true' },
+    fileSwitchChecker: async () => {
+      fileChecks += 1
+      return false
+    }
+  })
+  assert(envEnabled.result)
+  assert.equal(fileChecks, 0)
+
+  const fileEnabled = await collectLine({
+    env: {},
+    fileSwitchChecker: async () => true
+  })
+  assert(fileEnabled.result)
+
+  const bothDisabled = await collectLine({
+    env: {},
+    fileSwitchChecker: async () => false
+  })
+  assert.equal(bothDisabled.result, null)
+  assert.equal(bothDisabled.connection.calls.length, 0)
+}
+
+async function testFileRemovalClosesNextConflict() {
+  let fileExists = true
+  let fileChecks = 0
   let markerCalls = 0
   const connection = createDiagnosticConnection()
   const diagnostic = createDiagnostic({
+    env: {},
+    fileSwitchChecker: async () => {
+      fileChecks += 1
+      return fileExists
+    },
+    randomUUID: () => {
+      markerCalls += 1
+      return MARKER
+    }
+  })
+
+  assert.equal(await diagnostic.collect(connection, { aUserId: A_ID, bUserId: A_ID }), null)
+  assert.equal(fileChecks, 0)
+  fileExists = false
+  assert.equal(await diagnostic.collect(connection, { aUserId: A_ID, bUserId: B_ID }), null)
+  assert.equal(fileChecks, 1)
+  assert.equal(markerCalls, 0)
+  assert.equal(connection.calls.length, 0)
+}
+
+async function testSameIdentityDoesNothing() {
+  let markerCalls = 0
+  let fileChecks = 0
+  const connection = createDiagnosticConnection()
+  const diagnostic = createDiagnostic({
+    env: {},
+    fileSwitchChecker: async () => {
+      fileChecks += 1
+      return true
+    },
     randomUUID: () => {
       markerCalls += 1
       return MARKER
@@ -215,6 +313,7 @@ async function testSameIdentityDoesNothing() {
   assert.equal(await diagnostic.collect(connection, { aUserId: A_ID, bUserId: A_ID }), null)
   assert.equal(connection.calls.length, 0)
   assert.equal(markerCalls, 0)
+  assert.equal(fileChecks, 0)
 }
 
 async function testFixedLineAndBusinessClassification() {
@@ -416,7 +515,8 @@ function createConflictStore(connection, options = {}) {
     }),
     identityConflictDiagnosticEnv: options.env || { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: 'true' },
     identityConflictDiagnosticLogger: options.logger,
-    identityConflictDiagnosticRandomUUID: () => MARKER
+    identityConflictDiagnosticRandomUUID: () => MARKER,
+    identityConflictDiagnosticFileSwitchChecker: options.fileSwitchChecker || (async () => false)
   })
 }
 
@@ -502,12 +602,39 @@ async function testIdentityStoreIntegration() {
   const disabledConnection = createIdentityConnection()
   const disabledError = await resolveConflict(createConflictStore(disabledConnection, {
     env: {},
+    fileSwitchChecker: async () => false,
     logger: (line) => disabledLogs.push(line)
   }))
   assert.equal(disabledConnection.diagnosticCalls.length, 0)
   assert.equal(disabledLogs.length, 0)
   assert.equal(Object.prototype.hasOwnProperty.call(disabledError, 'diagnosticMarker'), false)
   assert.deepEqual(disabledConnection.events.slice(-2), ['rollback', 'release'])
+
+  const fileEnabledLogs = []
+  const fileEnabledConnection = createIdentityConnection({
+    bUnionids: [A_UNIONID],
+    businessRows: [createBusinessRow(), createBusinessRow()]
+  })
+  const fileEnabledError = await resolveConflict(createConflictStore(fileEnabledConnection, {
+    env: {},
+    fileSwitchChecker: async () => true,
+    logger: (line) => fileEnabledLogs.push(line)
+  }))
+  assert.equal(fileEnabledError.diagnosticMarker, MARKER)
+  assert.equal(fileEnabledLogs.length, 1)
+
+  const statErrorConnection = createIdentityConnection()
+  const statError = await resolveConflict(createConflictStore(statErrorConnection, {
+    env: {},
+    fileSwitchChecker: async () => {
+      throw new Error(FILE_STAT_MESSAGE)
+    },
+    logger: () => assert.fail('stat failure must not log')
+  }))
+  assert.equal(statError.code, 'IDENTITY_CONFLICT')
+  assert.equal(statError.statusCode, 409)
+  assert.equal(Object.prototype.hasOwnProperty.call(statError, 'diagnosticMarker'), false)
+  assert.equal(statErrorConnection.diagnosticCalls.length, 0)
 
   const failedConnection = createIdentityConnection({ failSelect: true })
   const failedError = await resolveConflict(createConflictStore(failedConnection, {
@@ -562,9 +689,10 @@ async function testConcurrentConflictsHaveAtMostOneMatchingMarker() {
       campaignPhoneIdentityHash: Buffer.alloc(32, 0x2a),
       hashVersion: 'v1'
     }),
-    identityConflictDiagnosticEnv: { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: 'true' },
+    identityConflictDiagnosticEnv: {},
     identityConflictDiagnosticLogger: (line) => logs.push(line),
-    identityConflictDiagnosticRandomUUID: () => MARKER
+    identityConflictDiagnosticRandomUUID: () => MARKER,
+    identityConflictDiagnosticFileSwitchChecker: async () => true
   })
   const errors = await Promise.all([resolveConflict(store), resolveConflict(store)])
   const markedErrors = errors.filter((error) => Object.prototype.hasOwnProperty.call(error, 'diagnosticMarker'))
@@ -649,6 +777,9 @@ async function testLoggerErrorPrivacy() {
 }
 
 await testStrictDefaultOff()
+await testFixedFileSwitchContract()
+await testEnvironmentAndFileSwitchActivation()
+await testFileRemovalClosesNextConflict()
 await testSameIdentityDoesNothing()
 await testFixedLineAndBusinessClassification()
 await testNullSafeEntitlementClassification()
