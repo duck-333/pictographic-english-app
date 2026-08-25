@@ -1,7 +1,6 @@
 import crypto from 'crypto'
 import { lstat } from 'node:fs/promises'
 
-const ENABLED_VALUE = 'true'
 const FILE_SWITCH_PATH = '/home/ubuntu/.identity-conflict-diagnostic-enabled'
 const MEMBERSHIP_TRANSACTION_TYPES = [
   'TAOBAO_BOOK_MEMBERSHIP_GRANT',
@@ -251,7 +250,6 @@ function formatDiagnosticLine(marker, bindingCounts, unionids, aBusiness, bBusin
 }
 
 export function createIdentityConflictDiagnostic(options = {}) {
-  const env = options.env || process.env
   const fileSwitchChecker = options.fileSwitchChecker || isIdentityConflictDiagnosticSwitchFileEnabled
   const logger = options.logger || console.warn
   const randomUUID = options.randomUUID || (() => crypto.randomUUID())
@@ -262,17 +260,13 @@ export function createIdentityConflictDiagnostic(options = {}) {
     const aUserId = normalizeString(input.aUserId)
     const bUserId = normalizeString(input.bUserId)
     if (!aUserId || !bUserId || aUserId === bUserId) return null
-    const envEnabled = env.IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED === ENABLED_VALUE
-    if (!envEnabled) {
-      let fileEnabled = false
-      try {
-        fileEnabled = await fileSwitchChecker() === true
-      } catch {
-        fileEnabled = false
-      }
-      if (!fileEnabled || claimed) return null
+    let fileEnabled = false
+    try {
+      fileEnabled = await fileSwitchChecker() === true
+    } catch {
+      fileEnabled = false
     }
-    if (claimed) return null
+    if (!fileEnabled || claimed) return null
     claimed = true
 
     try {

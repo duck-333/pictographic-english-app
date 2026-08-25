@@ -158,10 +158,10 @@ function createDiagnosticConnection(options = {}) {
 
 function createDiagnostic(options = {}) {
   return createIdentityConflictDiagnostic({
-    env: options.env || { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: 'true' },
+    env: options.env,
     logger: options.logger || (() => {}),
     randomUUID: options.randomUUID || (() => MARKER),
-    fileSwitchChecker: options.fileSwitchChecker || (async () => false)
+    fileSwitchChecker: options.fileSwitchChecker || (async () => true)
   })
 }
 
@@ -183,25 +183,23 @@ async function collectLine(options = {}) {
 }
 
 async function testStrictDefaultOff() {
-  for (const env of [{}, { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: 'false' }, { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: 'TRUE' }, { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: '1' }]) {
-    let markerCalls = 0
-    let logCalls = 0
-    const connection = createDiagnosticConnection()
-    const diagnostic = createDiagnostic({
-      env,
-      logger: () => { logCalls += 1 },
-      randomUUID: () => {
-        markerCalls += 1
-        return MARKER
-      }
-    })
-    const result = await diagnostic.collect(connection, { aUserId: A_ID, bUserId: B_ID })
-    await diagnostic.emit(result)
-    assert.equal(result, null)
-    assert.equal(connection.calls.length, 0)
-    assert.equal(markerCalls, 0)
-    assert.equal(logCalls, 0)
-  }
+  let markerCalls = 0
+  let logCalls = 0
+  const connection = createDiagnosticConnection()
+  const diagnostic = createDiagnostic({
+    fileSwitchChecker: async () => false,
+    logger: () => { logCalls += 1 },
+    randomUUID: () => {
+      markerCalls += 1
+      return MARKER
+    }
+  })
+  const result = await diagnostic.collect(connection, { aUserId: A_ID, bUserId: B_ID })
+  await diagnostic.emit(result)
+  assert.equal(result, null)
+  assert.equal(connection.calls.length, 0)
+  assert.equal(markerCalls, 0)
+  assert.equal(logCalls, 0)
 }
 
 function createFileStats(options = {}) {
@@ -238,26 +236,25 @@ async function testFixedFileSwitchContract() {
   }), false)
 }
 
-async function testEnvironmentAndFileSwitchActivation() {
+async function testFileOnlySwitchActivation() {
   let fileChecks = 0
-  const envEnabled = await collectLine({
+  const staleEnvDisabled = await collectLine({
     env: { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: 'true' },
     fileSwitchChecker: async () => {
       fileChecks += 1
       return false
     }
   })
-  assert(envEnabled.result)
-  assert.equal(fileChecks, 0)
+  assert.equal(staleEnvDisabled.result, null)
+  assert.equal(staleEnvDisabled.connection.calls.length, 0)
+  assert.equal(fileChecks, 1)
 
   const fileEnabled = await collectLine({
-    env: {},
     fileSwitchChecker: async () => true
   })
   assert(fileEnabled.result)
 
   const bothDisabled = await collectLine({
-    env: {},
     fileSwitchChecker: async () => false
   })
   assert.equal(bothDisabled.result, null)
@@ -270,7 +267,6 @@ async function testFileRemovalClosesNextConflict() {
   let markerCalls = 0
   const connection = createDiagnosticConnection()
   const diagnostic = createDiagnostic({
-    env: {},
     fileSwitchChecker: async () => {
       fileChecks += 1
       return fileExists
@@ -295,7 +291,6 @@ async function testSameIdentityDoesNothing() {
   let fileChecks = 0
   const connection = createDiagnosticConnection()
   const diagnostic = createDiagnostic({
-    env: {},
     fileSwitchChecker: async () => {
       fileChecks += 1
       return true
@@ -313,6 +308,11 @@ async function testSameIdentityDoesNothing() {
   assert.equal(await diagnostic.collect(connection, { aUserId: A_ID, bUserId: A_ID }), null)
   assert.equal(connection.calls.length, 0)
   assert.equal(markerCalls, 0)
+  assert.equal(fileChecks, 0)
+
+  assert.equal(await diagnostic.collect(connection, { aUserId: A_ID, bUserId: '' }), null)
+  assert.equal(await diagnostic.collect(connection, { aUserId: '', bUserId: B_ID }), null)
+  assert.equal(await diagnostic.collect(connection, {}), null)
   assert.equal(fileChecks, 0)
 }
 
@@ -513,10 +513,10 @@ function createConflictStore(connection, options = {}) {
       campaignPhoneIdentityHash: Buffer.alloc(32, 0x2a),
       hashVersion: 'v1'
     }),
-    identityConflictDiagnosticEnv: options.env || { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: 'true' },
+    identityConflictDiagnosticEnv: options.env,
     identityConflictDiagnosticLogger: options.logger,
     identityConflictDiagnosticRandomUUID: () => MARKER,
-    identityConflictDiagnosticFileSwitchChecker: options.fileSwitchChecker || (async () => false)
+    identityConflictDiagnosticFileSwitchChecker: options.fileSwitchChecker || (async () => true)
   })
 }
 
@@ -601,7 +601,6 @@ async function testIdentityStoreIntegration() {
   const disabledLogs = []
   const disabledConnection = createIdentityConnection()
   const disabledError = await resolveConflict(createConflictStore(disabledConnection, {
-    env: {},
     fileSwitchChecker: async () => false,
     logger: (line) => disabledLogs.push(line)
   }))
@@ -616,7 +615,6 @@ async function testIdentityStoreIntegration() {
     businessRows: [createBusinessRow(), createBusinessRow()]
   })
   const fileEnabledError = await resolveConflict(createConflictStore(fileEnabledConnection, {
-    env: {},
     fileSwitchChecker: async () => true,
     logger: (line) => fileEnabledLogs.push(line)
   }))
@@ -625,7 +623,6 @@ async function testIdentityStoreIntegration() {
 
   const statErrorConnection = createIdentityConnection()
   const statError = await resolveConflict(createConflictStore(statErrorConnection, {
-    env: {},
     fileSwitchChecker: async () => {
       throw new Error(FILE_STAT_MESSAGE)
     },
@@ -689,7 +686,6 @@ async function testConcurrentConflictsHaveAtMostOneMatchingMarker() {
       campaignPhoneIdentityHash: Buffer.alloc(32, 0x2a),
       hashVersion: 'v1'
     }),
-    identityConflictDiagnosticEnv: {},
     identityConflictDiagnosticLogger: (line) => logs.push(line),
     identityConflictDiagnosticRandomUUID: () => MARKER,
     identityConflictDiagnosticFileSwitchChecker: async () => true
@@ -739,9 +735,9 @@ async function testRetryRollbackRejectPreservesConflictAndDisposesConnection() {
       campaignPhoneIdentityHash: Buffer.alloc(32, 0x2a),
       hashVersion: 'v1'
     }),
-    identityConflictDiagnosticEnv: { IDENTITY_CONFLICT_DIAGNOSTIC_ENABLED: 'true' },
     identityConflictDiagnosticLogger: (line) => logs.push(line),
-    identityConflictDiagnosticRandomUUID: () => MARKER
+    identityConflictDiagnosticRandomUUID: () => MARKER,
+    identityConflictDiagnosticFileSwitchChecker: async () => true
   })
   const error = await resolveConflict(store)
   assert.equal(error.code, 'IDENTITY_CONFLICT')
@@ -778,7 +774,7 @@ async function testLoggerErrorPrivacy() {
 
 await testStrictDefaultOff()
 await testFixedFileSwitchContract()
-await testEnvironmentAndFileSwitchActivation()
+await testFileOnlySwitchActivation()
 await testFileRemovalClosesNextConflict()
 await testSameIdentityDoesNothing()
 await testFixedLineAndBusinessClassification()
