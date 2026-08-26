@@ -257,8 +257,10 @@ Only published word IDs can be saved. Daily rotation uses the Asia/Shanghai cale
 - Do not commit real `.env` files or real `ADMIN_API_TOKEN` values.
 - Production must set `ADMIN_API_TOKEN` to a private, non-default value.
 - Production must set `NODE_ENV=production` and `JWT_SECRET` before starting the API. Missing `JWT_SECRET` fails startup intentionally.
+- Production must set an independent `CAMPAIGN_PHONE_IDENTITY_HASH_SECRET` of at least 32 bytes before phone login is enabled. Generate a new value with `openssl rand -hex 32`; do not reuse `PHONE_HASH_SECRET`, `JWT_SECRET`, `ADMIN_API_TOKEN`, `REDEMPTION_CODE_HASH_SECRET`, `BOOK_ORDER_CLAIM_HASH_SECRET`, or `WECHAT_MINIAPP_SECRET`. Once production phone identity data exists, do not rotate this secret without an approved data migration plan.
 - Development may use `http://127.0.0.1:3001` or `http://SERVER_IP:3001`.
 - Production must use a filed HTTPS domain configured in the WeChat mini program allowed request domains.
 - `npm.cmd run check:production` blocks local HTTP API bases in production or unknown runtime.
 - `npm.cmd run check:production` also verifies that production admin auth rejects empty/default tokens.
 - `npm.cmd run check:production` also verifies that production user JWT auth rejects missing `JWT_SECRET`.
+- `npm.cmd run check:production` also verifies the required length and non-reuse contract for `CAMPAIGN_PHONE_IDENTITY_HASH_SECRET` with test-only values.

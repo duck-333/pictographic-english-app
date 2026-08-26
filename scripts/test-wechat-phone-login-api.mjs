@@ -418,6 +418,58 @@ async function testRawDatabaseErrorIsSanitized() {
   })
 }
 
+async function testIdentityInfrastructureErrorsAreNotConflicts() {
+  const cases = [
+    ['CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_MISSING', 503],
+    ['CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_TOO_SHORT', 503],
+    ['CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_REUSED', 503],
+    ['IDENTITY_STORE_ERROR', 500]
+  ]
+
+  for (const [rawCode, expectedStatus] of cases) {
+    await withServer({
+      wechatLoginClient: {
+        async code2Session() {
+          return { openid: 'openid-secret', unionid: 'unionid-secret' }
+        },
+        async phoneCode2Number() {
+          return {
+            phoneNumber: '+8613800138000',
+            purePhoneNumber: '13800138000',
+            countryCode: '86'
+          }
+        }
+      },
+      identityStore: {
+        async resolveWechatPhoneIdentity() {
+          throw createError('private infrastructure detail', {
+            code: rawCode,
+            statusCode: rawCode === 'IDENTITY_STORE_ERROR' ? 500 : 503
+          })
+        }
+      }
+    }, async (baseUrl) => {
+      const result = await readJson(await fetch(`${baseUrl}/api/auth/wechat-phone-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          loginCode: 'login-code-1',
+          phoneCode: 'phone-code-1'
+        })
+      }))
+
+      assert.equal(result.status, expectedStatus)
+      assert.deepEqual(result.body, {
+        ok: false,
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Internal server error.'
+      })
+      assert.notEqual(result.body.code, 'IDENTITY_CONFLICT')
+      assertSafeAuthResponse(result.body)
+    })
+  }
+}
+
 async function testExistingWechatLoginCompatibility() {
   let identityStoreCalled = false
   await withServer({
@@ -479,6 +531,7 @@ await testWechatConfigMissing()
 await testIdentityConflict()
 await testIdentityConflictDiagnosticMarker()
 await testRawDatabaseErrorIsSanitized()
+await testIdentityInfrastructureErrorsAreNotConflicts()
 await testExistingWechatLoginCompatibility()
 
 console.log('wechat phone login API tests passed')

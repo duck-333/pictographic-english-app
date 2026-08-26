@@ -683,3 +683,70 @@ Production boundary:
 - 移除会员、升级、购买、兑换等权益暗示，以及仅保存在本机却显示“提交”的缺词反馈功能。
 - `scripts/check-production-ready.mjs` 与 server API 联调测试同步到第一版生产离线策略。
 - `package-lock.json` 的既有未提交改动不属于本轮，保持不动。
+
+## 2026-08-25 手机号登录误报 IDENTITY_CONFLICT 故障
+
+### 现象与日志
+
+- 手机号快捷登录返回 HTTP 409、公开错误码 `IDENTITY_CONFLICT`，小程序因此提示账号绑定冲突。
+- 服务端脱敏日志显示 `rawCode=IDENTITY_STORE_ERROR publicCode=IDENTITY_CONFLICT status=409`。
+- 故障恢复后确认这不是微信身份与手机号身份真实指向不同用户造成的冲突。
+
+### 根因与误导链路
+
+- 生产运行环境缺少购书活动手机号身份所需的 `CAMPAIGN_PHONE_IDENTITY_HASH_SECRET`。
+- `book-benefit-foundation.mjs` 已产生精确的缺失配置错误，但 `identity-store.mjs` 曾将 foundation 异常统一改写为 `IDENTITY_STORE_ERROR`。
+- `index.mjs` 又曾以宽泛的 `^IDENTITY_` 规则把所有身份前缀错误映射为公开 409 `IDENTITY_CONFLICT`。因此基础设施/配置故障被误报为用户账号冲突，排查方向被带偏。
+
+### 已排除事项
+
+- 未发现需要修改身份绑定模型、手机号 hash 输入、数据库结构、007/008 migration、购书权益规则或小程序 UI 的证据。
+- 本次修复不执行账号合并、身份迁移、数据删除、Token 失效或生产数据修改。
+
+### 修复内容
+
+- 身份存储层仅对白名单内的 campaign secret 缺失、过短、复用错误保留精确内部错误码，同时使用通用安全错误消息，避免敏感配置细节进入公开响应。
+- 手机号登录公共映射只允许精确的 `IDENTITY_CONFLICT` 返回 409；通用 `IDENTITY_STORE_ERROR` 返回 500，已知 campaign secret 配置错误返回 503，二者公开错误码均为 `INTERNAL_SERVER_ERROR`。
+- 数据库错误继续映射为 503 `USER_DB_ERROR`，微信错误映射规则保持不变。
+- 生产必须配置独立且至少 32 字节的 `CAMPAIGN_PHONE_IDENTITY_HASH_SECRET`。建议用 `openssl rand -hex 32` 生成；不得与其他服务密钥复用，生产数据形成后未经迁移审批不得轮换。
+
+### 后续排障原则
+
+- 首先查看服务端脱敏日志中的 `rawCode`，再参考 `publicCode` 和 HTTP 状态；公开错误码是面向客户端的安全归类，不能代替内部根因。
+- 只有内部 `rawCode` 精确为 `IDENTITY_CONFLICT` 时，才按真实账号绑定冲突调查。`IDENTITY_STORE_ERROR` 或 campaign secret 配置码应优先检查服务配置与依赖可用性。
+- 日志不得记录 secret 原值、手机号、openid、unionid、Token、SQL、完整异常或 stack。
+
+排障必须按以下固定顺序执行：
+
+1. 先查看 `rawCode`。
+2. 定位 `rawCode` 的产生位置。
+3. 检查 `rawCode` → `publicCode` 的映射逻辑。
+4. 检查 `rawCode` 产生前是否存在被 `catch`、`wrap` 或 `normalize` 吞掉的原始异常。
+5. 只有在 `rawCode` 本身明确表示业务冲突时，才检查数据库中的业务数据冲突。
+
+机械执行链：
+
+```text
+rawCode
+→ rawCode 产生位置
+→ rawCode 到 publicCode 的映射
+→ 是否存在被吞掉的原始异常
+→ 最后才检查业务数据冲突
+```
+
+本次反例中，公开结果和内部日志分别是：
+
+```text
+publicCode=IDENTITY_CONFLICT
+rawCode=IDENTITY_STORE_ERROR
+```
+
+不能因为 `publicCode` 名称看起来像“账号冲突”，就优先检查用户表、绑定表、Docker、数据库实例或历史账号。应先沿 `rawCode` 追踪：
+
+```text
+IDENTITY_STORE_ERROR
+→ createIdentityStoreError 默认 code
+→ resolveCampaignPhoneIdentity catch
+→ book-benefit-foundation
+→ CAMPAIGN_PHONE_IDENTITY_HASH_SECRET
+```

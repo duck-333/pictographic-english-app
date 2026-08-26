@@ -72,6 +72,8 @@ campaign-phone-identity:v1|<normalized_phone>
 
 结果为 32 字节 HMAC-SHA256 Buffer，版本为 `v1`。密钥不得与其他已知密钥复用。`user_phone_bindings.campaign_phone_identity_hash` 仅建立普通查询索引；活动内账号和手机号防重复由 redemption 唯一约束负责。旧绑定为 `NULL` 时只能通过再次完成可信手机号验证补齐，不能从旧 hash、masked phone、用户 ID 或客户端输入推导。
 
+生产部署必须提供独立的 `CAMPAIGN_PHONE_IDENTITY_HASH_SECRET`，长度至少 32 字节；建议用 `openssl rand -hex 32` 生成。不得复用 `PHONE_HASH_SECRET`、`JWT_SECRET`、`ADMIN_API_TOKEN`、`REDEMPTION_CODE_HASH_SECRET`、`BOOK_ORDER_CLAIM_HASH_SECRET` 或 `WECHAT_MINIAPP_SECRET`。一旦生产已写入手机号活动身份数据，未经审批的数据迁移方案不得轮换该密钥。
+
 ## 迁移策略
 
 Canonical 与发布副本必须逐字一致：

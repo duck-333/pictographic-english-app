@@ -12,6 +12,11 @@ const USERS_TABLE = 'users'
 const WECHAT_BINDINGS_TABLE = 'wechat_user_bindings'
 const PHONE_BINDINGS_TABLE = 'user_phone_bindings'
 const CAMPAIGN_PHONE_HASH_VERSION = 'v1'
+const CAMPAIGN_PHONE_IDENTITY_CONFIG_ERROR_CODES = new Set([
+  'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_MISSING',
+  'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_TOO_SHORT',
+  'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_REUSED'
+])
 let campaignPhoneIdentityModulePromise = null
 
 function normalizeString(value) {
@@ -160,7 +165,14 @@ function normalizeCampaignPhoneIdentity(value) {
 async function resolveCampaignPhoneIdentity(factory, phone, options) {
   try {
     return normalizeCampaignPhoneIdentity(await factory(phone, options))
-  } catch {
+  } catch (error) {
+    const code = error && error.code ? String(error.code) : ''
+    if (CAMPAIGN_PHONE_IDENTITY_CONFIG_ERROR_CODES.has(code)) {
+      throw createIdentityStoreError('Campaign phone identity is unavailable.', {
+        code,
+        statusCode: 503
+      })
+    }
     throw createIdentityStoreError('Campaign phone identity is unavailable.')
   }
 }

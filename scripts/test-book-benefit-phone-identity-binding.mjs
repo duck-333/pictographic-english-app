@@ -363,6 +363,47 @@ async function testDefaultFactoryIntegration() {
   assert.equal(state.phoneBindings[0].campaign_phone_hash_version, 'v1')
 }
 
+async function testDefaultFactoryPreservesConfigurationErrorCodes() {
+  const cases = [
+    {
+      expectedCode: 'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_MISSING',
+      secret: '',
+      env: { NODE_ENV: 'production' }
+    },
+    {
+      expectedCode: 'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_TOO_SHORT',
+      secret: 'too-short',
+      env: { NODE_ENV: 'production' }
+    },
+    {
+      expectedCode: 'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_REUSED',
+      secret: TEST_CAMPAIGN_SECRET,
+      env: { JWT_SECRET: TEST_CAMPAIGN_SECRET }
+    }
+  ]
+
+  for (const testCase of cases) {
+    const state = createState()
+    const connection = createFakeConnection(state)
+    const pool = createPool([connection])
+    const store = createStore(pool, {
+      campaignPhoneIdentityFactory: undefined,
+      campaignPhoneIdentityHashSecret: testCase.secret,
+      campaignPhoneIdentityEnv: testCase.env
+    })
+
+    await expectReject(
+      () => store.resolveWechatPhoneIdentity(trustedIdentity()),
+      (error) => error &&
+        error.code === testCase.expectedCode &&
+        error.statusCode === 503 &&
+        error.message === 'Campaign phone identity is unavailable.'
+    )
+    assert.equal(pool.callCount, 0)
+    assert.equal(connection.calls.length, 0)
+  }
+}
+
 async function testNewBindingAndPrivacy() {
   const state = createState()
   const connection = createFakeConnection(state)
@@ -634,6 +675,7 @@ async function testNoSensitiveLogging() {
 testCampaignIdentityFoundation()
 await testHmacBeforeConnectionAndTrustedInput()
 await testDefaultFactoryIntegration()
+await testDefaultFactoryPreservesConfigurationErrorCodes()
 await testNewBindingAndPrivacy()
 await testSamePhoneRefreshesCampaignIdentity()
 await testNewPhonePreservesOldBinding()

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 
 import { DEFAULT_DEV_ADMIN_API_TOKEN, getAdminApiToken, getUserAuthConfig } from '../server/auth.mjs'
+import { createCampaignPhoneIdentity } from '../server/book-benefit-foundation.mjs'
 import {
   PRODUCTION_WORD_API_BASE_URL,
   getWordApiBaseUrl
@@ -385,6 +386,50 @@ function checkUserJwtSecretGuard(errors) {
   }
 }
 
+function checkCampaignPhoneIdentitySecretGuard(errors) {
+  const productionSecret = 'production-campaign-phone-check-secret-32-bytes'
+  const cases = [
+    [{ NODE_ENV: 'production' }, 'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_MISSING'],
+    [{ NODE_ENV: 'production', CAMPAIGN_PHONE_IDENTITY_HASH_SECRET: 'too-short' }, 'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_TOO_SHORT']
+  ]
+  for (const secretName of [
+    'PHONE_HASH_SECRET',
+    'JWT_SECRET',
+    'ADMIN_API_TOKEN',
+    'REDEMPTION_CODE_HASH_SECRET',
+    'BOOK_ORDER_CLAIM_HASH_SECRET',
+    'WECHAT_MINIAPP_SECRET'
+  ]) {
+    cases.push([{
+      NODE_ENV: 'production',
+      CAMPAIGN_PHONE_IDENTITY_HASH_SECRET: productionSecret,
+      [secretName]: productionSecret
+    }, 'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_REUSED'])
+  }
+
+  for (const [env, expectedCode] of cases) {
+    let actualCode = ''
+    try {
+      createCampaignPhoneIdentity('+8610000000000', { env })
+    } catch (error) {
+      actualCode = error && error.code ? String(error.code) : ''
+    }
+    if (actualCode !== expectedCode) {
+      addError(errors, `production campaign phone identity secret guard must report ${expectedCode}.`)
+    }
+  }
+
+  const configured = createCampaignPhoneIdentity('+8610000000000', {
+    env: {
+      NODE_ENV: 'production',
+      CAMPAIGN_PHONE_IDENTITY_HASH_SECRET: productionSecret
+    }
+  })
+  if (!Buffer.isBuffer(configured.campaignPhoneIdentityHash) || configured.campaignPhoneIdentityHash.length !== 32) {
+    addError(errors, 'production campaign phone identity secret guard must accept an independent secret of at least 32 bytes.')
+  }
+}
+
 function checkWordDetailUsesMediaGuard(errors) {
   const sourceText = fs.readFileSync(new URL(`../${WORD_DETAIL_PATH}`, import.meta.url), 'utf8')
   if (!/const\s+ENABLE_VIDEO_MODULE\s*=\s*true/.test(sourceText)) {
@@ -442,6 +487,7 @@ function main() {
   checkApiBaseGuards(errors)
   checkAdminAuthGuards(errors)
   checkUserJwtSecretGuard(errors)
+  checkCampaignPhoneIdentitySecretGuard(errors)
   checkWordDetailUsesMediaGuard(errors)
   checkHomepageFeaturedGuards(errors)
 
@@ -461,6 +507,7 @@ function main() {
   console.log(`- production runtime uses ${PRODUCTION_WORD_API_BASE_URL}`)
   console.log('- production admin API auth rejects empty/default tokens')
   console.log('- production user JWT auth requires JWT_SECRET')
+  console.log('- production campaign phone identity requires an independent CAMPAIGN_PHONE_IDENTITY_HASH_SECRET')
   console.log('- homepage featured word uses the public API with published filtering')
 }
 

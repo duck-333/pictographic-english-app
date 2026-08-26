@@ -205,6 +205,12 @@ const DATABASE_ERROR_CODES = new Set([
   'EHOSTUNREACH'
 ])
 
+const PHONE_LOGIN_SERVICE_CONFIG_ERROR_CODES = new Set([
+  'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_MISSING',
+  'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_TOO_SHORT',
+  'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_REUSED'
+])
+
 function normalizeErrorStatusCode(value, fallback = 500) {
   const statusCode = Number(value)
   return Number.isFinite(statusCode) && statusCode >= 400 && statusCode <= 599
@@ -245,10 +251,10 @@ function getPublicPhoneLoginError(error) {
     }
   }
 
-  if (/^IDENTITY_/.test(rawCode)) {
+  if (PHONE_LOGIN_SERVICE_CONFIG_ERROR_CODES.has(rawCode)) {
     return {
-      statusCode: 409,
-      code: 'IDENTITY_CONFLICT'
+      statusCode: 503,
+      code: 'INTERNAL_SERVER_ERROR'
     }
   }
 
