@@ -43,13 +43,21 @@
         <text class="stat-value">{{ quotaBalanceText }}</text>
         <text class="stat-label">剩余查词次数</text>
       </view>
-      <view class="stat-card">
-        <text class="stat-value">{{ favoriteWords.length }}</text>
-        <text class="stat-label">收藏单词</text>
+      <view
+        class="stat-card stat-card-link"
+        hover-class="stat-card-pressed"
+        @tap="openFavorites"
+      >
+        <text class="stat-value">{{ favoriteWordCount }}</text>
+        <text class="stat-label">收藏单词 ›</text>
       </view>
-      <view class="stat-card">
-        <text class="stat-value">{{ recentWords.length }}</text>
-        <text class="stat-label">最近学习</text>
+      <view
+        class="stat-card stat-card-link"
+        hover-class="stat-card-pressed"
+        @tap="openRecentWords"
+      >
+        <text class="stat-value">{{ recentWordCount }}</text>
+        <text class="stat-label">最近学习 ›</text>
       </view>
       <view class="stat-card">
         <text class="stat-value">{{ state.streakDays || 0 }}</text>
@@ -138,61 +146,6 @@
       <text v-if="bookBenefitMessage" class="book-benefit-message">{{ bookBenefitMessage }}</text>
     </view>
 
-    <view class="section">
-      <view class="section-head">
-        <text class="section-title">最近学习</text>
-      </view>
-      <view v-if="recentWords.length" class="word-list">
-        <view
-          v-for="item in recentWords"
-          :key="item.id"
-          class="word-row"
-          hover-class="row-pressed"
-          :data-id="item.id"
-          @tap="openDetailFromEvent"
-        >
-          <view>
-            <text class="word-name">{{ item.word }}</text>
-            <text class="word-meaning">{{ item.meaning }}</text>
-          </view>
-          <text class="row-arrow">›</text>
-        </view>
-      </view>
-      <view v-else class="empty-state">
-        <view class="empty-mark">象</view>
-        <text class="empty-title">还没有最近学习</text>
-        <text class="empty-description">查过的单词会自动出现在这里。</text>
-      </view>
-    </view>
-
-    <view class="section">
-      <view class="section-head">
-        <text class="section-title">收藏单词</text>
-        <text class="hint-text">{{ favoriteWords.length }} 个</text>
-      </view>
-      <view v-if="favoriteWords.length" class="word-list">
-        <view
-          v-for="item in favoriteWords"
-          :key="item.id"
-          class="word-row"
-          hover-class="row-pressed"
-          :data-id="item.id"
-          @tap="openDetailFromEvent"
-        >
-          <view>
-            <text class="word-name">{{ item.word }}</text>
-            <text class="word-meaning">{{ item.meaning }}</text>
-          </view>
-          <text class="row-arrow">›</text>
-        </view>
-      </view>
-      <view v-else class="empty-state">
-        <view class="empty-mark">象</view>
-        <text class="empty-title">还没有收藏单词</text>
-        <text class="empty-description">收藏喜欢的单词，方便以后复习。</text>
-      </view>
-    </view>
-
     <view class="section settings-card">
       <view class="setting-row">
         <view>
@@ -224,9 +177,8 @@ import { listUserFavorites } from '../../common/user-favorites-api-client.js'
 import { listUserRecentWords } from '../../common/user-recent-words-api-client.js'
 import { fetchWordById, getCachedPublishedRemoteWordById } from '../../common/word-repository.js'
 import {
-  getRecentWords,
-  getUserState,
-  savePendingWordId
+  getRecentWordIds,
+  getUserState
 } from '../../common/user-store.js'
 
 export default {
@@ -236,8 +188,8 @@ export default {
   data() {
     return {
       state: getUserState(),
-      recentWords: [],
-      favoriteWords: [],
+      recentWordCount: 0,
+      favoriteWordCount: 0,
       authSession: getAuthSession(),
       authLoading: false,
       entitlement: null,
@@ -357,23 +309,25 @@ export default {
         this.entitlement = null
         this.entitlementLoading = false
         this.entitlementLoadFailed = false
-        this.recentWords = getRecentWords()
-        this.favoriteWords = []
+        this.recentWordCount = 0
+        this.favoriteWordCount = 0
+        this.refreshLocalRecentWordCount(recentLoadToken)
         return
       }
 
-      this.recentWords = []
+      this.recentWordCount = 0
+      this.favoriteWordCount = 0
       this.refreshUserEntitlement(this.authSession, entitlementLoadToken)
       this.refreshCloudRecentWords(this.authSession, recentLoadToken)
 
       try {
         const favoriteWords = await this.loadCloudFavoriteWords(this.authSession)
         if (this.favoriteLoadToken === favoriteLoadToken && this.authLoggedIn) {
-          this.favoriteWords = favoriteWords
+          this.favoriteWordCount = favoriteWords.length
         }
       } catch (error) {
         if (this.favoriteLoadToken === favoriteLoadToken && this.authLoggedIn) {
-          this.favoriteWords = []
+          this.favoriteWordCount = 0
           uni.showToast({
             title: '收藏列表加载失败',
             icon: 'none'
@@ -405,12 +359,36 @@ export default {
       try {
         const recentWords = await this.loadCloudRecentWords(session)
         if (this.recentLoadToken === loadToken && this.authLoggedIn) {
-          this.recentWords = recentWords
+          this.recentWordCount = recentWords.length
         }
       } catch (error) {
         if (this.recentLoadToken === loadToken && this.authLoggedIn) {
-          this.recentWords = []
+          this.recentWordCount = 0
         }
+      }
+    },
+    async refreshLocalRecentWordCount(loadToken) {
+      const wordIds = getRecentWordIds()
+      let count = 0
+      for (let index = 0; index < wordIds.length; index += 1) {
+        if (this.recentLoadToken !== loadToken || this.authLoggedIn) return
+        const wordId = String(wordIds[index] || '').trim()
+        if (!wordId) continue
+
+        let word = getCachedPublishedRemoteWordById(wordId)
+        if (!word) {
+          try {
+            word = await fetchWordById(wordId)
+          } catch (error) {
+            word = null
+          }
+        }
+        if (word && word.status === 'published') {
+          count += 1
+        }
+      }
+      if (this.recentLoadToken === loadToken && !this.authLoggedIn) {
+        this.recentWordCount = count
       }
     },
     async loadCloudFavoriteWords(session) {
@@ -434,7 +412,7 @@ export default {
       return words
     },
     async loadCloudRecentWords(session) {
-      const recentWords = (await listUserRecentWords({ session })).slice(0, 12)
+      const recentWords = await listUserRecentWords({ session })
       const words = []
       for (let index = 0; index < recentWords.length; index += 1) {
         const wordId = String(recentWords[index].wordId || '').trim()
@@ -493,8 +471,9 @@ export default {
       this.entitlementLoadToken += 1
       this.favoriteLoadToken += 1
       this.recentLoadToken += 1
-      this.favoriteWords = []
-      this.recentWords = getRecentWords()
+      this.favoriteWordCount = 0
+      this.recentWordCount = 0
+      this.refreshLocalRecentWordCount(this.recentLoadToken)
       this.clearBookBenefitRedemptionState()
       uni.showToast({
         title: '已退出登录',
@@ -613,15 +592,14 @@ export default {
         this.bookBenefitRedeeming = false
       }
     },
-    openDetailFromEvent(event) {
-      const dataset = event && event.currentTarget ? event.currentTarget.dataset : {}
-      this.openDetail(dataset.id)
-    },
-    openDetail(id) {
-      if (!id) return
-      savePendingWordId(id)
+    openFavorites() {
       uni.navigateTo({
-        url: `/pages/word-detail/index?id=${id}`
+        url: '/pages/favorites/index'
+      })
+    },
+    openRecentWords() {
+      uni.navigateTo({
+        url: '/pages/recent-words/index'
       })
     },
     goHome() {
@@ -708,14 +686,21 @@ export default {
   text-align: center;
 }
 
+.stat-card-link {
+  position: relative;
+}
+
+.stat-card-pressed {
+  opacity: 0.78;
+  transform: scale(0.98);
+}
+
 .stat-value,
 .stat-label,
 .entitlement-value,
 .entitlement-label,
 .section-title,
 .hint-text,
-.word-name,
-.word-meaning,
 .setting-title,
 .setting-desc,
 .sync-badge {
@@ -739,7 +724,6 @@ export default {
 }
 
 .section-head,
-.word-row,
 .setting-row {
   display: flex;
   align-items: center;
@@ -888,40 +872,6 @@ export default {
   font-size: 22rpx;
 }
 
-.word-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16rpx;
-}
-
-.word-row {
-  min-height: 104rpx;
-  padding: 0 28rpx;
-  border: 2rpx solid #ececec;
-  border-radius: 24rpx;
-  background: #ffffff;
-  box-shadow: 0 4rpx 12rpx rgba(14, 58, 92, 0.05);
-}
-
-.word-name {
-  color: #0e3a5c;
-  font-size: 32rpx;
-  font-weight: 900;
-}
-
-.word-meaning {
-  max-width: 520rpx;
-  margin-top: 6rpx;
-  color: #6baed6;
-  font-size: 22rpx;
-  line-height: 1.45;
-}
-
-.row-arrow {
-  color: #fe8500;
-  font-size: 40rpx;
-}
-
 .settings-card {
   padding: 30rpx;
   border-radius: 30rpx;
@@ -1025,8 +975,7 @@ export default {
   color: #0e3a5c;
 }
 
-.button-pressed,
-.row-pressed {
+.button-pressed {
   opacity: 0.76;
   transform: scale(0.98);
 }

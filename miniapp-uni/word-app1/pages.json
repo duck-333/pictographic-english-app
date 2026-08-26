@@ -23,6 +23,22 @@
         "navigationBarBackgroundColor": "#f0f9ff",
         "navigationBarTextStyle": "black"
       }
+    },
+    {
+      "path": "pages/favorites/index",
+      "style": {
+        "navigationBarTitleText": "收藏单词",
+        "navigationBarBackgroundColor": "#f0f9ff",
+        "navigationBarTextStyle": "black"
+      }
+    },
+    {
+      "path": "pages/recent-words/index",
+      "style": {
+        "navigationBarTitleText": "最近学习",
+        "navigationBarBackgroundColor": "#f0f9ff",
+        "navigationBarTextStyle": "black"
+      }
     }
   ],
   "globalStyle": {
