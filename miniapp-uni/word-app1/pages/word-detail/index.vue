@@ -25,7 +25,7 @@
         <text>{{ loadErrorMessage }}</text>
       </view>
       <view class="hero">
-        <view class="type-badge">{{ word.cardType || '单词' }} · {{ word.level }}</view>
+        <view class="type-badge">{{ typeBadgeText }}</view>
         <view class="word-line">
           <text class="word">{{ word.word }}</text>
           <text class="phonetic">{{ word.phonetic }}</text>
@@ -321,6 +321,11 @@ import { recordUserRecentWord } from '../../common/user-recent-words-api-client.
 import { addRecentWord, getPendingWordId, recordLearningActivity, savePendingWordId } from '../../common/user-store.js'
 
 const ENABLE_VIDEO_MODULE = true
+const STANDARD_CARD_TYPE_VALUES = [
+  'word', 'root', 'letter', 'prefix', 'suffix',
+  '单词', '单词卡', '词根', '词根卡', '词根/节点', '字母', '字母卡',
+  '前缀', '前缀卡', '后缀', '后缀卡', '词源', '词源卡'
+]
 
 function createWordDetailClientRequestId() {
   const timePart = Date.now().toString(36)
@@ -422,6 +427,21 @@ export default {
     this.stopPronunciationAudio()
   },
   computed: {
+    typeBadgeText() {
+      const sourceCardType = this.word && this.word.cardType ? this.word.cardType : '单词'
+      const normalizedSourceCardType = String(sourceCardType).trim().toLowerCase()
+      const cardType = normalizedSourceCardType === 'other' || normalizedSourceCardType === '其他'
+        ? '单词'
+        : sourceCardType
+      const normalizedCardType = String(cardType).trim().toLowerCase()
+      if (STANDARD_CARD_TYPE_VALUES.indexOf(normalizedCardType) === -1) {
+        return String(cardType).trim()
+      }
+      const level = this.word && this.word.level !== undefined && this.word.level !== null
+        ? this.word.level
+        : ''
+      return `${cardType} · ${level}`
+    },
     fullImageryText() {
       const explanation = this.word ? this.word.explanation : ''
       return typeof explanation === 'string' ? explanation.trim() : ''

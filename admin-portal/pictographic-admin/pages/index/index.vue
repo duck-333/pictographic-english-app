@@ -226,8 +226,12 @@
 					<label class="field">
 						<text>内容类型</text>
 						<picker :range="typeOptions" range-key="label" :value="currentTypeIndex" @change="changeEntryType">
-							<view :class="['picker-box', 'entry-type-picker', getEntryType(form)]">{{ entryTypeText(form) }}</view>
+							<view :class="['picker-box', 'entry-type-picker', getEntryType(form)]">{{ contentTypePickerText }}</view>
 						</picker>
+					</label>
+					<label v-if="isCustomContentType" class="field">
+						<text>自定义类型</text>
+						<input v-model="customTypeInputValue" :maxlength="customCardTypeMaxLength" placeholder="例如：希腊语、拉丁语、法语" />
 					</label>
 				</view>
 
@@ -1159,6 +1163,12 @@ const AUDIO_UPLOAD_PROVIDER = 'local-audio-upload-rehearsal'
 const BRIDGE_RUNTIME_ASSET_MAX_MB = 80
 const BRIDGE_RUNTIME_ASSET_MAX_BYTES = BRIDGE_RUNTIME_ASSET_MAX_MB * 1024 * 1024
 const ADMIN_STATUS_VALUES = ['draft', 'published', 'review', 'unpublished', 'archived']
+const CUSTOM_CARD_TYPE_MAX_LENGTH = 10
+const STANDARD_CARD_TYPE_VALUES = [
+	'word', 'root', 'letter', 'prefix', 'suffix',
+	'单词', '单词卡', '词根', '词根卡', '词根/节点', '字母', '字母卡',
+	'前缀', '前缀卡', '后缀', '后缀卡', '词源', '词源卡'
+]
 // Dashboard shell only. Do not call these APIs until server API, openid,
 // MySQL, and user_events collection are ready.
 const DASHBOARD_API_PLACEHOLDERS = [
@@ -1426,6 +1436,10 @@ export default {
 			adminAuthChecking: false,
 			adminApiTokenDraft: '',
 			adminTokenStatus: '未保存 Admin API Token，本地开发可填写 dev-admin-token。',
+			manualCustomTypeForm: null,
+			customTypeDraft: '',
+			customTypeOriginalCardType: '',
+			customCardTypeMaxLength: CUSTOM_CARD_TYPE_MAX_LENGTH,
 			statusOptions: [
 				{ label: '草稿', value: 'draft' },
 				{ label: '已发布', value: 'published' },
@@ -1437,7 +1451,8 @@ export default {
 			typeOptions: [
 				{ label: '单词', value: 'word' },
 				{ label: '词根', value: 'root' },
-				{ label: '字母', value: 'letter' }
+				{ label: '字母', value: 'letter' },
+				{ label: '其他', value: 'other' }
 			]
 		}
 	},
@@ -1660,9 +1675,28 @@ export default {
 			return this.filteredWords.length
 		},
 		currentTypeIndex() {
-			const currentType = this.getEntryType(this.form)
+			const currentType = this.isCustomContentType ? 'other' : this.getEntryType(this.form)
 			const index = this.typeOptions.findIndex((item) => item.value === currentType)
 			return index > -1 ? index : 0
+		},
+		isCustomContentType() {
+			return this.manualCustomTypeForm === this.form || this.hasCustomCardType(this.form)
+		},
+		contentTypePickerText() {
+			return this.isCustomContentType ? '其他' : this.entryTypeText(this.form)
+		},
+		customTypeInputValue: {
+			get() {
+				if (this.manualCustomTypeForm === this.form) return this.customTypeDraft
+				return this.hasCustomCardType(this.form) ? String(this.form.cardType || '') : ''
+			},
+			set(value) {
+				if (this.manualCustomTypeForm !== this.form) {
+					this.manualCustomTypeForm = this.form
+					this.customTypeOriginalCardType = this.form.cardType
+				}
+				this.customTypeDraft = value
+			}
 		},
 		listSummary() {
 			return `全部分类 · ${this.visibleWordCount} 个词条`
@@ -3703,6 +3737,18 @@ export default {
 				uni.showToast({ title: '请先填写单词', icon: 'none' })
 				return false
 			}
+			let customType = ''
+			if (this.isCustomContentType) {
+				customType = String(this.customTypeInputValue || '').trim()
+				if (!customType || customType.toLowerCase() === 'other' || customType === '其他') {
+					uni.showToast({ title: '请填写具体的自定义类型', icon: 'none' })
+					return false
+				}
+				if (customType.length > CUSTOM_CARD_TYPE_MAX_LENGTH) {
+					uni.showToast({ title: `自定义类型最多${CUSTOM_CARD_TYPE_MAX_LENGTH}个字符`, icon: 'none' })
+					return false
+				}
+			}
 			if (!options.skipVideoClipFlush && !this.flushEditingVideoClip()) return false
 			const id = String(this.form.id).trim()
 			const word = String(this.form.word).trim()
@@ -3731,6 +3777,9 @@ export default {
 			if (!videoResult.ok) {
 				uni.showToast({ title: videoResult.message, icon: 'none' })
 				return false
+			}
+			if (customType) {
+				this.$set(this.form, 'cardType', customType)
 			}
 			return true
 		},
@@ -3797,7 +3846,28 @@ export default {
 			const index = Number(event.detail.value)
 			const target = this.typeOptions[index]
 			if (!target) return
+			if (target.value === 'other') {
+				this.customTypeOriginalCardType = this.form.cardType
+				this.customTypeDraft = this.hasCustomCardType(this.form)
+					? String(this.form.cardType || '').trim()
+					: ''
+				this.manualCustomTypeForm = this.form
+				return
+			}
+			if (this.hasCustomCardType(this.form)) {
+				this.$set(this.form, 'cardType', this.entryTypeText({ entryType: target.value }))
+			} else if (this.manualCustomTypeForm === this.form) {
+				this.$set(this.form, 'cardType', this.customTypeOriginalCardType)
+			}
+			this.manualCustomTypeForm = null
+			this.customTypeDraft = ''
+			this.customTypeOriginalCardType = ''
 			this.$set(this.form, 'entryType', target.value)
+		},
+		hasCustomCardType(item) {
+			const cardType = String(item && item.cardType || '').trim()
+			if (!cardType) return false
+			return STANDARD_CARD_TYPE_VALUES.indexOf(cardType.toLowerCase()) === -1
 		},
 		startsWithEnglish(value) {
 			return /^[a-z]/i.test(String(value || '').trim())
