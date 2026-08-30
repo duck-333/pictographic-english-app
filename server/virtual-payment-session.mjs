@@ -1,6 +1,23 @@
+import crypto from 'node:crypto'
+
 const MAX_SAFE_USER_ID = BigInt(Number.MAX_SAFE_INTEGER)
 const MAX_SAFE_USER_ID_DIGITS = String(Number.MAX_SAFE_INTEGER).length
 const paymentSessionKeys = new WeakMap()
+const MAX_SIGN_DATA_LENGTH = 4096
+const ASCII_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
+const ORDER_NUMBER_PATTERN = /^(?!_)[A-Za-z0-9_\-|*@]{8,32}$/
+const OPAQUE_ATTACH_PATTERN = /^[A-Za-z0-9_-]{16,64}$/
+const SAFE_CONFIG_VALUE_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/
+const PAYMENT_SIGN_DATA_KEYS = [
+  'offerId',
+  'buyQuantity',
+  'env',
+  'currencyType',
+  'productId',
+  'goodsPrice',
+  'outTradeNo',
+  'attach'
+]
 
 function createPaymentSessionError(message, code, statusCode) {
   const error = new Error(message)
@@ -38,15 +55,81 @@ export function createSensitivePaymentSession(input = {}, sessionKey) {
   return Object.freeze(result)
 }
 
-export function consumePaymentSessionKey(paymentSession, consumer) {
-  if (!paymentSessionKeys.has(paymentSession) || typeof consumer !== 'function') {
+function isValidatedPaymentSignData(signData) {
+  if (
+    typeof signData !== 'string' ||
+    !signData ||
+    signData.length > MAX_SIGN_DATA_LENGTH ||
+    ASCII_CONTROL_CHARACTER_PATTERN.test(signData)
+  ) return false
+  let payload
+  try {
+    payload = JSON.parse(signData)
+    if (
+      !payload ||
+      typeof payload !== 'object' ||
+      Array.isArray(payload) ||
+      Object.getPrototypeOf(payload) !== Object.prototype ||
+      Object.keys(payload).join(',') !== PAYMENT_SIGN_DATA_KEYS.join(',') ||
+      JSON.stringify(payload) !== signData
+    ) return false
+  } catch {
+    return false
+  }
+  return (
+    typeof payload.offerId === 'string' &&
+    SAFE_CONFIG_VALUE_PATTERN.test(payload.offerId) &&
+    payload.buyQuantity === 1 &&
+    payload.env === 1 &&
+    payload.currencyType === 'CNY' &&
+    typeof payload.productId === 'string' &&
+    SAFE_CONFIG_VALUE_PATTERN.test(payload.productId) &&
+    payload.goodsPrice === 3000 &&
+    typeof payload.outTradeNo === 'string' &&
+    ORDER_NUMBER_PATTERN.test(payload.outTradeNo) &&
+    typeof payload.attach === 'string' &&
+    OPAQUE_ATTACH_PATTERN.test(payload.attach)
+  )
+}
+
+export function createPaymentSessionSignature(paymentSession, signData) {
+  if (
+    !paymentSessionKeys.has(paymentSession) ||
+    !isValidatedPaymentSignData(signData)
+  ) {
     throw createPaymentSessionError(
       'Wechat payment session service is unavailable.',
       'WECHAT_SERVICE_UNAVAILABLE',
       503
     )
   }
-  return consumer(paymentSessionKeys.get(paymentSession))
+  const sessionKey = paymentSessionKeys.get(paymentSession)
+  let signature
+  try {
+    signature = crypto.createHmac('sha256', sessionKey).update(signData, 'utf8').digest('hex')
+  } catch {
+    throw createPaymentSessionError(
+      'Wechat payment session service is unavailable.',
+      'WECHAT_SERVICE_UNAVAILABLE',
+      503
+    )
+  }
+  paymentSessionKeys.delete(paymentSession)
+  return signature
+}
+
+function rebindSensitivePaymentSession(paymentSession, input) {
+  if (!paymentSessionKeys.has(paymentSession)) {
+    throw createPaymentSessionError(
+      'Wechat payment session service is unavailable.',
+      'WECHAT_SERVICE_UNAVAILABLE',
+      503
+    )
+  }
+  const sessionKey = paymentSessionKeys.get(paymentSession)
+  const reboundSession = createSensitivePaymentSession(input, sessionKey)
+  paymentSessionKeys.delete(paymentSession)
+  return reboundSession
 }
 
 function normalizeAuthenticatedUserId(value) {
@@ -158,13 +241,11 @@ export function createVirtualPaymentSessionService(options = {}) {
       )
     }
 
-    return consumePaymentSessionKey(paymentSession, (sessionKey) => (
-      createSensitivePaymentSession({
-        userId: authenticatedUserId,
-        openid: paymentSession.openid,
-        unionid: paymentSession.unionid
-      }, sessionKey)
-    ))
+    return rebindSensitivePaymentSession(paymentSession, {
+      userId: authenticatedUserId,
+      openid: paymentSession.openid,
+      unionid: paymentSession.unionid
+    })
   }
 
   return {

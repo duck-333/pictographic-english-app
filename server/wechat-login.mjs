@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import https from 'node:https'
 
 import { createSensitivePaymentSession } from './virtual-payment-session.mjs'
@@ -7,6 +8,9 @@ const WECHAT_CODE2SESSION_URL = 'https://api.weixin.qq.com/sns/jscode2session'
 const WECHAT_PHONE_NUMBER_URL = 'https://api.weixin.qq.com/wxa/business/getuserphonenumber'
 const DEFAULT_WECHAT_TIMEOUT_MS = 7000
 const ACCESS_TOKEN_REFRESH_BUFFER_MS = 60 * 1000
+const ACCESS_TOKEN_MAX_RESPONSE_BYTES = 64 * 1024
+const MAX_ACCESS_TOKEN_LENGTH = 2048
+const MAX_ACCESS_TOKEN_EXPIRES_IN_SECONDS = 7200
 // Bounds untrusted input without assuming an undocumented Wechat code alphabet.
 const MAX_PAYMENT_LOGIN_CODE_LENGTH = 256
 // Opaque identity values remain unmodified; these caps only reject malformed oversized responses.
@@ -101,6 +105,266 @@ function getNowMs(now) {
   if (value instanceof Date) return value.getTime()
   const numericValue = Number(value)
   return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : Date.now()
+}
+
+function createWechatAccessTokenError(message, code = 'WECHAT_ACCESS_TOKEN_UNAVAILABLE', statusCode = 502) {
+  const error = new Error(message)
+  error.code = code
+  error.statusCode = statusCode
+  return error
+}
+
+function createAccessTokenConfigFingerprint(config) {
+  return crypto
+    .createHash('sha256')
+    .update(config.appid, 'utf8')
+    .update('\u0000', 'utf8')
+    .update(config.secret, 'utf8')
+    .digest('hex')
+}
+
+function requestWechatAccessTokenResponse(url, options = {}) {
+  const requestImpl = options.request || https.request
+  const timeout = Number(options.timeout || DEFAULT_WECHAT_TIMEOUT_MS)
+
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let req
+    const rejectSafely = (error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+    const resolveSafely = (value) => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+
+    try {
+      req = requestImpl(url, {
+        method: 'GET',
+        timeout
+      }, (res) => {
+        const statusCode = Number(res.statusCode)
+        const contentLength = Number(res.headers && res.headers['content-length'])
+        if (
+          !Number.isInteger(statusCode) ||
+          statusCode < 200 ||
+          statusCode >= 300 ||
+          (Number.isFinite(contentLength) && contentLength > ACCESS_TOKEN_MAX_RESPONSE_BYTES)
+        ) {
+          try {
+            res.destroy()
+          } catch {
+            // The controlled response error remains authoritative.
+          }
+          try {
+            req.destroy()
+          } catch {
+            // The controlled response error remains authoritative.
+          }
+          rejectSafely(createWechatAccessTokenError('Wechat access token response is invalid.'))
+          return
+        }
+        let raw = ''
+        let responseBytes = 0
+        if (typeof res.setEncoding === 'function') res.setEncoding('utf8')
+        res.on('data', (chunk) => {
+          if (settled) return
+          responseBytes += Buffer.byteLength(chunk, 'utf8')
+          if (responseBytes > ACCESS_TOKEN_MAX_RESPONSE_BYTES) {
+            try {
+              res.destroy()
+            } catch {
+              // Continue to destroy the request and return a controlled error.
+            }
+            try {
+              req.destroy()
+            } catch {
+              // The controlled size error remains authoritative.
+            }
+            rejectSafely(createWechatAccessTokenError('Wechat access token response is too large.'))
+            return
+          }
+          raw += chunk
+        })
+        res.on('end', () => {
+          resolveSafely({
+            statusCode: Number(res.statusCode),
+            body: raw
+          })
+        })
+        res.on('error', () => {
+          rejectSafely(createWechatAccessTokenError('Wechat access token response failed.'))
+        })
+        res.on('aborted', () => {
+          rejectSafely(createWechatAccessTokenError('Wechat access token response failed.'))
+        })
+        res.on('close', () => {
+          if (!settled) {
+            rejectSafely(createWechatAccessTokenError('Wechat access token response failed.'))
+          }
+        })
+      })
+    } catch {
+      rejectSafely(createWechatAccessTokenError('Wechat access token service is unavailable.'))
+      return
+    }
+
+    req.on('timeout', () => {
+      try {
+        req.destroy()
+      } catch {
+        // The controlled timeout error remains authoritative.
+      }
+      rejectSafely(createWechatAccessTokenError(
+        'Wechat access token request timed out.',
+        'WECHAT_ACCESS_TOKEN_TIMEOUT',
+        504
+      ))
+    })
+    req.on('error', () => {
+      rejectSafely(createWechatAccessTokenError('Wechat access token service is unavailable.'))
+    })
+    req.end()
+  })
+}
+
+export function createWechatAccessTokenProvider(options = {}) {
+  const now = options.now || (() => new Date())
+  let cache = {
+    configFingerprint: '',
+    token: '',
+    refreshAtMs: 0
+  }
+  const refreshPromises = new Map()
+  let activeConfigFingerprint = ''
+
+  async function refreshAccessToken(config, configFingerprint) {
+    const requestUrl = new URL(WECHAT_ACCESS_TOKEN_URL)
+    requestUrl.searchParams.set('grant_type', 'client_credential')
+    requestUrl.searchParams.set('appid', config.appid)
+    requestUrl.searchParams.set('secret', config.secret)
+
+    let response
+    try {
+      response = await requestWechatAccessTokenResponse(requestUrl, {
+        timeout: options.timeout,
+        request: options.request
+      })
+    } catch {
+      throw createWechatAccessTokenError('Wechat access token service is unavailable.')
+    }
+
+    if (
+      !response ||
+      !Number.isInteger(response.statusCode) ||
+      response.statusCode < 200 ||
+      response.statusCode >= 300 ||
+      typeof response.body !== 'string' ||
+      !response.body ||
+      Buffer.byteLength(response.body, 'utf8') > ACCESS_TOKEN_MAX_RESPONSE_BYTES
+    ) {
+      throw createWechatAccessTokenError('Wechat access token response is invalid.')
+    }
+
+    let payload
+    try {
+      payload = JSON.parse(response.body)
+    } catch {
+      throw createWechatAccessTokenError('Wechat access token response is invalid.')
+    }
+
+    if (!isPlainObject(payload)) {
+      throw createWechatAccessTokenError('Wechat access token response is invalid.')
+    }
+    if (Object.hasOwn(payload, 'errcode')) {
+      if (
+        typeof payload.errcode !== 'number' ||
+        !Number.isFinite(payload.errcode) ||
+        !Number.isInteger(payload.errcode) ||
+        payload.errcode !== 0
+      ) {
+        throw createWechatAccessTokenError('Wechat access token request failed.')
+      }
+    }
+
+    if (!isSafeWechatString(payload.access_token, { maximumLength: MAX_ACCESS_TOKEN_LENGTH })) {
+      throw createWechatAccessTokenError('Wechat access token response is invalid.')
+    }
+    if (
+      typeof payload.expires_in !== 'number' ||
+      !Number.isFinite(payload.expires_in) ||
+      !Number.isInteger(payload.expires_in) ||
+      payload.expires_in <= 0 ||
+      payload.expires_in > MAX_ACCESS_TOKEN_EXPIRES_IN_SECONDS
+    ) {
+      throw createWechatAccessTokenError('Wechat access token response is invalid.')
+    }
+
+    const nowMs = getNowMs(now)
+    const expiresInMs = payload.expires_in * 1000
+    const refreshBufferMs = Math.min(
+      ACCESS_TOKEN_REFRESH_BUFFER_MS,
+      Math.max(100, Math.floor(expiresInMs * 0.1)),
+      Math.max(1, Math.floor(expiresInMs / 2))
+    )
+    if (activeConfigFingerprint === configFingerprint) {
+      cache = {
+        configFingerprint,
+        token: payload.access_token,
+        refreshAtMs: nowMs + expiresInMs - refreshBufferMs
+      }
+    }
+    return payload.access_token
+  }
+
+  async function getAccessToken() {
+    const config = getWechatConfig(options)
+    if (!config.configured) {
+      throw createWechatAccessTokenError(
+        'Wechat access token service is unavailable.',
+        'WECHAT_ACCESS_TOKEN_CONFIG_MISSING',
+        503
+      )
+    }
+
+    const nowMs = getNowMs(now)
+    const configFingerprint = createAccessTokenConfigFingerprint(config)
+    activeConfigFingerprint = configFingerprint
+    if (
+      cache.configFingerprint === configFingerprint &&
+      cache.token &&
+      cache.refreshAtMs > nowMs
+    ) {
+      return cache.token
+    }
+    if (refreshPromises.has(configFingerprint)) {
+      return refreshPromises.get(configFingerprint)
+    }
+    const refreshPromise = refreshAccessToken(config, configFingerprint).finally(() => {
+      if (refreshPromises.get(configFingerprint) === refreshPromise) {
+        refreshPromises.delete(configFingerprint)
+      }
+    })
+    refreshPromises.set(configFingerprint, refreshPromise)
+    return refreshPromise
+  }
+
+  function invalidate() {
+    cache = {
+      configFingerprint: '',
+      token: '',
+      refreshAtMs: 0
+    }
+    activeConfigFingerprint = ''
+  }
+
+  return Object.freeze({
+    getAccessToken,
+    invalidate
+  })
 }
 
 function mapWechatLoginError(payload) {

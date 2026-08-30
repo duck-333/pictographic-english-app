@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { inspect } from 'node:util'
 
 import { createIdentityStore } from '../server/identity-store.mjs'
+import * as paymentSessionModule from '../server/virtual-payment-session.mjs'
 import {
-  consumePaymentSessionKey,
+  createPaymentSessionSignature,
   createSensitivePaymentSession,
   createVirtualPaymentSessionService
 } from '../server/virtual-payment-session.mjs'
@@ -18,6 +19,8 @@ const SESSION_KEY = 'fake-session-key-sensitive'
 const USER_ID = '42'
 const DB_HOST = 'fake-db-host-sensitive'
 const DB_PASSWORD = 'fake-db-password-sensitive'
+const SIGN_DATA = '{"offerId":"sandbox.offer-001","buyQuantity":1,"env":1,"currencyType":"CNY","productId":"membership.product-30d","goodsPrice":3000,"outTradeNo":"VP20260830ABC123","attach":"opaque_ref_1234567890"}'
+const EXPECTED_SIGNATURE = '41933e9eacbeee03ef147736896a76f916cca9c2d545218cf42bb85907a68c82'
 const SENSITIVE_VALUES = [
   APP_SECRET,
   LOGIN_CODE,
@@ -120,8 +123,12 @@ async function testPaymentExchangeReturnsInternalSessionOnce() {
   assertSensitiveSessionShape(result, ['openid', 'unionid'])
   assert.equal(result.openid, OPENID)
   assert.equal(result.unionid, UNIONID)
-  assert.equal(consumePaymentSessionKey(result, (value) => value), SESSION_KEY)
   await expectSerializationForbidden(result)
+  assert.equal(createPaymentSessionSignature(result, SIGN_DATA), EXPECTED_SIGNATURE)
+  await expectError(
+    () => createPaymentSessionSignature(result, SIGN_DATA),
+    'WECHAT_SERVICE_UNAVAILABLE'
+  )
 }
 
 async function testPaymentExchangeFailuresAreControlledAndNotRetried() {
@@ -276,7 +283,7 @@ async function testPaymentExchangeStrictResponseValidation() {
   const validResult = await validClient.exchangePaymentSession(LOGIN_CODE)
   assert.equal(validResult.openid, OPENID)
   assert.equal(validResult.unionid, null)
-  assert.equal(consumePaymentSessionKey(validResult, (value) => value), SESSION_KEY)
+  assert.equal(createPaymentSessionSignature(validResult, SIGN_DATA), EXPECTED_SIGNATURE)
 
   const nullUnionidClient = createWechatClient(async () => ({
     openid: OPENID,
@@ -318,8 +325,12 @@ async function testIdentityOwnershipCoordinator() {
   assert.equal(result.openid, OPENID)
   assert.equal(result.unionid, UNIONID)
   assertSensitiveSessionShape(result, ['openid', 'unionid', 'userId'])
-  assert.equal(consumePaymentSessionKey(result, (value) => value), SESSION_KEY)
   await expectSerializationForbidden(result)
+  assert.equal(createPaymentSessionSignature(result, SIGN_DATA), EXPECTED_SIGNATURE)
+  await expectError(
+    () => createPaymentSessionSignature(result, SIGN_DATA),
+    'WECHAT_SERVICE_UNAVAILABLE'
+  )
 
   const notBoundService = createSessionService({
     async findWechatBindingForPayment() {
@@ -571,5 +582,21 @@ await testPaymentExchangeStrictResponseValidation()
 await testIdentityOwnershipCoordinator()
 await testIdentityStoreUsesReadOnlyUniqueLookup()
 await testNoSensitiveLogging()
+
+assert.equal(Object.hasOwn(paymentSessionModule, 'consumePaymentSessionKey'), false)
+await expectError(
+  () => createPaymentSessionSignature({}, SIGN_DATA),
+  'WECHAT_SERVICE_UNAVAILABLE'
+)
+const invalidSignDataSession = createSensitivePaymentSession({ openid: OPENID }, SESSION_KEY)
+await expectError(
+  () => createPaymentSessionSignature(invalidSignDataSession, '{"env":1}'),
+  'WECHAT_SERVICE_UNAVAILABLE'
+)
+assert.equal(
+  createPaymentSessionSignature(invalidSignDataSession, SIGN_DATA),
+  EXPECTED_SIGNATURE,
+  'invalid signData must not consume the private session'
+)
 
 console.log('Virtual payment session tests passed.')
