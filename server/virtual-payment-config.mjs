@@ -3,6 +3,8 @@ const ENVIRONMENT_VARIABLE = 'VIRTUAL_PAYMENT_ENV'
 const SANDBOX_OFFER_ID_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID'
 const SANDBOX_PRODUCT_ID_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID'
 const SANDBOX_APP_KEY_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY'
+const SANDBOX_USER_IDS_VARIABLE = 'VIRTUAL_PAYMENT_SANDBOX_USER_IDS'
+const MAX_SAFE_USER_ID = BigInt(Number.MAX_SAFE_INTEGER)
 
 export const VIRTUAL_PAYMENT_PRODUCT = Object.freeze({
   internalSku: 'membership_30d',
@@ -50,6 +52,38 @@ function requireVariable(env, variableName) {
   return value
 }
 
+function parseSandboxUserIds(value) {
+  const raw = normalizeString(value)
+  if (!raw) {
+    throw configError(`${SANDBOX_USER_IDS_VARIABLE} is required when virtual payment is enabled.`, {
+      code: 'VIRTUAL_PAYMENT_CONFIG_REQUIRED',
+      variableName: SANDBOX_USER_IDS_VARIABLE
+    })
+  }
+  const normalized = []
+  const seen = new Set()
+  for (const valuePart of raw.split(',')) {
+    const value = valuePart.trim()
+    if (!/^\d+$/.test(value)) {
+      throw configError(`${SANDBOX_USER_IDS_VARIABLE} must contain positive safe integer user ids.`, {
+        variableName: SANDBOX_USER_IDS_VARIABLE
+      })
+    }
+    const numeric = BigInt(value)
+    if (numeric <= 0n || numeric > MAX_SAFE_USER_ID) {
+      throw configError(`${SANDBOX_USER_IDS_VARIABLE} must contain positive safe integer user ids.`, {
+        variableName: SANDBOX_USER_IDS_VARIABLE
+      })
+    }
+    const userId = numeric.toString()
+    if (!seen.has(userId)) {
+      seen.add(userId)
+      normalized.push(userId)
+    }
+  }
+  return Object.freeze(normalized)
+}
+
 export function getVirtualPaymentConfig(options = {}) {
   const env = options.env || process.env
   const nodeEnv = normalizeString(
@@ -84,6 +118,7 @@ export function getVirtualPaymentConfig(options = {}) {
   const offerId = requireVariable(env, SANDBOX_OFFER_ID_VARIABLE)
   const productId = requireVariable(env, SANDBOX_PRODUCT_ID_VARIABLE)
   const appKey = requireVariable(env, SANDBOX_APP_KEY_VARIABLE)
+  const sandboxUserIds = parseSandboxUserIds(env && env[SANDBOX_USER_IDS_VARIABLE])
 
   return Object.freeze({
     enabled: true,
@@ -92,6 +127,7 @@ export function getVirtualPaymentConfig(options = {}) {
     offerId,
     productId,
     appKey,
+    sandboxUserIds,
     product: VIRTUAL_PAYMENT_PRODUCT
   })
 }
@@ -101,5 +137,6 @@ export const VIRTUAL_PAYMENT_CONFIG_VARIABLES = Object.freeze({
   environment: ENVIRONMENT_VARIABLE,
   sandboxOfferId: SANDBOX_OFFER_ID_VARIABLE,
   sandboxProductId: SANDBOX_PRODUCT_ID_VARIABLE,
-  sandboxAppKey: SANDBOX_APP_KEY_VARIABLE
+  sandboxAppKey: SANDBOX_APP_KEY_VARIABLE,
+  sandboxUserIds: SANDBOX_USER_IDS_VARIABLE
 })

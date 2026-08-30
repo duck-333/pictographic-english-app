@@ -13,6 +13,7 @@ function enabledEnv(overrides = {}) {
   return {
     VIRTUAL_PAYMENT_ENABLED: 'true',
     VIRTUAL_PAYMENT_ENV: 'sandbox',
+    VIRTUAL_PAYMENT_SANDBOX_USER_IDS: '42',
     WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID: 'sandbox.offer-001',
     WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID: 'membership.product-30d',
     WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY: APP_KEY,

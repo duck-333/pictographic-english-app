@@ -9,6 +9,7 @@ import { createUserEntitlementStore, ENTITLEMENT_REASONS, ENTITLEMENT_TRANSACTIO
 import { createUserFavoritesStore } from './user-favorites-store.mjs'
 import { createUserRecentWordsStore } from './user-recent-words-store.mjs'
 import { createUserStore } from './user-store.mjs'
+import { createVirtualPaymentRoutes } from './virtual-payment-routes.mjs'
 import { createWechatLoginClient } from './wechat-login.mjs'
 import { toBasicWord, toFullWord } from './word-access-policy.mjs'
 import { createWordStore } from './word-store.mjs'
@@ -1032,6 +1033,11 @@ export function createApiHandler(options = {}) {
     entitlementStore: userEntitlementStore || undefined
   })
   const wechatLoginClient = options.wechatLoginClient || createWechatLoginClient(options)
+  const virtualPaymentRoutes = createVirtualPaymentRoutes({
+    ...options,
+    identityStore,
+    wechatLoginClient
+  })
   const now = options.now || (() => new Date())
   const adminAuthOptions = {
     nodeEnv: options.nodeEnv,
@@ -1063,6 +1069,8 @@ export function createApiHandler(options = {}) {
         })
         return
       }
+
+      if (await virtualPaymentRoutes.handle(req, res, pathname, userAuthOptions)) return
 
       if (req.method === 'GET' && pathname === '/api/admin/book-benefits/campaign') {
         const authResult = requireAdminAuth(req, adminAuthOptions)

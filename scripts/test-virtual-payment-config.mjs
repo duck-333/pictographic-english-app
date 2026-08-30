@@ -19,6 +19,7 @@ function enabledEnv(overrides = {}) {
     NODE_ENV: 'development',
     VIRTUAL_PAYMENT_ENABLED: 'true',
     VIRTUAL_PAYMENT_ENV: 'sandbox',
+    VIRTUAL_PAYMENT_SANDBOX_USER_IDS: '42,1001',
     ...SECRET_SENTINELS,
     ...overrides
   }
@@ -65,7 +66,8 @@ for (const variableName of [
   'VIRTUAL_PAYMENT_ENV',
   'WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID',
   'WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID',
-  'WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY'
+  'WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY',
+  'VIRTUAL_PAYMENT_SANDBOX_USER_IDS'
 ]) {
   const env = enabledEnv()
   delete env[variableName]
@@ -108,6 +110,8 @@ assert.equal(configured.wechatEnv, 1)
 assert.equal(configured.offerId, SECRET_SENTINELS.WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID)
 assert.equal(configured.productId, SECRET_SENTINELS.WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID)
 assert.equal(configured.appKey, SECRET_SENTINELS.WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY)
+assert.deepEqual(configured.sandboxUserIds, ['42', '1001'])
+assert(Object.isFrozen(configured.sandboxUserIds))
 assert.deepEqual(configured.product, {
   internalSku: 'membership_30d',
   mode: 'short_series_goods',
@@ -126,8 +130,16 @@ assert.deepEqual(VIRTUAL_PAYMENT_CONFIG_VARIABLES, {
   environment: 'VIRTUAL_PAYMENT_ENV',
   sandboxOfferId: 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID',
   sandboxProductId: 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID',
-  sandboxAppKey: 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY'
+  sandboxAppKey: 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY',
+  sandboxUserIds: 'VIRTUAL_PAYMENT_SANDBOX_USER_IDS'
 })
+
+for (const invalidUserIds of ['', 'abc', '0', '-1', '1.5', '9007199254740992']) {
+  assert.throws(
+    () => getVirtualPaymentConfig({ env: enabledEnv({ VIRTUAL_PAYMENT_SANDBOX_USER_IDS: invalidUserIds }) }),
+    (error) => error && ['VIRTUAL_PAYMENT_CONFIG_REQUIRED', 'VIRTUAL_PAYMENT_CONFIG_INVALID'].includes(error.code)
+  )
+}
 
 const source = await readFile(new URL('../server/virtual-payment-config.mjs', import.meta.url), 'utf8')
 assert(!/PRODUCTION_[A-Z_]*APP_KEY/.test(source), 'stage 1 must not contain a production AppKey read path')
