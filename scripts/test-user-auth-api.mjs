@@ -171,7 +171,9 @@ async function testWechatLoginTokenCanCallMe() {
         assert.equal(code, 'wechat-login-code')
         return {
           openid: 'openid-secret',
-          unionid: 'unionid-secret'
+          unionid: 'unionid-secret',
+          session_key: 'session-key-secret',
+          sessionKey: 'session-key-secret'
         }
       },
       async phoneCode2Number() {
@@ -211,6 +213,7 @@ async function testWechatLoginTokenCanCallMe() {
     assert.equal(login.status, 200)
     assert.equal(login.body.ok, true)
     assert.equal(login.body.tokenType, 'Bearer')
+    assertSafeMeResponse(login.body)
 
     const me = await readJson(await fetch(`${baseUrl}/api/me`, {
       headers: {

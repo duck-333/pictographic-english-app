@@ -1,10 +1,20 @@
 import https from 'node:https'
 
+import { createSensitivePaymentSession } from './virtual-payment-session.mjs'
+
 const WECHAT_ACCESS_TOKEN_URL = 'https://api.weixin.qq.com/cgi-bin/token'
 const WECHAT_CODE2SESSION_URL = 'https://api.weixin.qq.com/sns/jscode2session'
 const WECHAT_PHONE_NUMBER_URL = 'https://api.weixin.qq.com/wxa/business/getuserphonenumber'
 const DEFAULT_WECHAT_TIMEOUT_MS = 7000
 const ACCESS_TOKEN_REFRESH_BUFFER_MS = 60 * 1000
+// Bounds untrusted input without assuming an undocumented Wechat code alphabet.
+const MAX_PAYMENT_LOGIN_CODE_LENGTH = 256
+// Opaque identity values remain unmodified; these caps only reject malformed oversized responses.
+const MAX_PAYMENT_IDENTITY_LENGTH = 128
+// Keep the key opaque while rejecting unusably short or unbounded response values.
+const MIN_PAYMENT_SESSION_KEY_LENGTH = 16
+const MAX_PAYMENT_SESSION_KEY_LENGTH = 256
+const ASCII_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
 
 function normalizeString(value) {
   return String(value || '').trim()
@@ -16,6 +26,56 @@ function createWechatLoginError(message, options = {}) {
   error.statusCode = Number(options.statusCode || 502)
   error.wechatErrcode = options.wechatErrcode
   return error
+}
+
+function createPaymentSessionError(message, code, statusCode) {
+  const error = new Error(message)
+  error.code = code
+  error.statusCode = statusCode
+  return error
+}
+
+function normalizePaymentLoginCode(value) {
+  if (typeof value !== 'string') {
+    throw createPaymentSessionError(
+      'Payment login code is invalid.',
+      'PAYMENT_LOGIN_CODE_INVALID',
+      400
+    )
+  }
+  const code = value
+  if (
+    !code.trim() ||
+    code.length > MAX_PAYMENT_LOGIN_CODE_LENGTH ||
+    ASCII_CONTROL_CHARACTER_PATTERN.test(code)
+  ) {
+    throw createPaymentSessionError(
+      'Payment login code is invalid.',
+      'PAYMENT_LOGIN_CODE_INVALID',
+      400
+    )
+  }
+  return code
+}
+
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  try {
+    const prototype = Object.getPrototypeOf(value)
+    return prototype === Object.prototype || prototype === null
+  } catch {
+    return false
+  }
+}
+
+function isSafeWechatString(value, options = {}) {
+  if (typeof value !== 'string') return false
+  if (!value || !value.trim() || value.trim() !== value) return false
+  if (ASCII_CONTROL_CHARACTER_PATTERN.test(value)) return false
+  const minimumLength = Number(options.minimumLength || 1)
+  const maximumLength = Number(options.maximumLength || 0)
+  if (value.length < minimumLength) return false
+  return maximumLength <= 0 || value.length <= maximumLength
 }
 
 function getWechatConfig(options = {}) {
@@ -228,6 +288,7 @@ export function createWechatLoginClient(options = {}) {
     expiresAtMs: 0
   }
   const now = options.now || (() => new Date())
+  const codeSessionRequest = options.requestJson || requestJson
 
   async function code2Session(jsCode) {
     const code = normalizeString(jsCode)
@@ -252,7 +313,7 @@ export function createWechatLoginClient(options = {}) {
     requestUrl.searchParams.set('js_code', code)
     requestUrl.searchParams.set('grant_type', 'authorization_code')
 
-    const payload = await requestJson(requestUrl, {
+    const payload = await codeSessionRequest(requestUrl, {
       timeout: options.timeout
     })
     const wechatError = mapWechatLoginError(payload)
@@ -269,6 +330,92 @@ export function createWechatLoginClient(options = {}) {
       openid,
       unionid: normalizeString(payload.unionid)
     }
+  }
+
+  async function exchangePaymentSession(loginCode) {
+    const code = normalizePaymentLoginCode(loginCode)
+    const config = getWechatConfig(options)
+    if (!config.configured) {
+      throw createPaymentSessionError(
+        'Wechat payment session service is unavailable.',
+        'WECHAT_SERVICE_UNAVAILABLE',
+        503
+      )
+    }
+
+    const requestUrl = new URL(WECHAT_CODE2SESSION_URL)
+    requestUrl.searchParams.set('appid', config.appid)
+    requestUrl.searchParams.set('secret', config.secret)
+    requestUrl.searchParams.set('js_code', code)
+    requestUrl.searchParams.set('grant_type', 'authorization_code')
+
+    let payload
+    try {
+      payload = await codeSessionRequest(requestUrl, {
+        timeout: options.timeout
+      })
+    } catch {
+      throw createPaymentSessionError(
+        'Wechat payment session service is unavailable.',
+        'WECHAT_SERVICE_UNAVAILABLE',
+        503
+      )
+    }
+
+    if (!isPlainObject(payload)) {
+      throw createPaymentSessionError(
+        'Wechat payment session is incomplete.',
+        'WECHAT_PAYMENT_SESSION_INCOMPLETE',
+        502
+      )
+    }
+
+    if (
+      Object.hasOwn(payload, 'errcode') &&
+      (
+        typeof payload.errcode !== 'number' ||
+        !Number.isFinite(payload.errcode) ||
+        !Number.isInteger(payload.errcode) ||
+        payload.errcode !== 0
+      )
+    ) {
+      throw createPaymentSessionError(
+        'Wechat payment login code exchange failed.',
+        'WECHAT_CODE_EXCHANGE_FAILED',
+        400
+      )
+    }
+
+    if (
+      !isSafeWechatString(payload.openid, { maximumLength: MAX_PAYMENT_IDENTITY_LENGTH }) ||
+      !isSafeWechatString(payload.session_key, {
+        minimumLength: MIN_PAYMENT_SESSION_KEY_LENGTH,
+        maximumLength: MAX_PAYMENT_SESSION_KEY_LENGTH
+      })
+    ) {
+      throw createPaymentSessionError(
+        'Wechat payment session is incomplete.',
+        'WECHAT_PAYMENT_SESSION_INCOMPLETE',
+        502
+      )
+    }
+
+    let unionid = null
+    if (Object.hasOwn(payload, 'unionid') && payload.unionid !== null) {
+      if (!isSafeWechatString(payload.unionid, { maximumLength: MAX_PAYMENT_IDENTITY_LENGTH })) {
+        throw createPaymentSessionError(
+          'Wechat payment session is incomplete.',
+          'WECHAT_PAYMENT_SESSION_INCOMPLETE',
+          502
+        )
+      }
+      unionid = payload.unionid
+    }
+
+    return createSensitivePaymentSession({
+      openid: payload.openid,
+      unionid
+    }, payload.session_key)
   }
 
   async function getAccessToken() {
@@ -365,6 +512,7 @@ export function createWechatLoginClient(options = {}) {
 
   return {
     code2Session,
+    exchangePaymentSession,
     phoneCode2Number
   }
 }

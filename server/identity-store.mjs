@@ -12,6 +12,8 @@ const USERS_TABLE = 'users'
 const WECHAT_BINDINGS_TABLE = 'wechat_user_bindings'
 const PHONE_BINDINGS_TABLE = 'user_phone_bindings'
 const CAMPAIGN_PHONE_HASH_VERSION = 'v1'
+const MAX_SAFE_USER_ID = BigInt(Number.MAX_SAFE_INTEGER)
+const MAX_SAFE_USER_ID_DIGITS = String(Number.MAX_SAFE_INTEGER).length
 const CAMPAIGN_PHONE_IDENTITY_CONFIG_ERROR_CODES = new Set([
   'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_MISSING',
   'CAMPAIGN_PHONE_IDENTITY_HASH_SECRET_TOO_SHORT',
@@ -175,6 +177,44 @@ async function resolveCampaignPhoneIdentity(factory, phone, options) {
     }
     throw createIdentityStoreError('Campaign phone identity is unavailable.')
   }
+}
+
+function createPaymentIdentityAmbiguousError() {
+  return createIdentityStoreError('Wechat identity is ambiguous.', {
+    code: 'WECHAT_IDENTITY_AMBIGUOUS',
+    statusCode: 409
+  })
+}
+
+function createPaymentIdentityQueryError() {
+  return createIdentityStoreError('Wechat identity query failed.', {
+    code: 'WECHAT_IDENTITY_QUERY_FAILED',
+    statusCode: 503
+  })
+}
+
+function normalizePaymentBindingUserId(value) {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw createPaymentIdentityAmbiguousError()
+    }
+    return String(value)
+  }
+  if (
+    typeof value !== 'string' ||
+    !/^\d+$/.test(value)
+  ) {
+    throw createPaymentIdentityAmbiguousError()
+  }
+  const significantDigits = value.replace(/^0+/, '') || '0'
+  if (significantDigits.length > MAX_SAFE_USER_ID_DIGITS) {
+    throw createPaymentIdentityAmbiguousError()
+  }
+  const numericValue = BigInt(significantDigits)
+  if (numericValue <= 0n || numericValue > MAX_SAFE_USER_ID) {
+    throw createPaymentIdentityAmbiguousError()
+  }
+  return numericValue.toString()
 }
 
 function requireCampaignPhoneBindingColumns(columns) {
@@ -612,6 +652,51 @@ export function createIdentityStore(options = {}) {
     return pool
   }
 
+  async function findWechatBindingForPayment(openidValue) {
+    if (typeof openidValue !== 'string' || !openidValue || !openidValue.trim()) {
+      throw createPaymentIdentityAmbiguousError()
+    }
+    const openid = openidValue
+
+    let connection = null
+    let result = null
+    let pendingError = null
+    try {
+      connection = await getPool().getConnection()
+      const executionResult = await connection.execute(
+        `SELECT user_id FROM ${quoteIdentifier(WECHAT_BINDINGS_TABLE)} WHERE openid = ? LIMIT 2`,
+        [openid]
+      )
+      if (!Array.isArray(executionResult) || !Array.isArray(executionResult[0])) {
+        throw createPaymentIdentityAmbiguousError()
+      }
+      const rows = executionResult[0]
+      if (rows.length === 0) {
+        result = null
+      } else if (rows.length !== 1 || !rows[0] || typeof rows[0] !== 'object') {
+        throw createPaymentIdentityAmbiguousError()
+      } else {
+        result = {
+          userId: normalizePaymentBindingUserId(rows[0].user_id)
+        }
+      }
+    } catch (error) {
+      pendingError = error && error.code === 'WECHAT_IDENTITY_AMBIGUOUS'
+        ? createPaymentIdentityAmbiguousError()
+        : createPaymentIdentityQueryError()
+    } finally {
+      if (connection) {
+        try {
+          await connection.release()
+        } catch {
+          pendingError = createPaymentIdentityQueryError()
+        }
+      }
+    }
+    if (pendingError) throw pendingError
+    return result
+  }
+
   async function resolveWechatPhoneIdentity(identity = {}) {
     const openid = normalizeString(identity.openid)
     const unionid = normalizeString(identity.unionid)
@@ -775,6 +860,7 @@ export function createIdentityStore(options = {}) {
   }
 
   return {
+    findWechatBindingForPayment,
     resolveWechatPhoneIdentity
   }
 }
