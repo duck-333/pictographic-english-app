@@ -76,6 +76,7 @@ const client = createVirtualPaymentClient({
         order: {
           order_id: ORDER_NO,
           wx_order_id: 'WXORDER1234567890',
+          wxpay_order_id: 'WXPAY1234567890',
           status: 2,
           order_type: 0,
           order_fee: 3000,
@@ -97,6 +98,7 @@ assert(Object.isFrozen(queryResult))
 assert.deepEqual(queryResult, {
   orderId: ORDER_NO,
   wechatOrderId: 'WXORDER1234567890',
+  wechatPaymentOrderId: 'WXPAY1234567890',
   status: 2,
   orderType: 0,
   orderFeeFen: 3000,
@@ -117,6 +119,37 @@ assert.equal(requests[0].options.body, JSON.stringify({
   env: 1,
   order_id: ORDER_NO
 }))
+
+async function queryWithRawTransactionId(value, includeField = true) {
+  const order = {
+    order_id: ORDER_NO,
+    wx_order_id: 'WXORDER1234567890',
+    status: 2,
+    order_type: 0,
+    order_fee: 3000,
+    paid_fee: 3000,
+    paid_time: 1788048000,
+    env_type: 2
+  }
+  if (includeField) order.wxpay_order_id = value
+  const rawClient = createVirtualPaymentClient({
+    env: enabledEnv(),
+    accessTokenProvider: tokenProvider(),
+    async fetch() { return response({ errcode: 0, order }) }
+  })
+  return rawClient.queryOrder({ openid: OPENID, orderNo: ORDER_NO })
+}
+
+for (const [value, includeField] of [[undefined, false], [null, true], ['', true]]) {
+  assert.equal((await queryWithRawTransactionId(value, includeField)).wechatPaymentOrderId, null)
+}
+assert.equal((await queryWithRawTransactionId('   ')).wechatPaymentOrderId, '   ')
+for (const invalidTransactionId of [123, true, {}, [], 'bad\u0000transaction', 'x'.repeat(129)]) {
+  await expectCode(
+    () => queryWithRawTransactionId(invalidTransactionId),
+    'VIRTUAL_PAYMENT_RESPONSE_INVALID'
+  )
+}
 
 assert.deepEqual(await client.notifyProvideGoods({
   wechatOrderId: 'WXORDER1234567890'

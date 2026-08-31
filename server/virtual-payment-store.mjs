@@ -1,12 +1,19 @@
 import crypto from 'node:crypto'
 import mysql from 'mysql2/promise'
 
-import { assertVirtualPaymentState } from './virtual-payment-state.mjs'
+import {
+  assertVirtualPaymentState,
+  PAYMENT_TRANSITION_SOURCES,
+  transitionPaymentStatus
+} from './virtual-payment-state.mjs'
+import { createWechatQueryCanonicalFact } from './virtual-payment-reconciliation.mjs'
 
 const DEFAULT_DB_HOST = '127.0.0.1'
 const DEFAULT_DB_PORT = 3306
 const DEFAULT_DB_NAME = 'baxiaota'
 const ORDERS_TABLE = 'virtual_payment_orders'
+const EVENTS_TABLE = 'virtual_payment_events'
+const STORE_ERROR_MARKER = Symbol('virtualPaymentStoreError')
 const MAX_SAFE_USER_ID = BigInt(Number.MAX_SAFE_INTEGER)
 const MAX_UNSIGNED_INT = 4_294_967_295
 const CLIENT_REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{7,79}$/
@@ -17,6 +24,13 @@ const PAYMENT_STATUSES = new Set(['initializing', 'pending', 'confirming', 'paid
 const ENTITLEMENT_STATUSES = new Set(['not_ready', 'pending', 'granting', 'granted', 'retryable_failed', 'failed'])
 const DELIVERY_STATUSES = new Set(['not_ready', 'pending', 'confirming', 'delivered', 'retryable_failed', 'manual_review'])
 const CLIENT_RESULTS = new Set(['success', 'cancelled', 'failed'])
+const ALLOWED_WECHAT_QUERY_EVENT_HISTORY = new Map([
+  ['wechat_query_status_1_confirming', Object.freeze({ status: 1, meaning: 'order_created', target: 'confirming', paid: false })],
+  ['wechat_query_status_2_paid', Object.freeze({ status: 2, meaning: 'paid_pending_delivery', target: 'paid', paid: true })],
+  ['wechat_query_status_3_paid', Object.freeze({ status: 3, meaning: 'delivering', target: 'paid', paid: true })],
+  ['wechat_query_status_4_paid', Object.freeze({ status: 4, meaning: 'delivered', target: 'paid', paid: true })]
+])
+const MAX_WECHAT_QUERY_EVENT_HISTORY = ALLOWED_WECHAT_QUERY_EVENT_HISTORY.size
 const EXPECTED_DUPLICATE_CONSTRAINTS = new Set([
   'uk_virtual_payment_orders_order_no',
   'uk_virtual_payment_orders_user_request'
@@ -47,6 +61,7 @@ function createStoreError(message, code = 'PAYMENT_SERVICE_UNAVAILABLE', statusC
   const error = new Error(message)
   error.code = code
   error.statusCode = statusCode
+  Object.defineProperty(error, STORE_ERROR_MARKER, { value: true })
   return error
 }
 
@@ -263,6 +278,225 @@ function normalizeSingleOrder(result) {
   return rows.length === 1 ? normalizeOrderRow(rows[0]) : null
 }
 
+function assertAffectedRows(result, expected = 1) {
+  const affectedRows = result && result[0] && result[0].affectedRows
+  if (affectedRows !== expected) {
+    throw createStoreError('Payment database update response is invalid.')
+  }
+}
+
+function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) {
+    throw createStoreError('Payment event data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
+  }
+  const eventType = requireString(row.event_type, 64)
+  const eventRule = ALLOWED_WECHAT_QUERY_EVENT_HISTORY.get(eventType)
+  const eventKey = requireString(row.event_key, 191)
+  const orderNo = normalizeOrderNo(row.order_no)
+  const providerOrderId = requireString(row.provider_order_id, 128)
+  const providerTransactionId = requireProviderTransactionReference(row.provider_transaction_id, {
+    nullable: eventRule ? !eventRule.paid : true
+  })
+  const paidAmountFen = eventRule && eventRule.paid
+    ? requireUnsignedInteger(row.paid_amount_fen, { expected: 3000 })
+    : null
+  const paidAt = eventRule && eventRule.paid ? normalizeRequiredDate(row.paid_at) : null
+  const paidAtSeconds = paidAt === null ? null : Date.parse(paidAt) / 1000
+  const payloadHash = row.payload_hash
+  if (
+    !eventRule ||
+    !/^wechat_query:[a-f0-9]{64}$/.test(eventKey) ||
+    normalizeBigIntId(row.order_id) !== normalizeBigIntId(row.linked_order_id) ||
+    orderNo !== row.linked_order_no ||
+    providerOrderId !== row.linked_provider_order_id ||
+    (eventRule && eventRule.paid && providerTransactionId !== row.linked_provider_transaction_id) ||
+    row.environment !== 'sandbox' ||
+    row.processing_status !== 'processed' ||
+    row.last_error_code !== null ||
+    (paidAtSeconds !== null && (!Number.isSafeInteger(paidAtSeconds) || paidAtSeconds <= 0)) ||
+    !Buffer.isBuffer(payloadHash) ||
+    payloadHash.length !== 32 ||
+    requireUnsignedInteger(row.received_count) < 1 ||
+    requireUnsignedInteger(row.attempt_count) < 1
+  ) {
+    throw createStoreError('Payment event data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
+  }
+  normalizeRequiredDate(row.processed_at)
+  let canonicalFact
+  try {
+    canonicalFact = createWechatQueryCanonicalFact({
+      source: 'wechat_query',
+      environment: 'sandbox',
+      wechatEnv: requireUnsignedInteger(row.wechat_env, { expected: 1, maximum: 255 }),
+      orderNo,
+      providerOrderId,
+      providerTransactionId,
+      wechatStatus: eventRule.status,
+      meaning: eventRule.meaning,
+      targetPaymentStatus: eventRule.target,
+      orderType: 0,
+      orderAmountFen: requireUnsignedInteger(row.order_amount_fen, { expected: 3000 }),
+      paidAmountFen,
+      paidAtSeconds
+    })
+  } catch {
+    throw createStoreError('Payment event data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
+  }
+  if (
+    !crypto.timingSafeEqual(payloadHash, canonicalFact.payloadHash) ||
+    eventKey !== canonicalFact.eventKey
+  ) {
+    throw createStoreError('Payment event data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
+  }
+  return eventRule.paid
+}
+
+function requireProviderTransactionReference(value, options = {}) {
+  if (value === null && options.nullable) return null
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 128 ||
+    /^\s+$/u.test(value) ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw createStoreError('Payment reconciliation fact is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
+  }
+  return value
+}
+
+function normalizeTrustedReconciliationContext(value) {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.keys(value).join(',') !== 'expectedProductId' ||
+    typeof value.expectedProductId !== 'string' ||
+    value.expectedProductId.length === 0 ||
+    value.expectedProductId.length > 191 ||
+    /^\s+$/u.test(value.expectedProductId) ||
+    /[\u0000-\u001f\u007f]/.test(value.expectedProductId)
+  ) {
+    throw createStoreError('Payment reconciliation context is invalid.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
+  }
+  return Object.freeze({ expectedProductId: value.expectedProductId })
+}
+
+function normalizeReconciliationFact(value) {
+  const expectedFacts = new Map([
+    [1, ['order_created', 'confirming']],
+    [2, ['paid_pending_delivery', 'paid']],
+    [3, ['delivering', 'paid']],
+    [4, ['delivered', 'paid']],
+    [6, ['closed', 'closed']]
+  ])
+  const allowedKeys = new Set([
+    'source', 'environment', 'wechatEnv', 'orderNo', 'eventKey', 'payloadHash',
+    'wechatStatus', 'meaning', 'targetPaymentStatus', 'providerOrderId',
+    'providerTransactionId', 'orderType', 'orderAmountFen', 'paidAmountFen',
+    'paidAt', 'paidAtSeconds'
+  ])
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== allowedKeys.size ||
+    [...allowedKeys].some((key) => !Object.hasOwn(value, key)) ||
+    value.source !== 'wechat_query' ||
+    value.environment !== 'sandbox' ||
+    value.wechatEnv !== 1 ||
+    typeof value.orderNo !== 'string' ||
+    !ORDER_NUMBER_PATTERN.test(value.orderNo) ||
+    typeof value.eventKey !== 'string' ||
+    !/^wechat_query:[a-f0-9]{64}$/.test(value.eventKey) ||
+    !Buffer.isBuffer(value.payloadHash) ||
+    value.payloadHash.length !== 32 ||
+    typeof value.meaning !== 'string' ||
+    !/^[a-z_]{1,64}$/.test(value.meaning) ||
+    !Number.isSafeInteger(value.wechatStatus) ||
+    typeof value.orderType !== 'number' ||
+    !Number.isSafeInteger(value.orderType) ||
+    value.orderType !== 0 ||
+    value.orderAmountFen !== 3000 ||
+    !['confirming', 'paid', 'closed'].includes(value.targetPaymentStatus)
+  ) {
+    throw createStoreError('Payment reconciliation fact is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
+  }
+  const expectedFact = expectedFacts.get(value.wechatStatus)
+  if (
+    !expectedFact ||
+    expectedFact[0] !== value.meaning ||
+    expectedFact[1] !== value.targetPaymentStatus
+  ) {
+    throw createStoreError('Payment reconciliation fact is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
+  }
+  const providerOrderId = requireString(value.providerOrderId, 128)
+  const providerTransactionId = requireProviderTransactionReference(value.providerTransactionId, { nullable: true })
+  if (!/^[A-Za-z0-9_-]+$/.test(providerOrderId)) {
+    throw createStoreError('Payment reconciliation fact is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
+  }
+  if (value.targetPaymentStatus === 'paid') {
+    if (
+      value.paidAmountFen !== 3000 ||
+      providerTransactionId === null ||
+      !(value.paidAt instanceof Date) ||
+      !Number.isFinite(value.paidAt.getTime()) ||
+      !Number.isSafeInteger(value.paidAtSeconds) ||
+      value.paidAtSeconds <= 0 ||
+      value.paidAt.getTime() !== value.paidAtSeconds * 1000
+    ) {
+      throw createStoreError('Payment reconciliation fact is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
+    }
+  } else if (value.paidAmountFen !== null || value.paidAt !== null || value.paidAtSeconds !== null) {
+    throw createStoreError('Payment reconciliation fact is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
+  }
+  let canonicalFact
+  try {
+    canonicalFact = createWechatQueryCanonicalFact({
+      source: value.source,
+      environment: value.environment,
+      wechatEnv: value.wechatEnv,
+      orderNo: value.orderNo,
+      providerOrderId,
+      providerTransactionId,
+      wechatStatus: value.wechatStatus,
+      meaning: value.meaning,
+      targetPaymentStatus: value.targetPaymentStatus,
+      orderType: value.orderType,
+      orderAmountFen: value.orderAmountFen,
+      paidAmountFen: value.paidAmountFen,
+      paidAtSeconds: value.paidAtSeconds
+    })
+  } catch {
+    throw createStoreError('Payment reconciliation fact is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
+  }
+  const providedPayloadHash = Buffer.from(value.payloadHash)
+  if (
+    !crypto.timingSafeEqual(providedPayloadHash, canonicalFact.payloadHash) ||
+    value.eventKey !== canonicalFact.eventKey
+  ) {
+    throw createStoreError('Payment reconciliation fact is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
+  }
+  return Object.freeze({
+    source: 'wechat_query',
+    environment: 'sandbox',
+    wechatEnv: 1,
+    orderNo: value.orderNo,
+    eventKey: canonicalFact.eventKey,
+    payloadHash: Buffer.from(canonicalFact.payloadHash),
+    wechatStatus: value.wechatStatus,
+    meaning: value.meaning,
+    targetPaymentStatus: value.targetPaymentStatus,
+    providerOrderId,
+    providerTransactionId,
+    orderType: value.orderType,
+    orderAmountFen: value.orderAmountFen,
+    paidAmountFen: value.paidAmountFen,
+    paidAt: value.paidAt === null ? null : new Date(value.paidAt.getTime()),
+    paidAtSeconds: value.paidAtSeconds
+  })
+}
+
 function assertIdempotentOrderMatchesInput(order, input, userId, clientRequestId, productId) {
   if (
     order.userId !== userId ||
@@ -390,6 +624,62 @@ export function createVirtualPaymentStore(options = {}) {
     return result
   }
 
+  async function runTransaction(work) {
+    let connection = null
+    let transactionStarted = false
+    let operationError = null
+    let rollbackError = null
+    let releaseError = null
+    let result
+    try {
+      const database = getPool()
+      if (!database || typeof database.getConnection !== 'function') {
+        throw new Error('Invalid transactional database pool.')
+      }
+      connection = await database.getConnection()
+      if (
+        !connection ||
+        typeof connection.execute !== 'function' ||
+        typeof connection.beginTransaction !== 'function' ||
+        typeof connection.commit !== 'function' ||
+        typeof connection.rollback !== 'function'
+      ) {
+        throw new Error('Invalid transactional database connection.')
+      }
+      await connection.beginTransaction()
+      transactionStarted = true
+      result = await work(connection)
+      await connection.commit()
+      transactionStarted = false
+    } catch (error) {
+      operationError = error
+      if (transactionStarted && connection) {
+        try {
+          await connection.rollback()
+        } catch (rollbackFailure) {
+          rollbackError = rollbackFailure
+        }
+      }
+    } finally {
+      if (connection) {
+        try {
+          if (typeof connection.release !== 'function') throw new Error('Invalid database release.')
+          await connection.release()
+        } catch (releaseFailure) {
+          releaseError = releaseFailure
+        }
+      }
+    }
+    if (rollbackError || releaseError) {
+      throw createStoreError('Payment database transaction cleanup failed.')
+    }
+    if (operationError) {
+      if (operationError[STORE_ERROR_MARKER] === true) throw operationError
+      throw createStoreError('Payment database transaction failed.')
+    }
+    return result
+  }
+
   async function findByUserAndClientRequestId(userIdValue, clientRequestIdValue) {
     const userId = normalizeUserId(userIdValue)
     const clientRequestId = normalizeVirtualPaymentClientRequestId(clientRequestIdValue)
@@ -408,6 +698,36 @@ export function createVirtualPaymentStore(options = {}) {
       [userId, orderNo]
     )
     return normalizeSingleOrder(result)
+  }
+
+  async function findTrustedWechatQueryPaidEvidence(userIdValue, orderNoValue) {
+    const userId = normalizeUserId(userIdValue)
+    const orderNo = normalizeOrderNo(orderNoValue)
+    const rows = getRows(await execute(
+      `SELECT e.event_key, e.event_type, e.order_id, e.order_no,
+              e.provider_order_id, e.provider_transaction_id, e.payload_hash,
+              e.processing_status, e.received_count, e.processed_at,
+              e.attempt_count, e.last_error_code,
+              o.id AS linked_order_id, o.order_no AS linked_order_no,
+              o.provider_order_id AS linked_provider_order_id,
+              o.provider_transaction_id AS linked_provider_transaction_id,
+              o.order_amount_fen, o.paid_amount_fen, o.paid_at,
+              o.environment, o.wechat_env
+       FROM ${EVENTS_TABLE} e
+       INNER JOIN ${ORDERS_TABLE} o
+         ON o.id = e.order_id OR o.order_no = e.order_no
+       WHERE o.user_id = ? AND o.order_no = ? AND o.payment_status = 'paid'
+       LIMIT ${MAX_WECHAT_QUERY_EVENT_HISTORY + 1}`,
+      [userId, orderNo]
+    ))
+    if (rows.length > MAX_WECHAT_QUERY_EVENT_HISTORY) {
+      throw createStoreError('Payment event data is ambiguous.', 'PAYMENT_ORDER_CONFLICT', 409)
+    }
+    let hasPaidEvidence = false
+    for (const row of rows) {
+      if (normalizeTrustedWechatQueryPaidEvidenceRow(row)) hasPaidEvidence = true
+    }
+    return hasPaidEvidence
   }
 
   async function createOrder(input) {
@@ -514,10 +834,174 @@ export function createVirtualPaymentStore(options = {}) {
     return order
   }
 
+  async function reconcileVerifiedWechatQuery(userIdValue, orderNoValue, factValue, contextValue) {
+    const userId = normalizeUserId(userIdValue)
+    const orderNo = normalizeOrderNo(orderNoValue)
+    const fact = normalizeReconciliationFact(factValue)
+    if (fact.orderNo !== orderNo) {
+      throw createStoreError('Payment reconciliation fact is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
+    }
+    const context = normalizeTrustedReconciliationContext(contextValue)
+    const eventType = `wechat_query_status_${fact.wechatStatus}_${fact.targetPaymentStatus}`
+    return runTransaction(async (connection) => {
+      const lockedOrder = normalizeSingleOrder(await connection.execute(
+        `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE}
+         WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
+        [userId, orderNo]
+      ))
+      if (!lockedOrder) {
+        throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+      }
+      if (lockedOrder.productId !== context.expectedProductId) {
+        throw createStoreError('Payment order conflicts with current configuration.', 'PAYMENT_ORDER_CONFLICT', 409)
+      }
+      if (
+        lockedOrder.entitlementStatus !== 'not_ready' ||
+        lockedOrder.deliveryStatus !== 'not_ready' ||
+        lockedOrder.membershipGrantId !== null ||
+        lockedOrder.entitlementTransactionId !== null
+      ) {
+        throw createStoreError('Payment order cannot be reconciled.', 'PAYMENT_ORDER_NOT_RECONCILABLE', 409)
+      }
+      const currentStatus = lockedOrder.paymentStatus
+      const targetStatus = fact.targetPaymentStatus
+      const sameTerminalFact = (
+        (currentStatus === 'paid' && targetStatus === 'paid') ||
+        (currentStatus === 'closed' && targetStatus === 'closed')
+      )
+      if (!['pending', 'confirming'].includes(currentStatus) && !sameTerminalFact) {
+        throw createStoreError('Payment order cannot be reconciled.', 'PAYMENT_ORDER_NOT_RECONCILABLE', 409)
+      }
+      let transition
+      try {
+        transition = transitionPaymentStatus(currentStatus, targetStatus, {
+          source: PAYMENT_TRANSITION_SOURCES.WECHAT_QUERY
+        })
+      } catch {
+        throw createStoreError('Payment order cannot be reconciled.', 'PAYMENT_ORDER_NOT_RECONCILABLE', 409)
+      }
+      if (
+        (lockedOrder.providerOrderId !== null && lockedOrder.providerOrderId !== fact.providerOrderId) ||
+        (lockedOrder.providerTransactionId !== null && lockedOrder.providerTransactionId !== fact.providerTransactionId) ||
+        (lockedOrder.paidAmountFen !== null && lockedOrder.paidAmountFen !== fact.paidAmountFen) ||
+        (lockedOrder.paidAt !== null && fact.paidAt !== null && lockedOrder.paidAt !== fact.paidAt.toISOString()) ||
+        (lockedOrder.paidAt !== null && fact.paidAt === null)
+      ) {
+        throw createStoreError('Payment reconciliation conflicts with stored facts.', 'PAYMENT_ORDER_CONFLICT', 409)
+      }
+
+      const eventRows = getRows(await connection.execute(
+        `SELECT id, event_type, order_id, order_no, provider_order_id,
+                provider_transaction_id, payload_hash, processing_status, received_count
+         FROM ${EVENTS_TABLE} WHERE event_key = ? LIMIT 2 FOR UPDATE`,
+        [fact.eventKey]
+      ))
+      if (eventRows.length > 1) {
+        throw createStoreError('Payment event data is ambiguous.', 'PAYMENT_ORDER_CONFLICT', 409)
+      }
+      const existingEvent = eventRows[0] || null
+      let eventDuplicate = false
+      if (existingEvent) {
+        const payloadHash = existingEvent.payload_hash
+        if (
+          normalizeBigIntId(existingEvent.order_id) !== lockedOrder.id ||
+          existingEvent.event_type !== eventType ||
+          existingEvent.order_no !== lockedOrder.orderNo ||
+          existingEvent.provider_order_id !== fact.providerOrderId ||
+          existingEvent.provider_transaction_id !== fact.providerTransactionId ||
+          existingEvent.processing_status !== 'processed' ||
+          !Buffer.isBuffer(payloadHash) ||
+          payloadHash.length !== 32 ||
+          !crypto.timingSafeEqual(payloadHash, fact.payloadHash) ||
+          typeof existingEvent.received_count !== 'number' ||
+          !Number.isSafeInteger(existingEvent.received_count) ||
+          existingEvent.received_count < 1 ||
+          existingEvent.received_count >= MAX_UNSIGNED_INT
+        ) {
+          throw createStoreError('Payment event conflicts with stored facts.', 'PAYMENT_ORDER_CONFLICT', 409)
+        }
+        assertAffectedRows(await connection.execute(
+          `UPDATE ${EVENTS_TABLE}
+           SET received_count = received_count + 1
+           WHERE id = ? AND event_key = ? AND processing_status = 'processed'`,
+          [normalizeBigIntId(existingEvent.id), fact.eventKey]
+        ))
+        eventDuplicate = true
+      } else {
+        assertAffectedRows(await connection.execute(
+          `INSERT INTO ${EVENTS_TABLE} (
+             event_key, event_type, order_id, order_no, provider_order_id,
+             provider_transaction_id, payload_hash, processing_status,
+             received_count, processed_at, attempt_count
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'processed', 1, UTC_TIMESTAMP(), 1)`,
+          [
+            fact.eventKey,
+            eventType,
+            lockedOrder.id,
+            lockedOrder.orderNo,
+            fact.providerOrderId,
+            fact.providerTransactionId,
+            fact.payloadHash
+          ]
+        ))
+      }
+
+      const shouldUpdateOrder = !transition.idempotent ||
+        lockedOrder.providerOrderId === null ||
+        (fact.providerTransactionId !== null && lockedOrder.providerTransactionId === null) ||
+        (fact.paidAmountFen !== null && lockedOrder.paidAmountFen === null) ||
+        (fact.paidAt !== null && lockedOrder.paidAt === null)
+      if (shouldUpdateOrder) {
+        assertAffectedRows(await connection.execute(
+          `UPDATE ${ORDERS_TABLE}
+           SET payment_status = ?,
+               provider_order_id = COALESCE(provider_order_id, ?),
+               provider_transaction_id = COALESCE(provider_transaction_id, ?),
+               paid_amount_fen = COALESCE(paid_amount_fen, ?),
+               paid_at = COALESCE(paid_at, ?),
+               last_queried_at = UTC_TIMESTAMP(),
+               last_error_code = NULL,
+               version = version + 1
+           WHERE id = ? AND user_id = ? AND order_no = ? AND version = ?
+             AND payment_status = ?
+             AND entitlement_status = 'not_ready' AND delivery_status = 'not_ready'
+             AND membership_grant_id IS NULL AND entitlement_transaction_id IS NULL`,
+          [
+            targetStatus,
+            fact.providerOrderId,
+            fact.providerTransactionId,
+            fact.paidAmountFen,
+            fact.paidAt,
+            lockedOrder.id,
+            userId,
+            orderNo,
+            lockedOrder.version,
+            currentStatus
+          ]
+        ))
+      }
+      const reconciledOrder = normalizeSingleOrder(await connection.execute(
+        `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE}
+         WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
+        [userId, orderNo]
+      ))
+      if (!reconciledOrder) {
+        throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+      }
+      return Object.freeze({
+        order: reconciledOrder,
+        eventDuplicate,
+        stateChanged: shouldUpdateOrder
+      })
+    })
+  }
+
   return Object.freeze({
     findByUserAndClientRequestId,
     findByUserAndOrderNo,
+    findTrustedWechatQueryPaidEvidence,
     createOrder,
-    markOrderPending
+    markOrderPending,
+    reconcileVerifiedWechatQuery
   })
 }

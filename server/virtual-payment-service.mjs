@@ -1,4 +1,5 @@
 import { getVirtualPaymentConfig, VIRTUAL_PAYMENT_PRODUCT } from './virtual-payment-config.mjs'
+import { normalizeVerifiedWechatQueryFact } from './virtual-payment-reconciliation.mjs'
 import { normalizeVirtualPaymentClientRequestId } from './virtual-payment-store.mjs'
 
 const PAYMENT_CHANNEL = 'wechat_virtual_payment'
@@ -10,6 +11,10 @@ const ALLOWED_CREATE_FIELDS = new Set([
   'platform'
 ])
 const ALLOWED_PLATFORMS = new Set(['android', 'harmony', 'windows'])
+const ALLOWED_RECONCILE_FIELDS = new Set(['authenticatedUserId', 'orderNo', 'loginCode'])
+const ORDER_NUMBER_PATTERN = /^VP[A-F0-9]{30}$/
+const CANONICAL_UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
 
 function createServiceError(message, code, statusCode) {
   const error = new Error(message)
@@ -93,7 +98,7 @@ function assertCreateInput(input) {
 function assertOrderMatchesConfig(order, config, userId, clientRequestId) {
   if (
     order.userId !== userId ||
-    order.clientRequestId !== clientRequestId ||
+    (clientRequestId !== undefined && order.clientRequestId !== clientRequestId) ||
     order.internalSku !== VIRTUAL_PAYMENT_PRODUCT.internalSku ||
     order.productId !== config.productId ||
     order.productName !== VIRTUAL_PAYMENT_PRODUCT.displayName ||
@@ -118,6 +123,59 @@ function assertPayable(order) {
     order.entitlementTransactionId !== null
   ) {
     throw createServiceError('Payment order is not payable.', 'PAYMENT_ORDER_NOT_PAYABLE', 409)
+  }
+}
+
+function isProviderReference(value) {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 128 &&
+    !/^\s+$/u.test(value) &&
+    !CONTROL_CHARACTER_PATTERN.test(value)
+}
+
+function isCanonicalPaidAt(value, nowValue) {
+  if (typeof value !== 'string' || !CANONICAL_UTC_TIMESTAMP_PATTERN.test(value)) return false
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) &&
+    timestamp > 0 &&
+    timestamp <= nowValue + 300_000 &&
+    new Date(timestamp).toISOString() === value
+}
+
+function assertCompleteLocalPaidOrder(order, config, userId, nowProvider) {
+  const nowValue = nowProvider === undefined ? Date.now() : nowProvider()
+  if (typeof nowValue !== 'number' || !Number.isFinite(nowValue)) {
+    throw createServiceError('Payment service clock is unavailable.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
+  }
+  if (
+    !isPlainObject(order) ||
+    order.userId !== userId ||
+    order.paymentStatus !== 'paid' ||
+    order.internalSku !== VIRTUAL_PAYMENT_PRODUCT.internalSku ||
+    order.productId !== config.productId ||
+    order.productName !== VIRTUAL_PAYMENT_PRODUCT.displayName ||
+    order.quantity !== VIRTUAL_PAYMENT_PRODUCT.quantity ||
+    order.unitPriceFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen ||
+    order.orderAmountFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen * VIRTUAL_PAYMENT_PRODUCT.quantity ||
+    order.paidAmountFen !== order.orderAmountFen ||
+    order.paidAmountFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen ||
+    order.currency !== VIRTUAL_PAYMENT_PRODUCT.currency ||
+    order.environment !== 'sandbox' ||
+    order.wechatEnv !== 1 ||
+    order.paymentChannel !== PAYMENT_CHANNEL ||
+    !ALLOWED_PLATFORMS.has(order.clientPlatform) ||
+    !isCanonicalPaidAt(order.paidAt, nowValue) ||
+    !isProviderReference(order.providerOrderId) ||
+    !isProviderReference(order.providerTransactionId) ||
+    order.entitlementStatus !== 'not_ready' ||
+    order.deliveryStatus !== 'not_ready' ||
+    order.membershipGrantId !== null ||
+    order.entitlementTransactionId !== null ||
+    order.entitlementGrantedAt !== null ||
+    order.deliveredAt !== null
+  ) {
+    throw createServiceError('Local paid payment fact is incomplete.', 'PAYMENT_PAID_FACT_INCOMPLETE', 409)
   }
 }
 
@@ -147,7 +205,11 @@ function mapDependencyError(error, fallbackCode = 'PAYMENT_SERVICE_UNAVAILABLE')
     'PAYMENT_ORDER_CONFLICT',
     'PAYMENT_ORDER_NOT_PAYABLE',
     'PAYMENT_ORDER_NOT_FOUND',
-    'PAYMENT_ORDER_CREATE_FAILED'
+    'PAYMENT_ORDER_CREATE_FAILED',
+    'PAYMENT_ORDER_NOT_RECONCILABLE',
+    'PAYMENT_QUERY_RESULT_INVALID',
+    'PAYMENT_QUERY_STATUS_UNSUPPORTED',
+    'PAYMENT_PAID_FACT_INCOMPLETE'
   ])
   if (error && allowedCodes.has(error.code)) {
     return createServiceError(
@@ -273,8 +335,114 @@ export function createVirtualPaymentService(options = {}) {
     return safeOrderSummary(order)
   }
 
+  async function reconcileOwnedOrder(input = {}) {
+    assertEnabled(config)
+    if (
+      !isPlainObject(input) ||
+      Object.keys(input).some((key) => !ALLOWED_RECONCILE_FIELDS.has(key)) ||
+      typeof input.orderNo !== 'string' ||
+      !ORDER_NUMBER_PATTERN.test(input.orderNo) ||
+      typeof input.loginCode !== 'string' ||
+      !input.loginCode
+    ) {
+      throw createServiceError('Payment request is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
+    }
+    const userId = normalizeUserId(input.authenticatedUserId)
+    assertAllowedUser(config, userId)
+    let order
+    try {
+      order = await store.findByUserAndOrderNo(userId, input.orderNo)
+    } catch {
+      throw createServiceError('Payment operation failed.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
+    }
+    if (!order) {
+      throw createServiceError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+    }
+    if (order.paymentStatus === 'paid') {
+      assertCompleteLocalPaidOrder(order, config, userId, options.now)
+      if (typeof store.findTrustedWechatQueryPaidEvidence !== 'function') {
+        throw createServiceError('Payment service is unavailable.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
+      }
+      let hasTrustedEvidence
+      try {
+        hasTrustedEvidence = await store.findTrustedWechatQueryPaidEvidence(userId, order.orderNo)
+      } catch (error) {
+        throw mapDependencyError(error)
+      }
+      if (hasTrustedEvidence !== true) {
+        throw createServiceError('Local paid payment fact is incomplete.', 'PAYMENT_PAID_FACT_INCOMPLETE', 409)
+      }
+      return safeOrderSummary(order)
+    }
+    assertOrderMatchesConfig(order, config, userId)
+    if (
+      order.entitlementStatus !== 'not_ready' ||
+      order.deliveryStatus !== 'not_ready' ||
+      order.membershipGrantId !== null ||
+      order.entitlementTransactionId !== null
+    ) {
+      throw createServiceError('Payment order cannot be reconciled.', 'PAYMENT_ORDER_NOT_RECONCILABLE', 409)
+    }
+    if (!['pending', 'confirming'].includes(order.paymentStatus)) {
+      throw createServiceError('Payment order cannot be reconciled.', 'PAYMENT_ORDER_NOT_RECONCILABLE', 409)
+    }
+    if (
+      !options.virtualPaymentClient ||
+      typeof options.virtualPaymentClient.queryOrder !== 'function' ||
+      typeof store.reconcileVerifiedWechatQuery !== 'function'
+    ) {
+      throw createServiceError('Payment service is unavailable.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
+    }
+
+    let paymentSession
+    try {
+      paymentSession = await paymentSessionService.exchangeAndVerifyPaymentSession({
+        loginCode: input.loginCode,
+        authenticatedUserId: userId
+      })
+    } catch (error) {
+      throw mapDependencyError(error)
+    }
+    let queryResult
+    try {
+      queryResult = await options.virtualPaymentClient.queryOrder({
+        openid: paymentSession.openid,
+        orderNo: order.orderNo
+      })
+    } catch {
+      throw createServiceError('Wechat payment query is unavailable.', 'PAYMENT_QUERY_UNAVAILABLE', 503)
+    }
+    let fact
+    try {
+      fact = normalizeVerifiedWechatQueryFact(queryResult, order, { now: options.now })
+    } catch (error) {
+      if (error && [
+        'PAYMENT_QUERY_RESULT_INVALID',
+        'PAYMENT_QUERY_STATUS_UNSUPPORTED',
+        'PAYMENT_ORDER_CONFLICT',
+        'PAYMENT_SERVICE_UNAVAILABLE'
+      ].includes(error.code)) {
+        throw createServiceError(error.message, error.code, Number(error.statusCode || 500))
+      }
+      throw createServiceError('Wechat payment query result is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
+    }
+    let reconciled
+    try {
+      reconciled = await store.reconcileVerifiedWechatQuery(userId, order.orderNo, fact, {
+        expectedProductId: config.productId
+      })
+    } catch (error) {
+      throw mapDependencyError(error)
+    }
+    if (reconciled.order.paymentStatus === 'paid') {
+      assertCompleteLocalPaidOrder(reconciled.order, config, userId, options.now)
+    }
+    return safeOrderSummary(reconciled.order)
+  }
+
   return Object.freeze({
     createOrResumeOrder,
-    getOwnedOrder
+    getOwnedOrder,
+    reconcileOwnedOrder
   })
 }

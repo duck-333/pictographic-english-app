@@ -220,6 +220,7 @@ function normalizeQueryOrderResponse(payload) {
   return Object.freeze({
     orderId,
     wechatOrderId,
+    wechatPaymentOrderId: optionalSafeString(order.wxpay_order_id, 128),
     status: order.status,
     orderType: optionalInteger(order.order_type, 'order type'),
     orderFeeFen: optionalInteger(order.order_fee, 'order fee'),

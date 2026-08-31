@@ -1,5 +1,6 @@
 import { requireUserAuth } from './auth.mjs'
 import { getVirtualPaymentConfig } from './virtual-payment-config.mjs'
+import { createVirtualPaymentClient } from './virtual-payment-client.mjs'
 import { createVirtualPaymentService } from './virtual-payment-service.mjs'
 import { createVirtualPaymentSessionService } from './virtual-payment-session.mjs'
 import { createVirtualPaymentSigningService } from './virtual-payment-signing.mjs'
@@ -8,6 +9,7 @@ import { createVirtualPaymentStore } from './virtual-payment-store.mjs'
 const COLLECTION_PATH = '/api/user/virtual-payment/orders'
 const MAX_BODY_BYTES = 16 * 1024
 const CREATE_FIELDS = new Set(['clientRequestId', 'loginCode', 'sku', 'platform'])
+const RECONCILE_FIELDS = new Set(['loginCode'])
 const PUBLIC_ERROR_CODES = new Set([
   'PAYMENT_DISABLED',
   'PAYMENT_SANDBOX_FORBIDDEN_IN_PRODUCTION',
@@ -24,6 +26,11 @@ const PUBLIC_ERROR_CODES = new Set([
   'PAYMENT_ORDER_NOT_FOUND',
   'PAYMENT_ORDER_CREATE_FAILED',
   'PAYMENT_SIGNATURE_FAILED',
+  'PAYMENT_ORDER_NOT_RECONCILABLE',
+  'PAYMENT_QUERY_UNAVAILABLE',
+  'PAYMENT_QUERY_RESULT_INVALID',
+  'PAYMENT_QUERY_STATUS_UNSUPPORTED',
+  'PAYMENT_PAID_FACT_INCOMPLETE',
   'PAYMENT_SERVICE_UNAVAILABLE'
 ])
 
@@ -46,7 +53,7 @@ function createRouteError(message, code = 'PAYMENT_REQUEST_INVALID', statusCode 
   return error
 }
 
-function readPaymentJsonBody(req) {
+function readPaymentJsonBody(req, allowedFields) {
   const contentType = String(req.headers && req.headers['content-type'] || '').toLowerCase()
   if (!contentType.startsWith('application/json')) {
     throw createRouteError('Payment request must be JSON.')
@@ -90,7 +97,7 @@ function readPaymentJsonBody(req) {
         return
       }
       const fields = Object.keys(body)
-      if (fields.some((field) => !CREATE_FIELDS.has(field))) {
+      if (fields.some((field) => !allowedFields.has(field))) {
         reject(createRouteError('Payment request contains unsupported fields.'))
         return
       }
@@ -159,12 +166,17 @@ export function createVirtualPaymentRoutes(options = {}) {
         identityStore: options.identityStore
       })
       const signingService = options.virtualPaymentSigningService || createVirtualPaymentSigningService(options)
+      const virtualPaymentClient = options.virtualPaymentClient || createVirtualPaymentClient({
+        ...options,
+        signingService
+      })
       runtime = {
         service: createVirtualPaymentService({
           ...options,
           store,
           paymentSessionService,
-          signingService
+          signingService,
+          virtualPaymentClient
         })
       }
       return runtime.service
@@ -177,10 +189,17 @@ export function createVirtualPaymentRoutes(options = {}) {
 
   async function handle(req, res, pathname, userAuthOptions) {
     const isCollection = pathname === COLLECTION_PATH
-    const isItem = pathname.startsWith(`${COLLECTION_PATH}/`)
-    if (!isCollection && !isItem) return false
+    const itemSuffix = pathname.startsWith(`${COLLECTION_PATH}/`)
+      ? pathname.slice(`${COLLECTION_PATH}/`.length)
+      : ''
+    const itemSegments = itemSuffix.split('/')
+    const isReconciliation = itemSegments.length === 2 && itemSegments[1] === 'reconcile'
+    const isItem = itemSegments.length === 1 && Boolean(itemSegments[0])
+    if (!isCollection && !isItem && !isReconciliation) return false
 
-    const allowedMethod = (isCollection && req.method === 'POST') || (isItem && req.method === 'GET')
+    const allowedMethod = (isCollection && req.method === 'POST') ||
+      (isItem && req.method === 'GET') ||
+      (isReconciliation && req.method === 'POST')
     if (!allowedMethod) {
       sendNoStoreJson(res, 405, { ok: false, code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' })
       return true
@@ -195,13 +214,33 @@ export function createVirtualPaymentRoutes(options = {}) {
     try {
       const service = getService()
       if (isCollection) {
-        const body = await readPaymentJsonBody(req)
+        const body = await readPaymentJsonBody(req, CREATE_FIELDS)
         const result = await service.createOrResumeOrder({
           authenticatedUserId: authResult.userId,
           clientRequestId: body.clientRequestId,
           loginCode: body.loginCode,
           sku: body.sku,
           platform: body.platform
+        })
+        sendNoStoreJson(res, 200, { ok: true, ...result })
+        return true
+      }
+
+      if (isReconciliation) {
+        let reconciliationOrderNo
+        try {
+          reconciliationOrderNo = decodeURIComponent(itemSegments[0])
+        } catch {
+          throw createRouteError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+        }
+        if (!/^VP[A-F0-9]{30}$/.test(reconciliationOrderNo)) {
+          throw createRouteError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+        }
+        const body = await readPaymentJsonBody(req, RECONCILE_FIELDS)
+        const result = await service.reconcileOwnedOrder({
+          authenticatedUserId: authResult.userId,
+          orderNo: reconciliationOrderNo,
+          loginCode: body.loginCode
         })
         sendNoStoreJson(res, 200, { ok: true, ...result })
         return true
