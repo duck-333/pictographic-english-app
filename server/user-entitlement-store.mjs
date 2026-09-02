@@ -69,6 +69,22 @@ const QUOTA_DEDUCT_TRANSACTION_TYPES = new Set([
   ENTITLEMENT_TRANSACTION_TYPES.ADMIN_DEDUCT
 ])
 
+const ENTITLEMENT_TRANSACTION_TYPE_VALUES = new Set(Object.values(ENTITLEMENT_TRANSACTION_TYPES))
+
+const ENTITLEMENT_LEDGER_EFFECTS = new Map([
+  [ENTITLEMENT_TRANSACTION_TYPES.REGISTER_BONUS, Object.freeze({ sign: 'positive', granted: true })],
+  [ENTITLEMENT_TRANSACTION_TYPES.SHARE_REWARD, Object.freeze({ sign: 'positive', granted: true })],
+  [ENTITLEMENT_TRANSACTION_TYPES.ADMIN_GRANT, Object.freeze({ sign: 'positive', granted: true })],
+  [ENTITLEMENT_TRANSACTION_TYPES.CONTENT_ACCESS, Object.freeze({ sign: 'negative', consumed: true })],
+  [ENTITLEMENT_TRANSACTION_TYPES.EXPIRE_DEDUCT, Object.freeze({ sign: 'negative', expired: true })],
+  [ENTITLEMENT_TRANSACTION_TYPES.ADMIN_DEDUCT, Object.freeze({ sign: 'negative' })],
+  [ENTITLEMENT_TRANSACTION_TYPES.TAOBAO_BOOK_MEMBERSHIP_GRANT, Object.freeze({ sign: 'zero' })],
+  [ENTITLEMENT_TRANSACTION_TYPES.MEMBERSHIP_ACTIVATED, Object.freeze({ sign: 'zero' })],
+  [ENTITLEMENT_TRANSACTION_TYPES.MEMBERSHIP_GRANT, Object.freeze({ sign: 'zero' })],
+  [ENTITLEMENT_TRANSACTION_TYPES.MEMBERSHIP_REVOKE, Object.freeze({ sign: 'zero' })],
+  [ENTITLEMENT_TRANSACTION_TYPES.LEGACY_MEMBERSHIP_BASELINE, Object.freeze({ sign: 'zero' })]
+])
+
 const QUOTA_GRANT_SOURCE_TO_TRANSACTION_TYPE = new Map([
   ['registration', ENTITLEMENT_TRANSACTION_TYPES.REGISTER_BONUS],
   ['register', ENTITLEMENT_TRANSACTION_TYPES.REGISTER_BONUS],
@@ -339,6 +355,97 @@ function safeParseJson(value) {
   }
 }
 
+function createMembershipGrantIntegrityError() {
+  return createUserEntitlementStoreError('Membership grant integrity check failed.', {
+    code: 'MEMBERSHIP_GRANT_INTEGRITY_INVALID',
+    statusCode: 409
+  })
+}
+
+function strictSafePositiveId(value) {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value <= 0) throw createMembershipGrantIntegrityError()
+    return String(value)
+  }
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) throw createMembershipGrantIntegrityError()
+  const numericValue = BigInt(value)
+  if (numericValue > BigInt(Number.MAX_SAFE_INTEGER)) throw createMembershipGrantIntegrityError()
+  return value
+}
+
+function strictUnsignedInteger(value) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw createMembershipGrantIntegrityError()
+  }
+  return value
+}
+
+function strictSignedInteger(value) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw createMembershipGrantIntegrityError()
+  return value
+}
+
+function strictUnsignedBigInteger(value) {
+  if (typeof value === 'number') return strictUnsignedInteger(value)
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) throw createMembershipGrantIntegrityError()
+  const numericValue = BigInt(value)
+  if (numericValue > BigInt(Number.MAX_SAFE_INTEGER)) throw createMembershipGrantIntegrityError()
+  return Number(numericValue)
+}
+
+function strictRequiredText(value, maxLength) {
+  if (typeof value !== 'string' || !value || value.trim() !== value || value.length > maxLength || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw createMembershipGrantIntegrityError()
+  }
+  return value
+}
+
+function strictNullableText(value, maxLength) {
+  if (value === null) return null
+  return strictRequiredText(value, maxLength)
+}
+
+function strictDatabaseDate(value, nullable = false) {
+  if (value === null && nullable) return null
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) throw createMembershipGrantIntegrityError()
+    return value.toISOString()
+  }
+  if (typeof value !== 'string') throw createMembershipGrantIntegrityError()
+  const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(value)
+  if (!match) throw createMembershipGrantIntegrityError()
+  const parts = match.slice(1).map(Number)
+  const date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], parts[3], parts[4], parts[5]))
+  if (
+    date.getUTCFullYear() !== parts[0] || date.getUTCMonth() !== parts[1] - 1 ||
+    date.getUTCDate() !== parts[2] || date.getUTCHours() !== parts[3] ||
+    date.getUTCMinutes() !== parts[4] || date.getUTCSeconds() !== parts[5]
+  ) {
+    throw createMembershipGrantIntegrityError()
+  }
+  return date.toISOString()
+}
+
+function strictJsonObject(value) {
+  let parsed = value
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value)
+    } catch {
+      throw createMembershipGrantIntegrityError()
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.getPrototypeOf(parsed) !== Object.prototype) {
+    throw createMembershipGrantIntegrityError()
+  }
+  return parsed
+}
+
+function strictNullableJsonObject(value) {
+  if (value === null) return null
+  return strictJsonObject(value)
+}
+
 function normalizeJson(value, fieldName, code) {
   if (value === undefined || value === null || value === '') return null
   if (typeof value !== 'object' || Array.isArray(value)) {
@@ -571,6 +678,43 @@ function mapMembershipGrantRow(row) {
   }
 }
 
+function getContinuousMembershipWindow(grants, targetGrantId) {
+  const activeGrants = grants
+    .filter((grant) => grant && grant.status === 'granted')
+    .slice()
+    .sort((left, right) => Date.parse(left.effectiveStartAt) - Date.parse(right.effectiveStartAt) || Number(left.id) - Number(right.id))
+  const targetIndex = activeGrants.findIndex((grant) => grant.id === String(targetGrantId))
+  if (targetIndex < 0) throw createMembershipGrantIntegrityError()
+  let startIndex = targetIndex
+  let endIndex = targetIndex
+  while (
+    startIndex > 0 &&
+    Date.parse(activeGrants[startIndex - 1].effectiveEndAt) === Date.parse(activeGrants[startIndex].effectiveStartAt)
+  ) {
+    startIndex -= 1
+  }
+  while (
+    endIndex + 1 < activeGrants.length &&
+    Date.parse(activeGrants[endIndex].effectiveEndAt) === Date.parse(activeGrants[endIndex + 1].effectiveStartAt)
+  ) {
+    endIndex += 1
+  }
+  return Object.freeze({
+    grants: Object.freeze(activeGrants.slice(startIndex, endIndex + 1)),
+    startedAt: activeGrants[startIndex].effectiveStartAt,
+    expireAt: activeGrants[endIndex].effectiveEndAt
+  })
+}
+
+function getCurrentMembershipWindow(grants) {
+  const activeGrants = grants
+    .filter((grant) => grant && grant.status === 'granted')
+    .slice()
+    .sort((left, right) => Date.parse(left.effectiveStartAt) - Date.parse(right.effectiveStartAt) || Number(left.id) - Number(right.id))
+  if (!activeGrants.length) throw createMembershipGrantIntegrityError()
+  return getContinuousMembershipWindow(activeGrants, activeGrants[activeGrants.length - 1].id)
+}
+
 function isMembershipActive(entitlement, now) {
   if (!entitlement) return false
   if (entitlement.membershipStatus !== 'active') return false
@@ -581,6 +725,33 @@ function isMembershipActive(entitlement, now) {
 export function createUserEntitlementStore(options = {}) {
   let pool = options.pool || null
   const now = options.now || (() => new Date())
+  const currentMembershipReadUsersByConnection = new WeakMap()
+
+  function requireCurrentMembershipRead(connection, userId) {
+    const users = currentMembershipReadUsersByConnection.get(connection)
+    return Boolean(users && users.has(String(userId)))
+  }
+
+  function markCurrentMembershipRead(connection, userId) {
+    let users = currentMembershipReadUsersByConnection.get(connection)
+    if (!users) {
+      users = new Set()
+      currentMembershipReadUsersByConnection.set(connection, users)
+    }
+    users.add(String(userId))
+  }
+
+  function entitlementChangedWhileWaiting(before, after) {
+    if (!before || !after) return before !== after
+    return (
+      before.id !== after.id || before.userId !== after.userId ||
+      before.quotaBalance !== after.quotaBalance || before.quotaTotalGranted !== after.quotaTotalGranted ||
+      before.quotaTotalConsumed !== after.quotaTotalConsumed || before.quotaTotalExpired !== after.quotaTotalExpired ||
+      before.membershipType !== after.membershipType || before.membershipStatus !== after.membershipStatus ||
+      before.membershipStartedAt !== after.membershipStartedAt || before.membershipExpireAt !== after.membershipExpireAt ||
+      before.lastTransactionId !== after.lastTransactionId || before.updatedAt !== after.updatedAt
+    )
+  }
 
   function getPool() {
     if (pool) return pool
@@ -693,14 +864,39 @@ export function createUserEntitlementStore(options = {}) {
   }
 
   async function listUserMembershipGrants(connection, userId, options = {}) {
-    const lockClause = options.forUpdate ? ' FOR UPDATE' : ''
-    const [rows] = await connection.execute(
+    if (options.currentRead) {
+      const [currentRows] = await connection.execute(
+        `SELECT ${membershipGrantSelectColumns}
+           FROM ${quoteIdentifier(MEMBERSHIP_GRANTS_TABLE)}
+          WHERE user_id = ?
+          ORDER BY granted_at ASC, id ASC
+          FOR UPDATE`,
+        [userId]
+      )
+      return (Array.isArray(currentRows) ? currentRows : []).map(mapMembershipGrantRow).filter(Boolean)
+    }
+    const [candidateRows] = await connection.execute(
       `SELECT ${membershipGrantSelectColumns}
          FROM ${quoteIdentifier(MEMBERSHIP_GRANTS_TABLE)}
         WHERE user_id = ?
-        ORDER BY granted_at ASC, id ASC${lockClause}`,
+        ORDER BY granted_at ASC, id ASC`,
       [userId]
     )
+    let rows = Array.isArray(candidateRows) ? candidateRows : []
+    if (options.forUpdate && rows.length) {
+      const ids = rows.map((row) => strictSafePositiveId(row && row.id))
+      const placeholders = ids.map(() => '?').join(', ')
+      const [lockedRows] = await connection.execute(
+        `SELECT ${membershipGrantSelectColumns}
+           FROM ${quoteIdentifier(MEMBERSHIP_GRANTS_TABLE)}
+          WHERE user_id = ? AND id IN (${placeholders})
+          ORDER BY granted_at ASC, id ASC
+          FOR UPDATE`,
+        [userId, ...ids]
+      )
+      rows = Array.isArray(lockedRows) ? lockedRows : []
+      if (rows.length !== ids.length) throw createMembershipGrantIntegrityError()
+    }
     return (Array.isArray(rows) ? rows : []).map(mapMembershipGrantRow).filter(Boolean)
   }
 
@@ -902,15 +1098,26 @@ export function createUserEntitlementStore(options = {}) {
   }
 
   async function ensureUserEntitlementInTransaction(connection, userId) {
-    await connection.execute(
-      `INSERT INTO ${quoteIdentifier(USER_ENTITLEMENTS_TABLE)} (user_id)
-       VALUES (?)
-       ON DUPLICATE KEY UPDATE user_id = user_id`,
-      [userId]
-    )
-    return await findUserEntitlement(connection, userId, {
+    const existingEntitlement = await findUserEntitlement(connection, userId)
+    let insertResult = null
+    if (!existingEntitlement) {
+      const insertResponse = await connection.execute(
+        `INSERT IGNORE INTO ${quoteIdentifier(USER_ENTITLEMENTS_TABLE)} (user_id)
+         VALUES (?)`,
+        [userId]
+      )
+      insertResult = insertResponse[0]
+    }
+    const lockedEntitlement = await findUserEntitlement(connection, userId, {
       forUpdate: true
     })
+    if (
+      (!existingEntitlement && (!insertResult || Number(insertResult.affectedRows) !== 1)) ||
+      entitlementChangedWhileWaiting(existingEntitlement, lockedEntitlement)
+    ) {
+      markCurrentMembershipRead(connection, userId)
+    }
+    return lockedEntitlement
   }
 
   async function insertTransaction(connection, transaction) {
@@ -1370,7 +1577,10 @@ export function createUserEntitlementStore(options = {}) {
     const currentTime = normalizeDate(input.now === undefined ? now() : input.now, 'Membership grant time', 'MEMBERSHIP_GRANT_TIME_INVALID')
 
     let entitlement = await ensureUserEntitlementInTransaction(connection, userId)
-    let grants = await listUserMembershipGrants(connection, userId, { forUpdate: true })
+    let grants = await listUserMembershipGrants(connection, userId, {
+      forUpdate: true,
+      currentRead: requireCurrentMembershipRead(connection, userId)
+    })
 
     const existingByIdempotency = await findMembershipGrantByIdempotencyKey(connection, idempotencyKey, { forUpdate: true })
     const existingTransaction = await findTransactionByIdempotencyKey(connection, idempotencyKey, { forUpdate: true })
@@ -1394,7 +1604,10 @@ export function createUserEntitlementStore(options = {}) {
     }
 
     await ensureLegacyMembershipGrant(connection, userId, entitlement, currentTime, grants)
-    grants = await listUserMembershipGrants(connection, userId, { forUpdate: true })
+    grants = await listUserMembershipGrants(connection, userId, {
+      forUpdate: true,
+      currentRead: requireCurrentMembershipRead(connection, userId)
+    })
     entitlement = await findUserEntitlement(connection, userId, { forUpdate: true })
 
     const schedule = scheduleMembershipGrant({
@@ -1448,15 +1661,18 @@ export function createUserEntitlementStore(options = {}) {
     )
     assertSingleRowUpdate(grantLinkUpdate, 'membership grant transaction link')
 
-    const allGrants = await listUserMembershipGrants(connection, userId, { forUpdate: true })
-    const membershipStartedAt = allGrants.length ? allGrants[0].effectiveStartAt : schedule.effectiveStartAt
+    const allGrants = await listUserMembershipGrants(connection, userId, {
+      forUpdate: true,
+      currentRead: requireCurrentMembershipRead(connection, userId)
+    })
+    const membershipWindow = getCurrentMembershipWindow(allGrants)
     const membershipStartedAtDate = normalizeDate(
-      membershipStartedAt,
+      membershipWindow.startedAt,
       'Membership start time',
       'MEMBERSHIP_STARTED_AT_INVALID'
     )
     const membershipExpireAtDate = normalizeDate(
-      schedule.membershipExpireAt,
+      membershipWindow.expireAt,
       'Membership expiry time',
       'MEMBERSHIP_EXPIRE_AT_INVALID'
     )
@@ -1490,6 +1706,304 @@ export function createUserEntitlementStore(options = {}) {
       membershipStatus: 'active',
       quotaBalance: entitlement.quotaBalance
     }
+  }
+
+  async function lockMembershipScheduleInTransaction(connection, userIdValue) {
+    if (!connection || typeof connection.execute !== 'function') {
+      throw createUserEntitlementStoreError('A usable membership transaction connection is required.', {
+        code: 'MEMBERSHIP_TRANSACTION_CONNECTION_INVALID',
+        statusCode: 500
+      })
+    }
+    const userId = normalizeUserId(userIdValue)
+    const entitlement = await ensureUserEntitlementInTransaction(connection, userId)
+    if (!entitlement) throw createMembershipGrantIntegrityError()
+    const grants = await listUserMembershipGrants(connection, userId, {
+      forUpdate: true,
+      currentRead: requireCurrentMembershipRead(connection, userId)
+    })
+    return Object.freeze({ entitlement, grants: Object.freeze(grants) })
+  }
+
+  async function verifyMembershipGrantInTransaction(connection, input = {}) {
+    if (!connection || typeof connection.execute !== 'function') {
+      throw createUserEntitlementStoreError('A usable membership transaction connection is required.', {
+        code: 'MEMBERSHIP_TRANSACTION_CONNECTION_INVALID',
+        statusCode: 500
+      })
+    }
+    const userId = normalizeUserId(input.userId)
+    const grantId = normalizeRequiredString(input.grantId, 'Membership grant id', 'MEMBERSHIP_GRANT_ID_REQUIRED', {
+      maxLength: MAX_ID_LENGTH
+    })
+    const sourceType = normalizeMembershipSourceType(input.sourceType)
+    const sourceId = normalizeRequiredSourceId(input.sourceId)
+    const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey)
+    const expectedTransactionId = normalizeRequiredString(
+      input.transactionId,
+      'Transaction id',
+      'TRANSACTION_ID_REQUIRED',
+      { maxLength: 64 }
+    )
+    const [entitlementRows] = await connection.execute(
+      `SELECT id, user_id, quota_balance, quota_total_granted, quota_total_consumed, quota_total_expired,
+              membership_type, membership_status, membership_started_at, membership_expire_at,
+              last_transaction_id, created_at, updated_at
+         FROM ${quoteIdentifier(USER_ENTITLEMENTS_TABLE)}
+        WHERE user_id = ?
+        LIMIT 2 FOR UPDATE`,
+      [userId]
+    )
+    const [grantRows] = await connection.execute(
+      `SELECT ${membershipGrantSelectColumns}
+         FROM ${quoteIdentifier(MEMBERSHIP_GRANTS_TABLE)}
+        WHERE user_id = ?
+        ORDER BY granted_at ASC, id ASC
+        FOR UPDATE`,
+      [userId]
+    )
+    const [transactionRows] = await connection.execute(
+      `SELECT id, transaction_id, user_id, transaction_type, amount, balance_after, source, source_id,
+              expires_at, grant_transaction_id, root_learning_object_id, current_learning_object_id,
+              access_context_json, idempotency_key, operator_type, operator_id, reason, metadata_json, created_at
+         FROM ${quoteIdentifier(ENTITLEMENT_TRANSACTIONS_TABLE)}
+        WHERE user_id = ?
+        ORDER BY created_at ASC, id ASC
+        FOR UPDATE`,
+      [userId]
+    )
+    if (!Array.isArray(entitlementRows) || entitlementRows.length !== 1 ||
+        !Array.isArray(grantRows) || grantRows.length === 0 ||
+        !Array.isArray(transactionRows) || transactionRows.length === 0) {
+      throw createMembershipGrantIntegrityError()
+    }
+
+    const normalizedGrants = grantRows.map((row) => {
+      if (!row || typeof row !== 'object') throw createMembershipGrantIntegrityError()
+      const normalized = {
+        id: strictSafePositiveId(row.id),
+        userId: strictSafePositiveId(row.user_id),
+        sourceType: strictRequiredText(row.source_type, MAX_SOURCE_LENGTH),
+        sourceId: strictRequiredText(row.source_id, MAX_ID_LENGTH),
+        redemptionCodeId: row.redemption_code_id === null ? null : strictSafePositiveId(row.redemption_code_id),
+        daysGranted: strictUnsignedInteger(row.days_granted),
+        durationSeconds: strictUnsignedBigInteger(row.duration_seconds),
+        status: strictRequiredText(row.status, 16),
+        grantedAt: strictDatabaseDate(row.granted_at),
+        effectiveStartAt: strictDatabaseDate(row.effective_start_at),
+        effectiveEndAt: strictDatabaseDate(row.effective_end_at),
+        consumedSecondsAtRevoke: strictUnsignedBigInteger(row.consumed_seconds_at_revoke),
+        revokedSeconds: strictUnsignedBigInteger(row.revoked_seconds),
+        revokedAt: strictDatabaseDate(row.revoked_at, true),
+        revokedBy: strictNullableText(row.revoked_by, MAX_ID_LENGTH),
+        revokeReason: strictNullableText(row.revoke_reason, MAX_REASON_LENGTH),
+        idempotencyKey: strictRequiredText(row.idempotency_key, MAX_ID_LENGTH),
+        grantTransactionId: strictNullableText(row.grant_transaction_id, 64),
+        revokeTransactionId: strictNullableText(row.revoke_transaction_id, 64),
+        createdAt: strictDatabaseDate(row.created_at),
+        updatedAt: strictDatabaseDate(row.updated_at)
+      }
+      if (!MEMBERSHIP_SOURCE_TYPES.has(normalized.sourceType) || normalized.userId !== userId ||
+          !['granted', 'revoked'].includes(normalized.status) || !normalized.grantTransactionId) {
+        throw createMembershipGrantIntegrityError()
+      }
+      const start = Date.parse(normalized.effectiveStartAt)
+      const end = Date.parse(normalized.effectiveEndAt)
+      if (normalized.sourceType === 'legacy_membership') {
+        if (normalized.durationSeconds <= 0 || normalized.daysGranted <= 0) throw createMembershipGrantIntegrityError()
+      } else if (normalized.durationSeconds !== MEMBERSHIP_GRANT_DURATION_SECONDS || normalized.daysGranted !== MEMBERSHIP_GRANT_DAYS) {
+        throw createMembershipGrantIntegrityError()
+      }
+      if (normalized.status === 'granted') {
+        if (end - start !== normalized.durationSeconds * 1000 || normalized.consumedSecondsAtRevoke !== 0 ||
+            normalized.revokedSeconds !== 0 || normalized.revokedAt !== null || normalized.revokedBy !== null ||
+            normalized.revokeReason !== null || normalized.revokeTransactionId !== null) {
+          throw createMembershipGrantIntegrityError()
+        }
+      } else if (
+        end - start !== normalized.consumedSecondsAtRevoke * 1000 ||
+        normalized.consumedSecondsAtRevoke + normalized.revokedSeconds !== normalized.durationSeconds ||
+        normalized.revokedAt === null || !normalized.revokedBy || !normalized.revokeReason || !normalized.revokeTransactionId
+      ) {
+        throw createMembershipGrantIntegrityError()
+      }
+      return normalized
+    })
+
+    const activeGrants = normalizedGrants
+      .filter((candidate) => candidate.status === 'granted')
+      .sort((left, right) => Date.parse(left.effectiveStartAt) - Date.parse(right.effectiveStartAt) || Number(left.id) - Number(right.id))
+    if (!activeGrants.length) throw createMembershipGrantIntegrityError()
+    const grantIds = new Set()
+    const idempotencyKeys = new Set()
+    const sourceKeys = new Set()
+    const grantTransactionIds = new Set()
+    for (const candidate of normalizedGrants) {
+      const sourceKey = `${candidate.sourceType}\u0000${candidate.sourceId}`
+      if (grantIds.has(candidate.id) || idempotencyKeys.has(candidate.idempotencyKey) || sourceKeys.has(sourceKey) ||
+          (candidate.grantTransactionId && grantTransactionIds.has(candidate.grantTransactionId))) {
+        throw createMembershipGrantIntegrityError()
+      }
+      grantIds.add(candidate.id)
+      idempotencyKeys.add(candidate.idempotencyKey)
+      sourceKeys.add(sourceKey)
+      if (candidate.grantTransactionId) grantTransactionIds.add(candidate.grantTransactionId)
+    }
+    for (let index = 0; index < activeGrants.length; index += 1) {
+      const candidate = activeGrants[index]
+      const previousEnd = index === 0 ? 0 : Date.parse(activeGrants[index - 1].effectiveEndAt)
+      const candidateStart = Date.parse(candidate.effectiveStartAt)
+      if (candidateStart < previousEnd) throw createMembershipGrantIntegrityError()
+      if (candidate.sourceType !== 'legacy_membership' && candidateStart !== Math.max(Date.parse(candidate.grantedAt), previousEnd)) {
+        throw createMembershipGrantIntegrityError()
+      }
+    }
+    const grant = activeGrants.find((candidate) => candidate.id === grantId)
+    if (!grant || grant.sourceType !== sourceType || grant.sourceId !== sourceId ||
+        grant.idempotencyKey !== idempotencyKey || grant.redemptionCodeId !== null ||
+        grant.grantTransactionId !== expectedTransactionId || grant.daysGranted !== MEMBERSHIP_GRANT_DAYS ||
+        grant.durationSeconds !== MEMBERSHIP_GRANT_DURATION_SECONDS) {
+      throw createMembershipGrantIntegrityError()
+    }
+    const entitlementRow = entitlementRows[0]
+    const entitlement = {
+      id: strictSafePositiveId(entitlementRow.id),
+      userId: strictSafePositiveId(entitlementRow.user_id),
+      quotaBalance: strictUnsignedInteger(entitlementRow.quota_balance),
+      quotaTotalGranted: strictUnsignedInteger(entitlementRow.quota_total_granted),
+      quotaTotalConsumed: strictUnsignedInteger(entitlementRow.quota_total_consumed),
+      quotaTotalExpired: strictUnsignedInteger(entitlementRow.quota_total_expired),
+      membershipType: strictRequiredText(entitlementRow.membership_type, 32),
+      membershipStatus: strictRequiredText(entitlementRow.membership_status, 32),
+      membershipStartedAt: strictDatabaseDate(entitlementRow.membership_started_at),
+      membershipExpireAt: strictDatabaseDate(entitlementRow.membership_expire_at),
+      lastTransactionId: entitlementRow.last_transaction_id === null ? null : strictSafePositiveId(entitlementRow.last_transaction_id),
+      createdAt: strictDatabaseDate(entitlementRow.created_at),
+      updatedAt: strictDatabaseDate(entitlementRow.updated_at)
+    }
+    const targetHistoricalWindow = getContinuousMembershipWindow(activeGrants, grant.id)
+    if (!targetHistoricalWindow.grants.some((candidate) => candidate.id === grant.id)) {
+      throw createMembershipGrantIntegrityError()
+    }
+    const currentMembershipWindow = getCurrentMembershipWindow(activeGrants)
+    const rebuiltStartAt = currentMembershipWindow.startedAt
+    const rebuiltExpireAt = currentMembershipWindow.expireAt
+    if (entitlement.userId !== userId || entitlement.membershipType !== 'monthly' ||
+        entitlement.membershipStatus !== 'active' || entitlement.membershipStartedAt !== rebuiltStartAt ||
+        entitlement.membershipExpireAt !== rebuiltExpireAt) {
+      throw createMembershipGrantIntegrityError()
+    }
+
+    const ledgerTransactionIds = new Set()
+    const ledgerIdempotencyKeys = new Set()
+    const normalizedTransactions = transactionRows.map((transactionRow) => {
+      if (!transactionRow || typeof transactionRow !== 'object') throw createMembershipGrantIntegrityError()
+      const transactionType = strictRequiredText(transactionRow.transaction_type, MAX_TRANSACTION_TYPE_LENGTH)
+      if (!ENTITLEMENT_TRANSACTION_TYPE_VALUES.has(transactionType) || !ENTITLEMENT_LEDGER_EFFECTS.has(transactionType)) {
+        throw createMembershipGrantIntegrityError()
+      }
+      const transaction = {
+        id: strictSafePositiveId(transactionRow.id),
+        transactionId: strictRequiredText(transactionRow.transaction_id, 64),
+        userId: strictSafePositiveId(transactionRow.user_id),
+        transactionType,
+        amount: strictSignedInteger(transactionRow.amount),
+        balanceAfter: strictUnsignedInteger(transactionRow.balance_after),
+        source: strictRequiredText(transactionRow.source, MAX_SOURCE_LENGTH),
+        sourceId: strictNullableText(transactionRow.source_id, MAX_ID_LENGTH),
+        expiresAt: strictDatabaseDate(transactionRow.expires_at, true),
+        grantTransactionId: transactionRow.grant_transaction_id === null ? null : strictSafePositiveId(transactionRow.grant_transaction_id),
+        rootLearningObjectId: strictNullableText(transactionRow.root_learning_object_id, MAX_ID_LENGTH),
+        currentLearningObjectId: strictNullableText(transactionRow.current_learning_object_id, MAX_ID_LENGTH),
+        accessContext: strictNullableJsonObject(transactionRow.access_context_json),
+        idempotencyKey: strictRequiredText(transactionRow.idempotency_key, MAX_ID_LENGTH),
+        operatorType: strictRequiredText(transactionRow.operator_type, MAX_OPERATOR_TYPE_LENGTH),
+        operatorId: strictNullableText(transactionRow.operator_id, MAX_ID_LENGTH),
+        reason: strictNullableText(transactionRow.reason, MAX_REASON_LENGTH),
+        metadata: strictNullableJsonObject(transactionRow.metadata_json),
+        createdAt: strictDatabaseDate(transactionRow.created_at)
+      }
+      if (transaction.userId !== userId || ledgerTransactionIds.has(transaction.transactionId) ||
+          ledgerIdempotencyKeys.has(transaction.idempotencyKey)) {
+        throw createMembershipGrantIntegrityError()
+      }
+      ledgerTransactionIds.add(transaction.transactionId)
+      ledgerIdempotencyKeys.add(transaction.idempotencyKey)
+      return transaction
+    })
+    let ledgerBalance = 0
+    let ledgerTotalGranted = 0
+    let ledgerTotalConsumed = 0
+    let ledgerTotalExpired = 0
+    let previousCreatedAt = null
+    let previousTransactionId = null
+    for (const transaction of normalizedTransactions) {
+      const createdAt = Date.parse(transaction.createdAt)
+      if (previousCreatedAt !== null && (
+        createdAt < previousCreatedAt ||
+        (createdAt === previousCreatedAt && BigInt(transaction.id) <= BigInt(previousTransactionId))
+      )) {
+        throw createMembershipGrantIntegrityError()
+      }
+      const expectedBalance = ledgerBalance + transaction.amount
+      if (!Number.isSafeInteger(expectedBalance) || expectedBalance < 0 || transaction.balanceAfter !== expectedBalance) {
+        throw createMembershipGrantIntegrityError()
+      }
+      const effect = ENTITLEMENT_LEDGER_EFFECTS.get(transaction.transactionType)
+      if (
+        (effect.sign === 'positive' && transaction.amount <= 0) ||
+        (effect.sign === 'negative' && transaction.amount >= 0) ||
+        (effect.sign === 'zero' && transaction.amount !== 0)
+      ) {
+        throw createMembershipGrantIntegrityError()
+      }
+      if (effect.granted) ledgerTotalGranted += transaction.amount
+      if (effect.consumed) ledgerTotalConsumed += -transaction.amount
+      if (effect.expired) ledgerTotalExpired += -transaction.amount
+      if (
+        !Number.isSafeInteger(ledgerTotalGranted) || !Number.isSafeInteger(ledgerTotalConsumed) ||
+        !Number.isSafeInteger(ledgerTotalExpired)
+      ) {
+        throw createMembershipGrantIntegrityError()
+      }
+      ledgerBalance = transaction.balanceAfter
+      previousCreatedAt = createdAt
+      previousTransactionId = transaction.id
+    }
+    if (ledgerBalance !== entitlement.quotaBalance || ledgerTotalGranted !== entitlement.quotaTotalGranted ||
+        ledgerTotalConsumed !== entitlement.quotaTotalConsumed || ledgerTotalExpired !== entitlement.quotaTotalExpired ||
+        entitlement.lastTransactionId !== normalizedTransactions[normalizedTransactions.length - 1].id) {
+      throw createMembershipGrantIntegrityError()
+    }
+
+    const matchingTransactions = normalizedTransactions.filter((candidate) => candidate.idempotencyKey === idempotencyKey)
+    if (matchingTransactions.length !== 1) throw createMembershipGrantIntegrityError()
+    const transaction = matchingTransactions[0]
+    const transactionRow = transactionRows.find((candidate) => String(candidate.id) === transaction.id)
+    if (!transactionRow) throw createMembershipGrantIntegrityError()
+    const metadata = strictJsonObject(transactionRow.metadata_json)
+    const metadataKeys = Object.keys(metadata).sort()
+    const expectedMetadataKeys = [
+      'daysGranted', 'durationRule', 'durationSeconds', 'effectiveEndAt',
+      'effectiveStartAt', 'membershipGrantId', 'membershipType'
+    ].sort()
+    transaction.metadata = metadata
+    if (transaction.transactionId !== expectedTransactionId || transaction.userId !== userId ||
+        transaction.transactionType !== ENTITLEMENT_TRANSACTION_TYPES.MEMBERSHIP_GRANT || transaction.amount !== 0 ||
+        transaction.source !== sourceType ||
+        transaction.sourceId !== sourceId || transaction.expiresAt !== null || transaction.grantTransactionId !== null ||
+        transaction.rootLearningObjectId !== null || transaction.currentLearningObjectId !== null ||
+        transaction.accessContext !== null || transaction.idempotencyKey !== idempotencyKey ||
+        transaction.operatorType !== 'system' || transaction.operatorId !== 'virtual-payment-entitlement' ||
+        transaction.reason !== 'Verified WeChat virtual payment membership grant.' ||
+        metadataKeys.length !== expectedMetadataKeys.length || metadataKeys.some((key, index) => key !== expectedMetadataKeys[index]) ||
+        metadata.membershipGrantId !== grantId || metadata.membershipType !== 'monthly' ||
+        metadata.daysGranted !== MEMBERSHIP_GRANT_DAYS || metadata.durationSeconds !== MEMBERSHIP_GRANT_DURATION_SECONDS ||
+        metadata.effectiveStartAt !== grant.effectiveStartAt || metadata.effectiveEndAt !== grant.effectiveEndAt ||
+        metadata.durationRule !== '30x24_hours_not_calendar_month') {
+      throw createMembershipGrantIntegrityError()
+    }
+    return createMembershipGrantResult(grant, transaction, entitlement, true)
   }
 
   async function recoverMembershipGrantAfterDuplicate(input = {}) {
@@ -1943,6 +2457,8 @@ export function createUserEntitlementStore(options = {}) {
     ensureUserEntitlement,
     ensureRegistrationBonus,
     grantQuota,
+    lockMembershipScheduleInTransaction,
+    verifyMembershipGrantInTransaction,
     grantMembershipDurationInTransaction,
     grantMembershipDuration,
     grantMembership,

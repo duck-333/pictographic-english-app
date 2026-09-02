@@ -4,6 +4,7 @@ import mysql from 'mysql2/promise'
 import {
   assertVirtualPaymentState,
   PAYMENT_TRANSITION_SOURCES,
+  transitionEntitlementStatus,
   transitionPaymentStatus
 } from './virtual-payment-state.mjs'
 import { createWechatQueryCanonicalFact } from './virtual-payment-reconciliation.mjs'
@@ -44,6 +45,8 @@ const EXPECTED_DUPLICATE_KEYS = new Map(
   ])
 )
 const MAX_ORDER_NUMBER_ATTEMPTS = 5
+const MEMBERSHIP_GRANT_DURATION_SECONDS = 2_592_000
+const MEMBERSHIP_SOURCE_TYPE = 'wechat_order'
 const CREATE_ORDER_FIELDS = new Set([
   'userId', 'clientRequestId', 'internalSku', 'productId', 'productName', 'quantity',
   'unitPriceFen', 'orderAmountFen', 'currency', 'environment', 'wechatEnv',
@@ -559,6 +562,7 @@ function getDbConfig(options = {}) {
 
 export function createVirtualPaymentStore(options = {}) {
   let pool = options.pool || null
+  const entitlementStore = options.userEntitlementStore || options.entitlementStore || null
   const orderNoFactory = options.orderNoFactory || (() => `VP${crypto.randomBytes(15).toString('hex').toUpperCase()}`)
 
   function getPool() {
@@ -624,7 +628,7 @@ export function createVirtualPaymentStore(options = {}) {
     return result
   }
 
-  async function runTransaction(work) {
+  async function runTransaction(work, options = {}) {
     let connection = null
     let transactionStarted = false
     let operationError = null
@@ -645,6 +649,9 @@ export function createVirtualPaymentStore(options = {}) {
         typeof connection.rollback !== 'function'
       ) {
         throw new Error('Invalid transactional database connection.')
+      }
+      if (options.isolationLevel === 'READ COMMITTED') {
+        await connection.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
       }
       await connection.beginTransaction()
       transactionStarted = true
@@ -700,10 +707,8 @@ export function createVirtualPaymentStore(options = {}) {
     return normalizeSingleOrder(result)
   }
 
-  async function findTrustedWechatQueryPaidEvidence(userIdValue, orderNoValue) {
-    const userId = normalizeUserId(userIdValue)
-    const orderNo = normalizeOrderNo(orderNoValue)
-    const rows = getRows(await execute(
+  async function findTrustedWechatQueryPaidEvidenceWithExecutor(executor, userId, orderNo) {
+    const rows = getRows(await executor(
       `SELECT e.event_key, e.event_type, e.order_id, e.order_no,
               e.provider_order_id, e.provider_transaction_id, e.payload_hash,
               e.processing_status, e.received_count, e.processed_at,
@@ -728,6 +733,155 @@ export function createVirtualPaymentStore(options = {}) {
       if (normalizeTrustedWechatQueryPaidEvidenceRow(row)) hasPaidEvidence = true
     }
     return hasPaidEvidence
+  }
+
+  async function findTrustedWechatQueryPaidEvidence(userIdValue, orderNoValue) {
+    const userId = normalizeUserId(userIdValue)
+    const orderNo = normalizeOrderNo(orderNoValue)
+    return findTrustedWechatQueryPaidEvidenceWithExecutor(execute, userId, orderNo)
+  }
+
+  function assertTrustedPaidOrderForEntitlement(order, expectedProductId, userId) {
+    if (
+      order.userId !== userId || order.paymentStatus !== 'paid' ||
+      order.internalSku !== 'membership_30d' || order.productId !== expectedProductId ||
+      order.productName !== '30天学习会员' || order.quantity !== 1 ||
+      order.unitPriceFen !== 3000 || order.orderAmountFen !== 3000 || order.paidAmountFen !== 3000 ||
+      order.currency !== 'CNY' || order.environment !== 'sandbox' || order.wechatEnv !== 1 ||
+      order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
+      order.providerOrderId === null || order.providerTransactionId === null || order.paidAt === null ||
+      order.deliveryStatus !== 'not_ready' || order.deliveredAt !== null
+    ) {
+      throw createStoreError('Paid payment fact is incomplete.', 'PAYMENT_PAID_FACT_INCOMPLETE', 409)
+    }
+  }
+
+  function membershipGrantKeys(orderNo) {
+    return Object.freeze({
+      sourceType: MEMBERSHIP_SOURCE_TYPE,
+      sourceId: orderNo,
+      idempotencyKey: `membership_grant:wechat_order:${orderNo}`
+    })
+  }
+
+  async function grantTrustedPaidOrderEntitlement(userIdValue, orderNoValue, contextValue = {}) {
+    const userId = normalizeUserId(userIdValue)
+    const orderNo = normalizeOrderNo(orderNoValue)
+    const expectedProductId = requireString(contextValue.expectedProductId)
+    const currentTime = contextValue.now instanceof Date && Number.isFinite(contextValue.now.getTime())
+      ? new Date(contextValue.now.getTime())
+      : null
+    if (
+      !currentTime || !entitlementStore ||
+      typeof entitlementStore.lockMembershipScheduleInTransaction !== 'function' ||
+      typeof entitlementStore.grantMembershipDurationInTransaction !== 'function' ||
+      typeof entitlementStore.verifyMembershipGrantInTransaction !== 'function'
+    ) {
+      throw createStoreError('Payment entitlement service is unavailable.')
+    }
+    const keys = membershipGrantKeys(orderNo)
+    return runTransaction(async (connection) => {
+      try {
+        await entitlementStore.lockMembershipScheduleInTransaction(connection, userId)
+      } catch {
+        throw createStoreError('Membership schedule is unavailable.', 'PAYMENT_MEMBERSHIP_SCHEDULE_UNAVAILABLE', 503)
+      }
+      const lockedOrder = normalizeSingleOrder(await connection.execute(
+        `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE}
+         WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
+        [userId, orderNo]
+      ))
+      if (!lockedOrder) throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+      assertTrustedPaidOrderForEntitlement(lockedOrder, expectedProductId, userId)
+      const hasEvidence = await findTrustedWechatQueryPaidEvidenceWithExecutor(
+        (sql, values) => connection.execute(sql, values),
+        userId,
+        orderNo
+      )
+      if (hasEvidence !== true) {
+        throw createStoreError('Paid payment fact is incomplete.', 'PAYMENT_PAID_FACT_INCOMPLETE', 409)
+      }
+
+      if (lockedOrder.entitlementStatus === 'granted') {
+        if (
+          lockedOrder.membershipGrantId === null || lockedOrder.entitlementTransactionId === null ||
+          lockedOrder.entitlementGrantedAt === null
+        ) {
+          throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
+        }
+        let membership
+        try {
+          membership = await entitlementStore.verifyMembershipGrantInTransaction(connection, {
+            userId,
+            grantId: lockedOrder.membershipGrantId,
+            transactionId: lockedOrder.entitlementTransactionId,
+            ...keys
+          })
+        } catch {
+          throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
+        }
+        return Object.freeze({ order: lockedOrder, membership, idempotent: true })
+      }
+
+      if (
+        lockedOrder.entitlementStatus !== 'not_ready' || lockedOrder.membershipGrantId !== null ||
+        lockedOrder.entitlementTransactionId !== null || lockedOrder.entitlementGrantedAt !== null
+      ) {
+        throw createStoreError('Payment entitlement cannot be granted.', 'PAYMENT_ENTITLEMENT_NOT_GRANTABLE', 409)
+      }
+      try {
+        transitionEntitlementStatus('not_ready', 'pending', { paymentStatus: 'paid' })
+        transitionEntitlementStatus('pending', 'granting', { paymentStatus: 'paid' })
+        transitionEntitlementStatus('granting', 'granted', { paymentStatus: 'paid' })
+      } catch {
+        throw createStoreError('Payment entitlement cannot be granted.', 'PAYMENT_ENTITLEMENT_NOT_GRANTABLE', 409)
+      }
+      let membership
+      try {
+        membership = await entitlementStore.grantMembershipDurationInTransaction(connection, {
+          userId,
+          ...keys,
+          operatorType: 'system',
+          operatorId: 'virtual-payment-entitlement',
+          reason: 'Verified WeChat virtual payment membership grant.',
+          now: currentTime
+        })
+      } catch {
+        throw createStoreError('Membership grant failed.', 'PAYMENT_MEMBERSHIP_GRANT_FAILED', 503)
+      }
+      if (
+        !membership || membership.idempotent === true ||
+        membership.sourceType !== keys.sourceType || membership.sourceId !== keys.sourceId ||
+        !membership.grantId || !membership.transactionId ||
+        Date.parse(membership.effectiveEndAt) - Date.parse(membership.effectiveStartAt) !== MEMBERSHIP_GRANT_DURATION_SECONDS * 1000
+      ) {
+        throw createStoreError('Membership grant result is invalid.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
+      }
+      assertAffectedRows(await connection.execute(
+        `UPDATE ${ORDERS_TABLE}
+         SET entitlement_status = 'granted', membership_grant_id = ?,
+             entitlement_transaction_id = ?, entitlement_granted_at = ?, version = version + 1
+         WHERE id = ? AND user_id = ? AND order_no = ? AND version = ?
+           AND payment_status = 'paid' AND entitlement_status = 'not_ready'
+           AND delivery_status = 'not_ready' AND membership_grant_id IS NULL
+           AND entitlement_transaction_id IS NULL AND entitlement_granted_at IS NULL`,
+        [membership.grantId, membership.transactionId, currentTime, lockedOrder.id, userId, orderNo, lockedOrder.version]
+      ))
+      const completedOrder = normalizeSingleOrder(await connection.execute(
+        `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE}
+         WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
+        [userId, orderNo]
+      ))
+      if (
+        !completedOrder || completedOrder.entitlementStatus !== 'granted' ||
+        completedOrder.membershipGrantId !== String(membership.grantId) ||
+        completedOrder.entitlementTransactionId !== membership.transactionId ||
+        completedOrder.deliveryStatus !== 'not_ready'
+      ) {
+        throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
+      }
+      return Object.freeze({ order: completedOrder, membership, idempotent: false })
+    }, { isolationLevel: 'READ COMMITTED' })
   }
 
   async function createOrder(input) {
@@ -1002,6 +1156,7 @@ export function createVirtualPaymentStore(options = {}) {
     findTrustedWechatQueryPaidEvidence,
     createOrder,
     markOrderPending,
-    reconcileVerifiedWechatQuery
+    reconcileVerifiedWechatQuery,
+    grantTrustedPaidOrderEntitlement
   })
 }

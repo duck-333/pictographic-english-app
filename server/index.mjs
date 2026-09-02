@@ -1036,7 +1036,8 @@ export function createApiHandler(options = {}) {
   const virtualPaymentRoutes = createVirtualPaymentRoutes({
     ...options,
     identityStore,
-    wechatLoginClient
+    wechatLoginClient,
+    userEntitlementStore
   })
   const now = options.now || (() => new Date())
   const adminAuthOptions = {

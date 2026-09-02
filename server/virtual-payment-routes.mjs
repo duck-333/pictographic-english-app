@@ -10,6 +10,7 @@ const COLLECTION_PATH = '/api/user/virtual-payment/orders'
 const MAX_BODY_BYTES = 16 * 1024
 const CREATE_FIELDS = new Set(['clientRequestId', 'loginCode', 'sku', 'platform'])
 const RECONCILE_FIELDS = new Set(['loginCode'])
+const ENTITLEMENT_FIELDS = new Set()
 const PUBLIC_ERROR_CODES = new Set([
   'PAYMENT_DISABLED',
   'PAYMENT_SANDBOX_FORBIDDEN_IN_PRODUCTION',
@@ -31,6 +32,10 @@ const PUBLIC_ERROR_CODES = new Set([
   'PAYMENT_QUERY_RESULT_INVALID',
   'PAYMENT_QUERY_STATUS_UNSUPPORTED',
   'PAYMENT_PAID_FACT_INCOMPLETE',
+  'PAYMENT_ENTITLEMENT_INCOMPLETE',
+  'PAYMENT_ENTITLEMENT_NOT_GRANTABLE',
+  'PAYMENT_MEMBERSHIP_SCHEDULE_UNAVAILABLE',
+  'PAYMENT_MEMBERSHIP_GRANT_FAILED',
   'PAYMENT_SERVICE_UNAVAILABLE'
 ])
 
@@ -194,12 +199,14 @@ export function createVirtualPaymentRoutes(options = {}) {
       : ''
     const itemSegments = itemSuffix.split('/')
     const isReconciliation = itemSegments.length === 2 && itemSegments[1] === 'reconcile'
+    const isEntitlement = itemSegments.length === 2 && itemSegments[1] === 'entitlement'
     const isItem = itemSegments.length === 1 && Boolean(itemSegments[0])
-    if (!isCollection && !isItem && !isReconciliation) return false
+    if (!isCollection && !isItem && !isReconciliation && !isEntitlement) return false
 
     const allowedMethod = (isCollection && req.method === 'POST') ||
       (isItem && req.method === 'GET') ||
-      (isReconciliation && req.method === 'POST')
+      (isReconciliation && req.method === 'POST') ||
+      (isEntitlement && req.method === 'POST')
     if (!allowedMethod) {
       sendNoStoreJson(res, 405, { ok: false, code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' })
       return true
@@ -241,6 +248,25 @@ export function createVirtualPaymentRoutes(options = {}) {
           authenticatedUserId: authResult.userId,
           orderNo: reconciliationOrderNo,
           loginCode: body.loginCode
+        })
+        sendNoStoreJson(res, 200, { ok: true, ...result })
+        return true
+      }
+
+      if (isEntitlement) {
+        let entitlementOrderNo
+        try {
+          entitlementOrderNo = decodeURIComponent(itemSegments[0])
+        } catch {
+          throw createRouteError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+        }
+        if (!/^VP[A-F0-9]{30}$/.test(entitlementOrderNo)) {
+          throw createRouteError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+        }
+        await readPaymentJsonBody(req, ENTITLEMENT_FIELDS)
+        const result = await service.grantOwnedOrderEntitlement({
+          authenticatedUserId: authResult.userId,
+          orderNo: entitlementOrderNo
         })
         sendNoStoreJson(res, 200, { ok: true, ...result })
         return true

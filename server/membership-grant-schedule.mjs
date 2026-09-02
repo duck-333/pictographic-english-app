@@ -126,8 +126,10 @@ export function scheduleMembershipGrant(input = {}) {
   const snapshotExpireAt = input.membershipExpireAt
     ? parseDate(input.membershipExpireAt, 'membershipExpireAt')
     : null
-  const scheduledExpireAt = getLatestEndAt(grants)
-  const activeCandidates = [snapshotExpireAt, scheduledExpireAt]
+  const scheduledExpireAt = getLatestEndAt(grants, (grant) => grant.status === 'granted')
+  // Once auditable grant rows exist, they are authoritative for scheduling. A snapshot may
+  // still contain the former end of a revoked future grant and must not extend a new grant.
+  const activeCandidates = [scheduledExpireAt, grants.length === 0 ? snapshotExpireAt : null]
     .filter((date) => date && date.getTime() > now.getTime())
   const effectiveStartAt = activeCandidates.reduce((latest, date) => {
     return !latest || date.getTime() > latest.getTime() ? date : latest

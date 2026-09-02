@@ -12,6 +12,7 @@ const ALLOWED_CREATE_FIELDS = new Set([
 ])
 const ALLOWED_PLATFORMS = new Set(['android', 'harmony', 'windows'])
 const ALLOWED_RECONCILE_FIELDS = new Set(['authenticatedUserId', 'orderNo', 'loginCode'])
+const ALLOWED_ENTITLEMENT_FIELDS = new Set(['authenticatedUserId', 'orderNo'])
 const ORDER_NUMBER_PATTERN = /^VP[A-F0-9]{30}$/
 const CANONICAL_UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
@@ -144,7 +145,8 @@ function isCanonicalPaidAt(value, nowValue) {
 }
 
 function assertCompleteLocalPaidOrder(order, config, userId, nowProvider) {
-  const nowValue = nowProvider === undefined ? Date.now() : nowProvider()
+  const rawNowValue = nowProvider === undefined ? Date.now() : nowProvider()
+  const nowValue = rawNowValue instanceof Date ? rawNowValue.getTime() : rawNowValue
   if (typeof nowValue !== 'number' || !Number.isFinite(nowValue)) {
     throw createServiceError('Payment service clock is unavailable.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
   }
@@ -179,6 +181,30 @@ function assertCompleteLocalPaidOrder(order, config, userId, nowProvider) {
   }
 }
 
+function assertPaidOrderForEntitlement(order, config, userId, nowProvider) {
+  const entitlementShapeValid = (
+    order.entitlementStatus === 'not_ready' &&
+    order.membershipGrantId === null &&
+    order.entitlementTransactionId === null &&
+    order.entitlementGrantedAt === null
+  ) || (
+    order.entitlementStatus === 'granted' &&
+    order.membershipGrantId !== null &&
+    order.entitlementTransactionId !== null &&
+    order.entitlementGrantedAt !== null
+  )
+  if (!entitlementShapeValid || order.deliveryStatus !== 'not_ready' || order.deliveredAt !== null) {
+    throw createServiceError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
+  }
+  assertCompleteLocalPaidOrder({
+    ...order,
+    entitlementStatus: 'not_ready',
+    membershipGrantId: null,
+    entitlementTransactionId: null,
+    entitlementGrantedAt: null
+  }, config, userId, nowProvider)
+}
+
 function safeOrderSummary(order) {
   return Object.freeze({
     orderNo: order.orderNo,
@@ -209,7 +235,11 @@ function mapDependencyError(error, fallbackCode = 'PAYMENT_SERVICE_UNAVAILABLE')
     'PAYMENT_ORDER_NOT_RECONCILABLE',
     'PAYMENT_QUERY_RESULT_INVALID',
     'PAYMENT_QUERY_STATUS_UNSUPPORTED',
-    'PAYMENT_PAID_FACT_INCOMPLETE'
+    'PAYMENT_PAID_FACT_INCOMPLETE',
+    'PAYMENT_ENTITLEMENT_INCOMPLETE',
+    'PAYMENT_ENTITLEMENT_NOT_GRANTABLE',
+    'PAYMENT_MEMBERSHIP_SCHEDULE_UNAVAILABLE',
+    'PAYMENT_MEMBERSHIP_GRANT_FAILED'
   ])
   if (error && allowedCodes.has(error.code)) {
     return createServiceError(
@@ -440,9 +470,74 @@ export function createVirtualPaymentService(options = {}) {
     return safeOrderSummary(reconciled.order)
   }
 
+  async function grantOwnedOrderEntitlement(input = {}) {
+    assertEnabled(config)
+    if (
+      !isPlainObject(input) ||
+      Object.keys(input).length !== ALLOWED_ENTITLEMENT_FIELDS.size ||
+      [...ALLOWED_ENTITLEMENT_FIELDS].some((key) => !Object.hasOwn(input, key)) ||
+      typeof input.orderNo !== 'string' ||
+      !ORDER_NUMBER_PATTERN.test(input.orderNo)
+    ) {
+      throw createServiceError('Payment request is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
+    }
+    const userId = normalizeUserId(input.authenticatedUserId)
+    assertAllowedUser(config, userId)
+    if (typeof store.grantTrustedPaidOrderEntitlement !== 'function') {
+      throw createServiceError('Payment service is unavailable.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
+    }
+    let order
+    try {
+      order = await store.findByUserAndOrderNo(userId, input.orderNo)
+    } catch (error) {
+      throw mapDependencyError(error)
+    }
+    if (!order) throw createServiceError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+    assertPaidOrderForEntitlement(order, config, userId, options.now)
+    let hasTrustedEvidence
+    try {
+      hasTrustedEvidence = await store.findTrustedWechatQueryPaidEvidence(userId, input.orderNo)
+    } catch (error) {
+      throw mapDependencyError(error)
+    }
+    if (hasTrustedEvidence !== true) {
+      throw createServiceError('Local paid payment fact is incomplete.', 'PAYMENT_PAID_FACT_INCOMPLETE', 409)
+    }
+    let result
+    try {
+      const rawNowValue = options.now === undefined ? new Date() : options.now()
+      const nowValue = rawNowValue instanceof Date ? new Date(rawNowValue.getTime()) : new Date(rawNowValue)
+      if (!Number.isFinite(nowValue.getTime())) {
+        throw new Error('Invalid payment clock.')
+      }
+      result = await store.grantTrustedPaidOrderEntitlement(userId, input.orderNo, {
+        expectedProductId: config.productId,
+        now: nowValue
+      })
+    } catch (error) {
+      throw mapDependencyError(error, 'PAYMENT_MEMBERSHIP_GRANT_FAILED')
+    }
+    assertPaidOrderForEntitlement(result.order, config, userId, options.now)
+    if (
+      !result.membership || result.order.entitlementStatus !== 'granted' ||
+      result.order.deliveryStatus !== 'not_ready'
+    ) {
+      throw createServiceError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
+    }
+    return Object.freeze({
+      orderNo: result.order.orderNo,
+      paymentStatus: result.order.paymentStatus,
+      entitlementStatus: result.order.entitlementStatus,
+      membershipStartedAt: result.membership.effectiveStartAt,
+      membershipExpiresAt: result.membership.effectiveEndAt,
+      idempotent: result.idempotent === true
+    })
+  }
+
   return Object.freeze({
     createOrResumeOrder,
     getOwnedOrder,
-    reconcileOwnedOrder
+    reconcileOwnedOrder,
+    grantOwnedOrderEntitlement
   })
 }
