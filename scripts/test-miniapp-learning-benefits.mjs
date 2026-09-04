@@ -74,3 +74,41 @@ assert.equal(page.busy, true)
 finishNew(); await current
 assert.equal(page.busy, false)
 console.log('Batch8 routes, page contracts and Vue script syntax passed (not a full uni-app build).')
+
+assert(benefits.includes('加载更多') && benefits.includes('重新查找购买记录'))
+{
+  page.pageDisposed = false; page.pageVisible = true; page.busy = false
+  const cursors = []
+  page.purchase.discover = async (cursor) => { cursors.push(cursor); return { ok: true, orders: [], nextCursor: cursor === null ? 'next-fixture' : null } }
+  await page.discover()
+  assert.deepEqual(cursors, [null]); assert.equal(page.nextCursor, 'next-fixture')
+  await page.discover(page.nextCursor)
+  assert.deepEqual(cursors, [null, 'next-fixture']); assert.equal(page.nextCursor, null)
+  let finish
+  page.purchase.discover = () => new Promise((resolve) => { finish = resolve })
+  const old = page.discover()
+  component.onUnload.call(page)
+  const snapshot = JSON.stringify({ nextCursor: page.nextCursor, discoveryFailed: page.discoveryFailed, records: page.records, busy: page.busy })
+  finish({ nextCursor: 'late' }); await old
+  assert.equal(JSON.stringify({ nextCursor: page.nextCursor, discoveryFailed: page.discoveryFailed, records: page.records, busy: page.busy }), snapshot)
+}
+console.log('Recovery page: manual pagination and unloaded discovery responses passed.')
+
+{
+  const entry = component.data(), savedUni = globalThis.uni
+  globalThis.uni = { getStorageSync: () => ({ token: 'fixture', expiresAt: '2099-01-01', user: { id: '42', hasWechatBinding: true } }) }
+  for (const [name, fn] of Object.entries(component.methods)) entry[name] = fn.bind(entry)
+  let finish, refreshPromise, discoveryCount = 0, purchases = 0
+  entry.purchase = { resume() {}, list: () => [], api: { context: () => ({}), refresh: async () => ({ membershipActive: true }) },
+    discover: () => { discoveryCount++; return new Promise((resolve) => { finish = resolve }) }, buy: () => { purchases++ } }
+  entry.refresh = () => { refreshPromise = component.methods.refresh.call(entry); return refreshPromise }
+  try {
+    component.onShow.call(entry)
+    assert.equal(discoveryCount, 1); assert.equal(entry.busy, true)
+    await entry.buy(); assert.equal(purchases, 0)
+    finish({ ok: true, orders: [], nextCursor: null }); await refreshPromise
+    assert.equal(discoveryCount, 1, 'entry does not poll or auto-load another page')
+    assert.equal(entry.busy, false); assert.equal(entry.discoveryFailed, false)
+    assert.equal(entry.entitlement.membershipActive, true)
+  } finally { globalThis.uni = savedUni }
+}

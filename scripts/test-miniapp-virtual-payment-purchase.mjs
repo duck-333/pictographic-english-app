@@ -6,7 +6,7 @@ const paymentParams = (orderNo) => ({ mode: 'short_series_goods', signData: JSON
 function harness(overrides = {}) {
   const disk = new Map(), calls = [], confirmations = [], createdOrders = new Map()
   let current = { userId: '42', token: 'jwt', baseUrl: 'https://sandbox.test', environment: 'sandbox' }
-  let count = 0, writes = 0
+  let count = 0, writes = 0, failNextRead = false
   const order = (n, paymentStatus = 'pending', entitlementStatus = 'not_ready', deliveryStatus = 'not_ready') => ({ orderNo: n, paymentStatus, entitlementStatus, deliveryStatus })
   const api = {
     context: () => ({ ...current }),
@@ -27,7 +27,7 @@ function harness(overrides = {}) {
     async refresh() { calls.push('refresh'); return { membershipActive: true } },
     async delivery(owner, n) { calls.push('delivery'); const status = overrides.delivery || 'confirming'; return { ...order(n, 'paid', 'granted', status), idempotent: false, confirming: status === 'confirming', manualReview: status === 'manual_review', retryable: status === 'retryable_failed' } }
   }
-  const storage = { get(key) { return disk.has(key) ? clone(disk.get(key)) : '' }, set(key, value) { writes++; if (overrides.failWrite === writes || overrides.failWrites) throw new Error('disk full'); disk.set(key, clone(value)) } }
+  const storage = { get(key) { if (failNextRead) { failNextRead = false; throw new Error('readback failed') } return disk.has(key) ? clone(disk.get(key)) : '' }, set(key, value) { writes++; if (overrides.failWrite === writes || overrides.failWrites) throw new Error('disk full'); disk.set(key, clone(value)); if (overrides.failReadbackOnce) { failNextRead = true; overrides.failReadbackOnce = false } } }
   const controller = createPurchaseController({ api, storage, confirm: async (text) => { confirmations.push(text); return overrides.rejectConfirmation !== true },
     onEntitlement: () => calls.push('display-granted') })
   return { controller, api, calls, confirmations, disk, overrides, order, reopen: () => createPurchaseController({ api, storage, confirm: async () => true }), setOwner: (value) => { current = { ...current, ...value } } }
@@ -319,6 +319,103 @@ for (const result of ['unknown', 'cancelled']) {
   assert.equal(h.controller.list()[0].mayHaveInvoked, true)
 }
 console.log('Review fixtures: duplicates/conflicts, per-endpoint states, missing deliveryStatus (all downstream=0), epochs and late callbacks passed.')
+
+const recoveryRow = (n = 1, state = {}) => ({ orderNo: `VP${n.toString(16).toUpperCase().padStart(30, '0')}`, clientRequestId: `recovery-intent-${n}`, paymentStatus: 'pending', entitlementStatus: 'not_ready', deliveryStatus: 'not_ready', createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:01.000Z', ...state })
+const recoveryPage = (orders, nextCursor = null) => ({ ok: true, orders, nextCursor })
+for (const state of [{}, { paymentStatus: 'paid' }, { paymentStatus: 'paid', entitlementStatus: 'granted', deliveryStatus: 'confirming' }, { paymentStatus: 'paid', entitlementStatus: 'granted', deliveryStatus: 'manual_review' }]) {
+  const h = harness(), found = recoveryRow(100, state)
+  h.api.discover = async () => { h.calls.push('discover'); return recoveryPage([found]) }
+  await h.controller.discover()
+  assert.deepEqual(h.calls, ['discover'], 'discovery itself never starts single-order recovery')
+  assert.equal(h.controller.list()[0].mayHaveInvoked, true)
+  h.overrides.getOrder = () => found
+  await h.controller.query(found.clientRequestId)
+  await h.reopen().query(found.clientRequestId)
+  assert.equal(h.calls.filter((c) => c === 'invoke').length, 0)
+  console.log(`Empty storage ${found.paymentStatus}/${found.entitlementStatus}/${found.deliveryStatus}: native payment calls=0`)
+}
+{
+  const h = harness({ unpaid: true })
+  await h.controller.buy()
+  const old = h.controller.list()[0], key = [...h.disk.keys()][0]
+  h.disk.set(key, [{ ...old, mayHaveInvoked: false }])
+  const found = recoveryRow(1, { clientRequestId: old.clientRequestId, orderNo: old.orderNo })
+  h.api.discover = async () => recoveryPage([found, recoveryRow(100)])
+  await h.controller.discover()
+  assert.equal(h.controller.list().length, 2)
+  assert(h.controller.list().every((r) => r.mayHaveInvoked))
+  const before = JSON.stringify([...h.disk])
+  for (const rows of [[{ ...found, orderNo: recoveryRow(2).orderNo }], [{ ...found, clientRequestId: 'different-intent' }]]) {
+    h.api.discover = async () => recoveryPage(rows)
+    await assert.rejects(h.controller.discover(), { code: 'PAYMENT_RECORDS_INVALID' })
+    assert.equal(JSON.stringify([...h.disk]), before)
+  }
+  h.api.discover = async () => recoveryPage([])
+  await h.controller.discover()
+  assert.equal(JSON.stringify([...h.disk]), before)
+  h.api.discover = async () => { throw new Error('network') }
+  await assert.rejects(h.controller.discover())
+  assert.equal(JSON.stringify([...h.disk]), before)
+  h.overrides.rejectConfirmation = true
+  await h.controller.buy()
+  assert.equal(h.confirmations.at(-1), EXTRA_PURCHASE_WARNING)
+  h.api.discover = async () => recoveryPage([recoveryRow(200)])
+  h.overrides.failWrites = true
+  await assert.rejects(h.controller.discover(), { code: 'PAYMENT_STORAGE_FAILED' })
+  assert.equal(JSON.stringify([...h.disk]), before)
+  h.overrides.failWrites = false
+  h.overrides.failReadbackOnce = true
+  await assert.rejects(h.controller.discover(), { code: 'PAYMENT_STORAGE_FAILED' })
+  assert.equal(JSON.stringify([...h.disk]), before, 'readback failure restores the original records')
+}
+{
+  const h = harness(), first = Array.from({ length: 20 }, (_, i) => recoveryRow(i + 1))
+  const cursors = []
+  h.api.discover = async (_, cursor) => { cursors.push(cursor); return cursor === null ? recoveryPage(first, first[19].orderNo) : recoveryPage([recoveryRow(21)]) }
+  const page = await h.controller.discover()
+  assert.equal(cursors.length, 1)
+  await h.controller.discover(page.nextCursor)
+  assert.equal(h.controller.list().length, 21)
+  assert.deepEqual(cursors, [null, first[19].orderNo])
+}
+for (const change of ['pause', 'dispose', 'user', 'backend', 'token', 'environment']) {
+  const h = harness(), late = deferred()
+  h.api.discover = () => late.promise
+  const old = h.controller.discover()
+  await Promise.resolve()
+  assert.equal(h.controller.buy(), old, 'discovery and purchase share operation identity')
+  if (change === 'pause') { h.controller.pause(); h.controller.resume() }
+  else if (change === 'dispose') h.controller.dispose()
+  else h.setOwner(change === 'user' ? { userId: '43' } : change === 'backend' ? { baseUrl: 'https://other.test' } : change === 'token' ? { token: 'other' } : { environment: 'production' })
+  late.resolve(recoveryPage([recoveryRow()]))
+  if (['pause', 'dispose'].includes(change)) await old
+  else await assert.rejects(old)
+  assert.equal(h.disk.size, 0)
+  assert.deepEqual(h.calls, [])
+}
+console.log('Recovery controller: cross-device, merge, conflicts, empty/failure preservation, paging, epoch and shared lock passed.')
+
+{
+  const h = harness(), late = deferred(), newer = deferred()
+  h.api.discover = () => late.promise
+  const old = h.controller.discover()
+  await Promise.resolve()
+  h.controller.pause(); h.controller.resume()
+  h.api.discover = () => newer.promise
+  const current = h.controller.discover()
+  await Promise.resolve()
+  late.resolve(recoveryPage([recoveryRow(100)])); await old
+  assert.equal(h.controller.buy(), current, 'old discovery finally cannot unlock the newer discovery')
+  assert.equal(h.disk.size, 0)
+  newer.resolve(recoveryPage([recoveryRow(101)])); await current
+  assert.equal(h.controller.list()[0].orderNo, recoveryRow(101).orderNo)
+  const recoveredId = h.controller.list()[0].clientRequestId
+  await h.controller.buy()
+  assert.equal(h.confirmations.at(-1), EXTRA_PURCHASE_WARNING)
+  assert.equal(h.controller.list().length, 2)
+  assert.notEqual(h.controller.list()[0].clientRequestId, recoveredId)
+  assert.equal(h.calls.filter((c) => c === 'invoke').length, 1, 'only the explicitly confirmed NEW order invokes payment')
+}
 
 {
   const h = harness({ unpaid: true })

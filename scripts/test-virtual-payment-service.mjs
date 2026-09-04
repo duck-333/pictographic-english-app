@@ -297,3 +297,18 @@ await assert.rejects(
 )
 
 console.log('Virtual payment service tests passed.')
+
+{
+  let reads = 0
+  const forbidden = () => { throw new Error('unexpected mutation or WeChat call') }
+  const recoveryStore = { findByUserAndClientRequestId: forbidden, findByUserAndOrderNo: forbidden, createOrder: forbidden, markOrderPending: forbidden,
+    async listRecoveryOrders(userId, cursor) { reads++; assert.equal(userId, '42'); assert.equal(cursor, null); return { orders: [order({ secret: 'not-returned' })], nextCursor: null } } }
+  const recovery = createHarness({ store: recoveryStore, paymentSessionService: { exchangeAndVerifyPaymentSession: forbidden }, signingService: { createPaymentParameters: forbidden } }).service
+  const page = await recovery.listRecoveryOrders({ authenticatedUserId: '42' })
+  assert.deepEqual(Object.keys(page.orders[0]), ['orderNo', 'clientRequestId', 'paymentStatus', 'entitlementStatus', 'deliveryStatus', 'createdAt', 'updatedAt'])
+  for (const input of [{ authenticatedUserId: '43' }, { authenticatedUserId: '42', userId: '43' }, { authenticatedUserId: '42', cursor: '' }]) await assert.rejects(recovery.listRecoveryOrders(input))
+  assert.equal(reads, 1)
+  recoveryStore.listRecoveryOrders = () => { throw new Error('SQL password token') }
+  await assert.rejects(recovery.listRecoveryOrders({ authenticatedUserId: '42' }), (error) => error.code === 'PAYMENT_SERVICE_UNAVAILABLE' && !/SQL|password|token/.test(error.message))
+  console.log('Recovery Service: authenticated ownership, no mutation/WeChat, whitelist and safe errors passed.')
+}

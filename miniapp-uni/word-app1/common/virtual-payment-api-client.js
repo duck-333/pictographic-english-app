@@ -4,6 +4,29 @@ import { requestWechatLoginCode } from './auth-api-client.js'
 import { getUserEntitlements } from './user-entitlements-api-client.js'
 
 const ROOT = '/api/user/virtual-payment/orders'
+export function validateRecoveryPage(value, cursor = null) {
+  const fail = () => { throw paymentError('PAYMENT_RESPONSE_INVALID') }
+  const exact = (object, fields) => object && typeof object === 'object' && !Array.isArray(object) &&
+    Object.keys(object).length === fields.length && fields.every((field) => Object.prototype.hasOwnProperty.call(object, field))
+  const orderNo = (v) => typeof v === 'string' && /^VP[A-F0-9]{30}$/.test(v)
+  const time = (v) => { const n = typeof v === 'string' ? Date.parse(v) : NaN; if (!Number.isFinite(n) || new Date(n).toISOString() !== v) fail(); return n }
+  if (!exact(value, ['ok', 'orders', 'nextCursor']) || value.ok !== true || !Array.isArray(value.orders) || value.orders.length > 20 ||
+      (value.nextCursor !== null && !orderNo(value.nextCursor))) fail()
+  const ids = new Set(), requests = new Set()
+  for (const row of value.orders) {
+    if (!exact(row, ['orderNo', 'clientRequestId', 'paymentStatus', 'entitlementStatus', 'deliveryStatus', 'createdAt', 'updatedAt']) ||
+        !orderNo(row.orderNo) || row.orderNo === cursor || typeof row.clientRequestId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,79}$/.test(row.clientRequestId) ||
+        !['initializing', 'pending', 'confirming', 'paid'].includes(row.paymentStatus) ||
+        !['not_ready', 'pending', 'granting', 'granted', 'retryable_failed', 'failed'].includes(row.entitlementStatus) ||
+        !['not_ready', 'pending', 'confirming', 'retryable_failed', 'manual_review'].includes(row.deliveryStatus) ||
+        (row.entitlementStatus !== 'not_ready' && row.paymentStatus !== 'paid') || (row.deliveryStatus !== 'not_ready' && row.entitlementStatus !== 'granted') ||
+        ids.has(row.orderNo) || requests.has(row.clientRequestId)) fail()
+    if (time(row.createdAt) > time(row.updatedAt)) fail()
+    ids.add(row.orderNo); requests.add(row.clientRequestId)
+  }
+  if (value.nextCursor !== null && (value.orders.length !== 20 || value.nextCursor !== value.orders[19].orderNo || value.nextCursor === cursor)) fail()
+  return value
+}
 export function paymentError(code) { const error = new Error('购买操作暂未完成'); error.code = code; return error }
 export function validatePaymentParams(params, orderNo) {
   if (!params || Array.isArray(params) || params.mode !== 'short_series_goods' ||
@@ -105,6 +128,12 @@ export function createVirtualPaymentApi(options = {}) {
   const freshCode = options.loginCode || requestWechatLoginCode
   return {
     environment, context, assertContext,
+    async discover(owner, cursor = null, run) {
+      if (cursor !== null && (typeof cursor !== 'string' || !/^VP[A-F0-9]{30}$/.test(cursor))) throw paymentError('PAYMENT_RESPONSE_INVALID')
+      const result = await request(owner, 'GET', `${ROOT}/recovery${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`, undefined, run)
+      if (run) run.check()
+      return validateRecoveryPage(result, cursor)
+    },
     async prepare(owner) { assertContext(owner, true); const code = await freshCode(); assertContext(owner, true); return code },
     async create(owner, clientRequestId, preparedCode, run) {
       const current = assertContext(owner, true)

@@ -1,5 +1,12 @@
 # Plan
 
+## 2026-09-04：批次9完成代码与隔离验收
+
+- 已实现JWT用户订单发现、20条稳定游标分页、客户端强制true合并、页面首入发现/手动加载更多，复用原锁与epoch。
+- 现有009字段与user_created索引足够，不新增migration；仅订单表只读，恢复仍需用户主动查询。
+- Store/Service/Route和小程序离线回归、真实MySQL8.0.46订单套件与EXPLAIN通过，测试数据库/容器/volume及3308监听已清理。详细结果见Documentation。
+- 等待独立审查；HBuilderX完整编译、微信开发者工具及真机sandbox仍待授权联调。禁止提交、推送、合并、部署及真实微信调用。
+
 ## 2026-06-23：一级域名 API 切换
 
 - 小程序生产 API 基地址切换为 `https://baxiaota.com`。

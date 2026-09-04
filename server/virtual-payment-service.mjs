@@ -373,6 +373,23 @@ export function createVirtualPaymentService(options = {}) {
     return safeOrderSummary(order)
   }
 
+  async function listRecoveryOrders(input = {}) {
+    assertEnabled(config)
+    const userId = normalizeUserId(input.authenticatedUserId)
+    assertAllowedUser(config, userId)
+    if (!isPlainObject(input) || Object.keys(input).some((key) => !['authenticatedUserId', 'cursor'].includes(key)) ||
+        (input.cursor !== undefined && (typeof input.cursor !== 'string' || !ORDER_NUMBER_PATTERN.test(input.cursor)))) throw createServiceError('Payment request is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
+    try {
+      const result = await store.listRecoveryOrders(userId, input.cursor === undefined ? null : input.cursor)
+      return { orders: result.orders.map((row) => ({ orderNo: row.orderNo, clientRequestId: row.clientRequestId,
+        paymentStatus: row.paymentStatus, entitlementStatus: row.entitlementStatus, deliveryStatus: row.deliveryStatus,
+        createdAt: row.createdAt, updatedAt: row.updatedAt })), nextCursor: result.nextCursor }
+    } catch (error) {
+      if (error && error.code === 'PAYMENT_REQUEST_INVALID') throw createServiceError('Payment request is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
+      throw mapDependencyError(error)
+    }
+  }
+
   async function reconcileOwnedOrder(input = {}) {
     assertEnabled(config)
     if (
@@ -696,6 +713,7 @@ export function createVirtualPaymentService(options = {}) {
 
   return Object.freeze({
     createOrResumeOrder,
+    listRecoveryOrders,
     getOwnedOrder,
     reconcileOwnedOrder,
     grantOwnedOrderEntitlement,

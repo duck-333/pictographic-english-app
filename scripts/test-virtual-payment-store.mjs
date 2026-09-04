@@ -670,3 +670,32 @@ await assert.rejects(
 )
 
 console.log('Virtual payment store tests passed.')
+
+{
+  const queries = [], source = Array.from({ length: 21 }, (_, i) => row({ id: 30 - i, order_no: `VP${(30 - i).toString(16).toUpperCase().padStart(30, '0')}`, client_request_id: `recovery-${30 - i}` }))
+  let release = 0, answer = source
+  const recovery = createVirtualPaymentStore({ pool: { async getConnection() { return {
+    async execute(sql, values) { queries.push({ sql, values }); assert.match(sql, /^SELECT /); assert(!/FOR UPDATE|provider|events|attempt|queries/i.test(sql)); return [answer] },
+    release() { release++ }
+  } } } })
+  const result = await recovery.listRecoveryOrders('42')
+  assert.equal(result.orders.length, 20)
+  assert.equal(result.nextCursor, source[19].order_no)
+  assert.equal(release, 1)
+  assert.match(queries[0].sql, /ORDER BY created_at DESC, id DESC LIMIT 21/)
+  assert.deepEqual(queries[0].values, ['42', 'sandbox', 1])
+  assert.deepEqual(Object.keys(result.orders[0]), ['orderNo', 'clientRequestId', 'paymentStatus', 'entitlementStatus', 'deliveryStatus', 'createdAt', 'updatedAt'])
+  answer = []
+  assert.deepEqual(await recovery.listRecoveryOrders('42'), { orders: [], nextCursor: null })
+  await assert.rejects(recovery.listRecoveryOrders('42', ORDER_NO), { code: 'PAYMENT_REQUEST_INVALID' })
+  for (const bad of [row({ user_id: 43 }), row({ environment: 'production' }), row({ wechat_env: 0 }), row({ payment_status: 'pending', entitlement_status: 'granted' }), row({ payment_status: 'closed' }), row({ delivery_status: 'delivered' })]) {
+    answer = [bad]
+    await assert.rejects(recovery.listRecoveryOrders('42'))
+  }
+  assert.equal(release, queries.length)
+  let released = 0
+  const failed = createVirtualPaymentStore({ pool: { async getConnection() { return { execute() { throw new Error('SQL password token') }, release() { released++ } } } } })
+  await assert.rejects(failed.listRecoveryOrders('42'), (error) => error.code === 'PAYMENT_SERVICE_UNAVAILABLE' && !/password|token|SQL/.test(error.message))
+  assert.equal(released, 1)
+  console.log('Recovery Store: bounded read-only SQL, row validation, whitelist and release passed.')
+}

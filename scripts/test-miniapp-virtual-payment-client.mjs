@@ -112,3 +112,22 @@ for (const value of [2, 3]) {
   await assert.rejects(invalid.get(owner, orderNo))
 }
 console.log('Batch8 API contracts, fresh codes, isolation, native parameters and safe errors passed.')
+
+{
+  const row = { orderNo, clientRequestId: 'recovery-client-1', paymentStatus: 'pending', entitlementStatus: 'not_ready', deliveryStatus: 'not_ready', createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z' }
+  const valid = { ok: true, orders: [row], nextCursor: null }
+  let response = valid, sent
+  const recovery = createVirtualPaymentApi({ ...options, request(args) { sent = args; args.success({ statusCode: 200, data: response }) } })
+  assert.deepEqual(await recovery.discover(owner), valid)
+  assert.equal(sent.method, 'GET'); assert.equal(sent.data, undefined)
+  assert.equal(sent.url, env.VUE_APP_WORD_API_BASE_URL + '/api/user/virtual-payment/orders/recovery')
+  assert.equal(sent.header.Authorization, 'Bearer jwt-fixture')
+  response = { ok: true, orders: [], nextCursor: null }
+  await recovery.discover(owner, orderNo)
+  assert(sent.url.endsWith(`?cursor=${orderNo}`))
+  const bad = [null, [], { ...valid, orders: null }, { ...valid, orders: Array(21).fill(row) }, { ...valid, orders: [row, row] }, { ...valid, token: 'secret' }, { ...valid, nextCursor: '' }, { ...valid, nextCursor: orderNo }]
+  for (const field of Object.keys(row)) bad.push({ ...valid, orders: [{ ...row, [field]: null }] })
+  for (const mutation of [{ signData: 'secret' }, { paymentStatus: 'unknown' }, { entitlementStatus: 'granted' }, { deliveryStatus: 'delivered' }, { createdAt: '2026-09-05T00:00:00.000Z' }, { createdAt: '2026-09-04' }]) bad.push({ ...valid, orders: [{ ...row, ...mutation }] })
+  for (const value of bad) { response = value; await assert.rejects(recovery.discover(owner), { code: 'PAYMENT_RESPONSE_INVALID' }) }
+  console.log('Recovery Client: GET/JWT, bounded exact schema, duplicates, states, ISO times and cursor passed.')
+}

@@ -1,4 +1,4 @@
-import { createVirtualPaymentApi, paymentError, validatePaymentParams } from './virtual-payment-api-client.js'
+import { createVirtualPaymentApi, paymentError, validatePaymentParams, validateRecoveryPage } from './virtual-payment-api-client.js'
 
 export const EXTRA_PURCHASE_WARNING = '上次购买结果尚未确认。继续将新购买一份30天会员；若两笔均支付成功，将分别到账并顺延。是否继续？'
 export const PURCHASE_CONFIRMATION = '购买30天会员，¥30.00，一次性购买，非自动续费。有效会员购买后顺延30天。是否继续？'
@@ -8,7 +8,7 @@ const STALE = Symbol('inactive purchase operation')
 const hints = ['ready', 'unknown', 'cancelled', 'confirming', 'paid', 'granted', 'delivered', 'closed', 'failed', 'manual_review']
 export function recordMessage(record) {
   return ({ ready: '购买尚未完成，可继续', unknown: '支付结果尚未确认，请查询购买结果', cancelled: '已取消本次支付，可查询购买结果',
-    confirming: '支付结果确认中，可稍后回来查看', paid: '支付已确认，正在开通会员', granted: '会员已到账，订单确认中',
+    confirming: '订单仍在处理中，可稍后查询或联系客服', paid: '支付已确认，会员处理中，可稍后查询或联系客服', granted: '会员已到账，订单确认中',
     delivered: '会员已到账', closed: '本次购买已关闭', failed: '本次购买未完成', manual_review: '会员已到账，订单处理中，请稍后查询或联系客服' })[record.hint] || '请查询购买结果'
 }
 export function createPurchaseController(options = {}) {
@@ -17,12 +17,21 @@ export function createPurchaseController(options = {}) {
   const now = options.now || Date.now
   let visible = true
   let epoch = 0, disposed = false, currentRun = null
+  let discoveryIncomplete = false
   const key = (owner) => `pictographic:purchase:sandbox:${encodeURIComponent(owner.baseUrl)}:${owner.userId}`
-  function records(owner) {
+  function readRecords(owner) {
     api.assertContext(owner)
     let raw
     try { raw = storage.get(key(owner)) } catch (_) { throw paymentError('PAYMENT_STORAGE_FAILED') }
     if (raw === '' || raw === null || raw === undefined) return []
+    return raw
+  }
+  function records(owner) {
+    const raw = readRecords(owner), normalized = normalizeRecords(owner, raw)
+    if (normalized.length !== raw.length) write(owner, normalized)
+    return normalized
+  }
+  function normalizeRecords(owner, raw) {
     if (!Array.isArray(raw)) throw paymentError('PAYMENT_RECORDS_INVALID')
     const intents = new Map(), orders = new Map()
     for (const r of raw) {
@@ -47,8 +56,6 @@ export function createPurchaseController(options = {}) {
       intents.set(r.clientRequestId, merged)
     }
     const normalized = [...intents.values()]
-    // Validate the WHOLE collection before an optional canonical write or selection.
-    if (normalized.length !== raw.length) write(owner, normalized)
     return normalized
   }
   function write(owner, list) {
@@ -196,6 +203,32 @@ export function createPurchaseController(options = {}) {
   }
   return {
     api,
+    discover(cursor = null) {
+      return single(async (run) => {
+        const owner = api.context()
+        discoveryIncomplete = true
+        const result = await api.discover(owner, cursor, run)
+        active(owner, run)
+        validateRecoveryPage(result, cursor)
+        const original = readRecords(owner)
+        // The existing normalizer validates the combined collection BEFORE any write.
+        const local = normalizeRecords(owner, original)
+        const found = result.orders.map((row) => ({ userId: owner.userId, environment: owner.environment,
+          clientRequestId: row.clientRequestId, orderNo: row.orderNo, mayHaveInvoked: true,
+          createdAt: Date.parse(row.createdAt), updatedAt: Date.parse(row.updatedAt),
+          hint: row.entitlementStatus === 'granted' ? (row.deliveryStatus === 'manual_review' ? 'manual_review' : 'granted') : row.paymentStatus === 'paid' ? 'paid' : 'confirming' }))
+        const merged = normalizeRecords(owner, [...local, ...found])
+        active(owner, run)
+        try { write(owner, merged) } catch (error) {
+          // Best-effort restoration also covers a write that succeeded but failed readback.
+          try { storage.set(key(owner), original) } catch (_) {}
+          throw error
+        }
+        discoveryIncomplete = result.nextCursor !== null
+        if (options.onChange) options.onChange()
+        return result
+      })
+    },
     list() { return records(api.context()).slice().reverse() },
     pause, resume() { if (!disposed) visible = true }, dispose() { pause(); disposed = true },
     query(clientRequestId) {
@@ -214,7 +247,7 @@ export function createPurchaseController(options = {}) {
         let record = resumeId ? list.find((r) => r.clientRequestId === resumeId) : null
         if (resumeId && !record) throw paymentError('PAYMENT_STORAGE_FAILED')
         if (record && record.mayHaveInvoked) return recover(owner, record, run)
-        const unresolved = list.some((r) => !['granted', 'delivered', 'manual_review', 'closed', 'failed'].includes(r.hint) && r.clientRequestId !== resumeId)
+        const unresolved = discoveryIncomplete || list.some((r) => !['granted', 'delivered', 'manual_review', 'closed', 'failed'].includes(r.hint) && r.clientRequestId !== resumeId)
         if (!await options.confirm(unresolved ? EXTRA_PURCHASE_WARNING : PURCHASE_CONFIRMATION)) return null
         active(owner, run)
         api.assertContext(owner, true)

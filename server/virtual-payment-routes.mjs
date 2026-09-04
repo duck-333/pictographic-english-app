@@ -200,6 +200,7 @@ export function createVirtualPaymentRoutes(options = {}) {
   }
 
   async function handle(req, res, pathname, userAuthOptions) {
+    const isRecovery = pathname === `${COLLECTION_PATH}/recovery`
     const isCollection = pathname === COLLECTION_PATH
     const itemSuffix = pathname.startsWith(`${COLLECTION_PATH}/`)
       ? pathname.slice(`${COLLECTION_PATH}/`.length)
@@ -208,10 +209,11 @@ export function createVirtualPaymentRoutes(options = {}) {
     const isReconciliation = itemSegments.length === 2 && itemSegments[1] === 'reconcile'
     const isEntitlement = itemSegments.length === 2 && itemSegments[1] === 'entitlement'
     const isDelivery = itemSegments.length === 2 && itemSegments[1] === 'delivery'
-    const isItem = itemSegments.length === 1 && Boolean(itemSegments[0])
-    if (!isCollection && !isItem && !isReconciliation && !isEntitlement && !isDelivery) return false
+    const isItem = !isRecovery && itemSegments.length === 1 && Boolean(itemSegments[0])
+    if (!isRecovery && !isCollection && !isItem && !isReconciliation && !isEntitlement && !isDelivery) return false
 
     const allowedMethod = (isCollection && req.method === 'POST') ||
+      (isRecovery && req.method === 'GET') ||
       (isItem && req.method === 'GET') ||
       (isReconciliation && req.method === 'POST') ||
       (isEntitlement && req.method === 'POST') ||
@@ -229,6 +231,14 @@ export function createVirtualPaymentRoutes(options = {}) {
 
     try {
       const service = getService()
+      if (isRecovery) {
+        const query = new URL(req.url, 'http://local.invalid').searchParams
+        if ([...query.keys()].some((key) => key !== 'cursor') || query.getAll('cursor').length > 1 ||
+            (query.has('cursor') && !/^VP[A-F0-9]{30}$/.test(query.get('cursor')))) throw createRouteError('Payment request is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
+        const result = await service.listRecoveryOrders({ authenticatedUserId: authResult.userId, ...(query.has('cursor') ? { cursor: query.get('cursor') } : {}) })
+        sendNoStoreJson(res, 200, { ok: true, ...result })
+        return true
+      }
       if (isCollection) {
         const body = await readPaymentJsonBody(req, CREATE_FIELDS)
         const result = await service.createOrResumeOrder({

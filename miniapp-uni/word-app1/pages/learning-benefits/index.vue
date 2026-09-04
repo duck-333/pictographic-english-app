@@ -17,6 +17,9 @@
       </template>
       <text v-if="availabilityMessage" class="message">{{ availabilityMessage }}</text>
       <text v-if="message" class="message" aria-live="polite">{{ message }}</text>
+      <text v-if="discoveryFailed" class="message">暂未完整获取历史购买记录，可稍后重试。</text>
+      <button v-if="discoveryFailed" class="secondary" :disabled="busy || !queryAllowed" @tap="discover()">重新查找购买记录</button>
+      <button v-if="nextCursor" class="secondary" :disabled="busy || !queryAllowed" @tap="discover(nextCursor)">加载更多</button>
       <button class="secondary" @tap="backToLearning">返回学习</button>
     </view>
     <view v-if="records.length" class="card">
@@ -40,7 +43,7 @@ import { paymentMessage } from '../../common/virtual-payment-api-client.js'
 export default {
   data() {
     return { loggedIn: false, purchaseAllowed: false, queryAllowed: false, busy: false, records: [], entitlement: null,
-      availabilityMessage: '', message: '', loadSequence: 0, pageEpoch: 0, pageVisible: true, pageDisposed: false }
+      availabilityMessage: '', message: '', nextCursor: null, discoveryFailed: false, loadSequence: 0, pageEpoch: 0, pageVisible: true, pageDisposed: false }
   },
   computed: {
     pendingRecord() { return this.records.find((r) => !['granted', 'delivered', 'manual_review', 'closed', 'failed'].includes(r.hint)) || null },
@@ -73,7 +76,7 @@ export default {
     },
     async refresh() {
       if (this.pageDisposed || !this.pageVisible) return
-      const load = ++this.loadSequence
+      let load = ++this.loadSequence
       this.loggedIn = Boolean(getAuthSession())
       this.entitlement = null
       this.records = []
@@ -86,6 +89,10 @@ export default {
         this.queryAllowed = true
         this.reloadRecords()
         try { this.purchase.api.context(true); this.purchaseAllowed = true } catch (error) { this.availabilityMessage = paymentMessage(error) }
+        this.nextCursor = null
+        await this.discover()
+        if (this.pageDisposed || !this.pageVisible || load + 1 !== this.loadSequence) return
+        load = this.loadSequence
         const entitlement = await this.purchase.api.refresh(owner)
         if (load === this.loadSequence) this.entitlement = entitlement
       } catch (error) { if (load === this.loadSequence) this.availabilityMessage = paymentMessage(error) }
@@ -99,6 +106,16 @@ export default {
       this.message = ''
       try { await operation() } catch (error) { if (active()) this.message = paymentMessage(error) }
       finally { if (active()) { this.busy = false; this.reloadRecords() } }
+    },
+    discover(cursor = null) {
+      const epoch = this.pageEpoch
+      return this.run(async () => {
+        this.discoveryFailed = true
+        const result = await this.purchase.discover(cursor)
+        if (!result || result.ok !== true || !Array.isArray(result.orders) || this.pageDisposed || !this.pageVisible || epoch !== this.pageEpoch) return
+        this.nextCursor = result.nextCursor
+        this.discoveryFailed = false
+      })
     },
     buy(id) { return this.run(() => this.purchase.buy(id)) },
     query(record) { return this.run(() => this.purchase.query(record.clientRequestId)) },

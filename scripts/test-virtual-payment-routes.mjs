@@ -321,3 +321,26 @@ try {
 }
 
 console.log('Virtual payment route tests passed.')
+
+{
+  const discoveryCalls = []
+  const fixture = await startServer({ async listRecoveryOrders(input) {
+    discoveryCalls.push(input)
+    if (input.cursor) { const error = new Error('SQL password'); error.code = 'PAYMENT_REQUEST_INVALID'; error.statusCode = 400; throw error }
+    return { orders: [], nextCursor: null }
+  } })
+  try {
+    const path = `${fixture.baseUrl}/api/user/virtual-payment/orders/recovery`
+    for (const [suffix, status] of [['', 200], ['?userId=43', 400], ['?cursor=', 400], ['?cursor=bad', 400], [`?cursor=${ORDER_NO}&cursor=${ORDER_NO}`, 400], [`?cursor=${ORDER_NO}`, 400]]) {
+      const response = await read(await fetch(path + suffix, { headers: { Authorization: authHeader() } }))
+      assert.equal(response.status, status)
+      assert.equal(response.headers.get('Cache-Control'), 'no-store')
+      assert.equal(response.headers.get('Pragma'), 'no-cache')
+      assert(!JSON.stringify(response.body).includes('password'))
+    }
+    assert.equal((await fetch(path)).status, 401)
+    assert.equal((await fetch(path, { method: 'POST', headers: { Authorization: authHeader() } })).status, 405)
+    assert.deepEqual(discoveryCalls, [{ authenticatedUserId: '42' }, { authenticatedUserId: '42', cursor: ORDER_NO }])
+  } finally { await new Promise((resolve) => fixture.server.close(resolve)) }
+  console.log('Recovery Route: fixed path, JWT, strict query and no-cache passed.')
+}

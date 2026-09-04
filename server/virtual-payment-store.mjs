@@ -973,6 +973,51 @@ export function createVirtualPaymentStore(options = {}) {
     return normalizeSingleOrder(result)
   }
 
+  async function listRecoveryOrders(userIdValue, cursor = null) {
+    const userId = normalizeUserId(userIdValue)
+    const invalidCursor = () => createStoreError('Payment request is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
+    if (cursor !== null && (typeof cursor !== 'string' || !ORDER_NUMBER_PATTERN.test(cursor))) throw invalidCursor()
+    const columns = 'id, user_id, environment, wechat_env, order_no, client_request_id, payment_status, entitlement_status, delivery_status, created_at, updated_at'
+    const rowsOf = (result) => {
+      if (!Array.isArray(result) || !Array.isArray(result[0])) throw createStoreError('Payment order data is invalid.')
+      return result[0]
+    }
+    function normalize(row) {
+      if (!row || normalizeBigIntId(row.user_id) !== userId || row.environment !== 'sandbox' || Number(row.wechat_env) !== 1) throw createStoreError('Payment order data is invalid.')
+      const value = { orderNo: normalizeOrderNo(row.order_no), clientRequestId: normalizeVirtualPaymentClientRequestId(row.client_request_id),
+        paymentStatus: row.payment_status, entitlementStatus: row.entitlement_status, deliveryStatus: row.delivery_status,
+        createdAt: normalizeRequiredDate(row.created_at), updatedAt: normalizeRequiredDate(row.updated_at) }
+      try { assertVirtualPaymentState(value) } catch { throw createStoreError('Payment order data is invalid.') }
+      if (value.updatedAt < value.createdAt) throw createStoreError('Payment order data is invalid.')
+      return { id: normalizeBigIntId(row.id), value }
+    }
+    let boundary = '', values = [userId, 'sandbox', 1]
+    if (cursor !== null) {
+      const anchorRows = rowsOf(await execute(`SELECT ${columns} FROM ${ORDERS_TABLE}
+        WHERE user_id = ? AND environment = ? AND wechat_env = ? AND order_no = ? LIMIT 2`, [...values, cursor]))
+      if (anchorRows.length !== 1) throw invalidCursor()
+      const anchor = normalize(anchorRows[0])
+      if (anchor.value.orderNo !== cursor) throw invalidCursor()
+      const date = anchor.value.createdAt.slice(0, 19).replace('T', ' ')
+      boundary = ' AND (created_at < ? OR (created_at = ? AND id < ?))'
+      values = [...values, date, date, anchor.id]
+    }
+    const rows = rowsOf(await execute(`SELECT ${columns} FROM ${ORDERS_TABLE}
+      WHERE user_id = ? AND environment = ? AND wechat_env = ?
+        AND payment_status NOT IN ('closed', 'failed') AND delivery_status <> 'delivered'${boundary}
+      ORDER BY created_at DESC, id DESC LIMIT 21`, values))
+    if (rows.length > 21) throw createStoreError('Payment order data is invalid.')
+    const normalized = rows.map(normalize), orderNos = new Set(), requests = new Set()
+    for (let i = 0; i < normalized.length; i++) {
+      const { id, value } = normalized[i], previous = normalized[i - 1]
+      if (['closed', 'failed'].includes(value.paymentStatus) || value.deliveryStatus === 'delivered' || orderNos.has(value.orderNo) || requests.has(value.clientRequestId) ||
+          (previous && (previous.value.createdAt < value.createdAt || (previous.value.createdAt === value.createdAt && BigInt(previous.id) <= BigInt(id))))) throw createStoreError('Payment order data is invalid.')
+      orderNos.add(value.orderNo); requests.add(value.clientRequestId)
+    }
+    const orders = normalized.slice(0, 20).map((row) => row.value)
+    return { orders, nextCursor: normalized.length > 20 ? orders[19].orderNo : null }
+  }
+
   async function findByUserAndOrderNo(userIdValue, orderNoValue) {
     const userId = normalizeUserId(userIdValue)
     const orderNo = normalizeOrderNo(orderNoValue)
@@ -2204,6 +2249,7 @@ export function createVirtualPaymentStore(options = {}) {
 
   return Object.freeze({
     findByUserAndClientRequestId,
+    listRecoveryOrders,
     findByUserAndOrderNo,
     findTrustedWechatQueryPaidEvidence,
     createOrder,

@@ -1,5 +1,20 @@
 # Documentation
 
+## 2026-09-04：批次9订单发现与跨设备恢复（等待独立审查）
+
+- 基线a08363ebf1a2e8f3cc379fcac55c9c98dc945494；分支feature/virtual-payment-order-recovery。只增加发现入口，不改变批次1～8支付/对账/权益/发货状态语义，不增加依赖或migration。
+- GET /api/user/virtual-payment/orders/recovery，唯一可选query为cursor=orderNo；拒绝未知参数、重复/空/非法cursor。JWT用户取鉴权结果，沿用支付启用和sandbox测试用户门禁，仅查询sandbox/wechat_env=1。成功和错误均no-store/no-cache。
+- 正式Store只SELECT订单表的id/user_id/environment/wechat_env及7个摘要字段；归属、时间和三维状态关系逐行校验。无FOR UPDATE、不读事件或attempt/query、不调用微信或任何写操作。返回白名单：orderNo/clientRequestId/paymentStatus/entitlementStatus/deliveryStatus/createdAt/updatedAt；顶层orders/nextCursor，由Route增加ok:true。
+- 筛选payment不为closed/failed且delivery不为delivered，合法状态下覆盖initializing/pending/confirming、paid未granted（包括entitlement failed）、granted发货未完成及manual_review。发现只是提示和恢复索引，实际恢复仍从单笔GET开始；无法自动推进的状态只显示安全处理中提示。
+- 每页20条，SQL最多21条，created_at DESC/id DESC；下一页cursor为第20条orderNo，锚点按用户和sandbox读取且不受恢复状态筛选影响。完成后的锚点仍可翻页，不返回数据库内部ID。
+- Client严格校验完整字段集合、每页数量、ID格式与唯一性、三维状态关系、规范ISO时间/顺序、nextCursor类型及页尾关系；拒绝额外字段。发现记录强制mayHaveInvoked=true，当前用户/环境/后端决定storage归属。复用原全集归并算法，完整规范集合一次写回并读回确认；读回失败尝试恢复原记录，不继续操作。持续物理存储故障不能由应用保证写入成功，始终安全报错。
+- 页面首次进入仅发现第一页，与购买/查询共享原操作锁和epoch；不自动启动单笔GET、reconcile、entitlement或delivery。更多页由用户点击加载更多；失败保留本地记录并提供重试，失败或分页未完成时另购继续显示双单风险警告。退出、换账号/后端、旧epoch及旧finally不能写回或释放新操作锁。
+- 离线证据：Store/Service/Route专项、三份小程序专项、check:miniapp、check:server:delivery通过；原批次8重复记录/响应契约/生命周期回归通过。空storage发现pending、paid未granted、granted待发货、manual_review后两次恢复查询，旧订单支付调用均为0；明确另购只调用新订单支付。覆盖保存/读回失败、双向冲突、空页、分页、身份变化和迟到结果。
+- 真实MySQL 8.0.46/127.0.0.1:3308：正式Store订单集成及新增发现验收两次通过。40笔可恢复记录两页无重复/遗漏，同created_at以id稳定排序，游标变delivered后继续分页；用户/环境/状态隔离通过。EXPLAIN：type=ref，key=idx_virtual_payment_orders_user_created，rows=45，Extra=Using where; Backward index scan。没有为优化器新增索引或migration。
+- 清理：随机virtual_payment_order_test数据库已由套件验证删除；本轮容器及volume codex-vp9-recovery-b891已移除，3308无监听。两个旧容器保持原退出状态，未操作。只创建、清理隔离测试资源，未连接生产数据库。
+- 三个既有问题单独复跑仍失败且未修：会员525行LF/CRLF、Word API466行Object.keys(undefined/null)、购书福利preflight120行CRLF。JS/MJS、Vue script和package解析、git diff --check通过。
+- 未执行HBuilderX完整构建、微信开发者工具预览或真机sandbox；这些仍是上线前验收项，不用离线测试替代。未调用真实微信、部署、生产migration、暂存、提交、推送或合并；等待独立审查。
+
 ### 2026-07-21: Phase 2.3 entitlement business rules planning
 
 Decision:

@@ -195,6 +195,7 @@ export async function runVirtualPaymentOrderMysqlIntegration(env = process.env) 
         connectionLimit: 4
       })
       await testOrderStore(pool)
+      await testRecoveryStore(pool)
     }
   })
 }
@@ -202,6 +203,45 @@ export async function runVirtualPaymentOrderMysqlIntegration(env = process.env) 
 const isMainModule = Boolean(
   process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url
 )
+async function testRecoveryStore(pool) {
+  const store = createVirtualPaymentStore({ pool })
+  const created = []
+  for (let i = 0; i < 45; i++) created.push((await store.createOrder(input('501', `recovery-intent-${i}`))).order.orderNo)
+  for (let i = 0; i < 120; i++) await store.createOrder(input('502', `other-intent-${i}`))
+  const combinations = [
+    ['initializing', 'not_ready', 'not_ready'], ['pending', 'not_ready', 'not_ready'], ['confirming', 'not_ready', 'not_ready'],
+    ...['not_ready', 'pending', 'granting', 'retryable_failed', 'failed'].map((status) => ['paid', status, 'not_ready']),
+    ...['not_ready', 'pending', 'confirming', 'retryable_failed', 'manual_review'].map((status) => ['paid', 'granted', status])
+  ]
+  for (let i = 0; i < created.length; i++) await pool.execute('UPDATE virtual_payment_orders SET payment_status = ?, entitlement_status = ?, delivery_status = ? WHERE order_no = ?', [...combinations[i % combinations.length], created[i]])
+  await pool.execute("UPDATE virtual_payment_orders SET payment_status='closed', entitlement_status='not_ready', delivery_status='not_ready' WHERE order_no=?", [created[0]])
+  await pool.execute("UPDATE virtual_payment_orders SET payment_status='failed', entitlement_status='not_ready', delivery_status='not_ready' WHERE order_no=?", [created[1]])
+  await pool.execute("UPDATE virtual_payment_orders SET payment_status='paid', entitlement_status='granted', delivery_status='delivered' WHERE order_no=?", [created[2]])
+  await pool.execute("UPDATE virtual_payment_orders SET environment='production', wechat_env=0 WHERE order_no=?", [created[3]])
+  await pool.execute("UPDATE virtual_payment_orders SET wechat_env=0 WHERE order_no=?", [created[4]])
+  await pool.execute("UPDATE virtual_payment_orders SET created_at='2026-09-04 00:00:00', updated_at='2026-09-04 00:00:00'")
+  const [expected] = await pool.execute("SELECT order_no FROM virtual_payment_orders WHERE user_id=501 AND environment='sandbox' AND wechat_env=1 AND payment_status NOT IN ('closed','failed') AND delivery_status <> 'delivered' ORDER BY created_at DESC,id DESC")
+  const first = await store.listRecoveryOrders('501')
+  assert.equal(first.orders.length, 20); assert.equal(first.nextCursor, first.orders[19].orderNo)
+  await pool.execute("UPDATE virtual_payment_orders SET payment_status='paid', entitlement_status='granted', delivery_status='delivered' WHERE order_no=?", [first.nextCursor])
+  const second = await store.listRecoveryOrders('501', first.nextCursor)
+  assert.equal(second.orders.length, 20); assert.equal(second.nextCursor, null)
+  assert.deepEqual([...first.orders, ...second.orders].map((r) => r.orderNo), expected.map((r) => r.order_no))
+  assert.equal(new Set([...first.orders, ...second.orders].map((r) => r.orderNo)).size, 40)
+  assert(first.orders.concat(second.orders).some((r) => r.entitlementStatus === 'failed'))
+  assert(first.orders.concat(second.orders).some((r) => r.deliveryStatus === 'manual_review'))
+  for (const cursor of [created[3], created[4], `VP${'0'.repeat(30)}`]) await assert.rejects(store.listRecoveryOrders('501', cursor), { code: 'PAYMENT_REQUEST_INVALID' })
+  await assert.rejects(store.listRecoveryOrders('502', created[5]), { code: 'PAYMENT_REQUEST_INVALID' })
+  assert.deepEqual(await store.listRecoveryOrders('503'), { orders: [], nextCursor: null })
+  const [[before]] = await pool.query('SELECT COUNT(*) AS count, SUM(version) AS versions, MAX(updated_at) AS latest FROM virtual_payment_orders')
+  await store.listRecoveryOrders('501')
+  const [[after]] = await pool.query('SELECT COUNT(*) AS count, SUM(version) AS versions, MAX(updated_at) AS latest FROM virtual_payment_orders')
+  assert.deepEqual(after, before)
+  const [plan] = await pool.execute("EXPLAIN SELECT id,user_id,environment,wechat_env,order_no,client_request_id,payment_status,entitlement_status,delivery_status,created_at,updated_at FROM virtual_payment_orders WHERE user_id=? AND environment=? AND wechat_env=? AND payment_status NOT IN ('closed','failed') AND delivery_status <> 'delivered' ORDER BY created_at DESC,id DESC LIMIT 21", ['501', 'sandbox', 1])
+  console.log('Recovery EXPLAIN:', JSON.stringify(plan.map(({ type, key, rows, Extra }) => ({ type, key, rows, Extra }))))
+  assert(['idx_virtual_payment_orders_user_created', 'uk_virtual_payment_orders_user_request'].includes(plan[0].key))
+  console.log('Recovery MySQL 8.0.46: 40 rows, two stable pages, terminal cursor, ownership/environment/status isolation, no missing/duplicate orders, no writes passed.')
+}
 if (isMainModule) {
   await runVirtualPaymentOrderMysqlIntegration()
   console.log('Virtual payment order Store isolated MySQL tests passed with no database residue.')
