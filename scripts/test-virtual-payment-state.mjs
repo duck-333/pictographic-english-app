@@ -49,12 +49,15 @@ entitlementTransitions.forEach(([from, to, options]) => {
 const deliveryTransitions = [
   ['not_ready', 'pending'],
   ['pending', 'confirming'],
+  ['pending', 'delivered'],
   ['pending', 'retryable_failed'],
   ['pending', 'manual_review'],
   ['confirming', 'delivered'],
   ['confirming', 'retryable_failed'],
   ['confirming', 'manual_review'],
   ['retryable_failed', 'confirming'],
+  ['retryable_failed', 'pending'],
+  ['retryable_failed', 'delivered'],
   ['retryable_failed', 'manual_review']
 ]
 

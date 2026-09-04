@@ -213,6 +213,28 @@
 - 搜索、详情、首页推荐、发布/撤下及 published 过滤不受影响。
 - 运行完整项目检查与生产安全扫描。
 
+## 2026-09-02：虚拟支付批次7发货确认
+
+目标：
+- 在可信paid订单和已验证会员权益之后，通过可靠三阶段流程通知微信发货。
+- 用010 attempt与query-operation持久化租约模型处理并发、进程中断、迟到响应和网络不确定。
+- 空白2xx之外的notify结果默认不确定；当前明确拒绝白名单为空，任何不确定结果都不得自动重发，只能由序列化查单确认delivered或进入有限确认/manual review。
+- dispatch提交前必须在同一事务连接上重新验证完整paid证据、会员grant/流水/快照/账本和attempt/query历史；HTTP只能发生在事务及connection释放后。
+
+验收：
+- 客户端按字节有界流式读取，超限立即停止；HTTP、读取、解析及未知响应均进入uncertain。
+- 同订单同一时刻最多一个持久化query claim；租约接管后旧operation/version结果不得落库，query count只能由当前有效结果增加一次。
+- attempt号、状态组合、retry/query计数、归属和provider event均从完整历史重新验证，不能靠篡改计数或摘要恢复预算。
+- Client、状态机、migration、Store、Service和Route离线测试。
+- 批次1～7虚拟支付回归、身份登录、会员赠送和购书福利回归。
+- 隔离MySQL 8.0.46覆盖并发、唯一attempt、lease、回滚、affectedRows、commit/rollback/release、迟到响应、查单补偿和会员数据零变化。
+- 不调用真实微信，不运行生产migration，不暂存、提交、推送、合并或部署。
+
+状态：
+- 代码和自动化验收完成，等待独立攻击性复审。
+- 2026-09-04第三轮定向修复：终态关闭query、成功来源/时间、204清理、canonical逐字段校验、010精确结构及第二表失败恢复已实现并经隔离MySQL验收。批次7专项门禁通过；全局门禁保留既有失败，详见Documentation。等待第三次独立攻击性复审，不暂存/提交/推送/合并/部署。
+- 2026-09-04第四轮最小修复：只补引号感知generated expression比较和直接Node入口schema门禁；使用正式fixture、三种真实子进程入口及隔离MySQL验证。不扩大范围，完成后等待下一次独立复审。
+
 ## 每次长任务的标准流程
 
 1. 主代理读取 `AGENTS.md`、`Prompt.md`、`Plan.md`、`Documentation.md`。

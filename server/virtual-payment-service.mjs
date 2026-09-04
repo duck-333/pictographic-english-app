@@ -1,4 +1,5 @@
 import { getVirtualPaymentConfig, VIRTUAL_PAYMENT_PRODUCT } from './virtual-payment-config.mjs'
+import { normalizeVerifiedWechatDeliveryQueryFact } from './virtual-payment-delivery.mjs'
 import { normalizeVerifiedWechatQueryFact } from './virtual-payment-reconciliation.mjs'
 import { normalizeVirtualPaymentClientRequestId } from './virtual-payment-store.mjs'
 
@@ -13,6 +14,7 @@ const ALLOWED_CREATE_FIELDS = new Set([
 const ALLOWED_PLATFORMS = new Set(['android', 'harmony', 'windows'])
 const ALLOWED_RECONCILE_FIELDS = new Set(['authenticatedUserId', 'orderNo', 'loginCode'])
 const ALLOWED_ENTITLEMENT_FIELDS = new Set(['authenticatedUserId', 'orderNo'])
+const ALLOWED_DELIVERY_FIELDS = new Set(['authenticatedUserId', 'orderNo'])
 const ORDER_NUMBER_PATTERN = /^VP[A-F0-9]{30}$/
 const CANONICAL_UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
@@ -239,7 +241,13 @@ function mapDependencyError(error, fallbackCode = 'PAYMENT_SERVICE_UNAVAILABLE')
     'PAYMENT_ENTITLEMENT_INCOMPLETE',
     'PAYMENT_ENTITLEMENT_NOT_GRANTABLE',
     'PAYMENT_MEMBERSHIP_SCHEDULE_UNAVAILABLE',
-    'PAYMENT_MEMBERSHIP_GRANT_FAILED'
+    'PAYMENT_MEMBERSHIP_GRANT_FAILED',
+    'PAYMENT_DELIVERY_NOT_READY',
+    'PAYMENT_DELIVERY_CONFLICT',
+    'PAYMENT_DELIVERY_STALE_RESULT',
+    'PAYMENT_DELIVERY_MANUAL_REVIEW',
+    'PAYMENT_DELIVERY_QUERY_INVALID',
+    'PAYMENT_DELIVERY_QUERY_UNAVAILABLE'
   ])
   if (error && allowedCodes.has(error.code)) {
     return createServiceError(
@@ -534,10 +542,163 @@ export function createVirtualPaymentService(options = {}) {
     })
   }
 
+  function deliveryResponse(orderNo, deliveryStatus, options = {}) {
+    return Object.freeze({
+      orderNo,
+      paymentStatus: 'paid',
+      entitlementStatus: 'granted',
+      deliveryStatus,
+      idempotent: options.idempotent === true,
+      confirming: deliveryStatus === 'confirming',
+      manualReview: deliveryStatus === 'manual_review',
+      retryable: deliveryStatus === 'retryable_failed'
+    })
+  }
+
+  function deliveryNow() {
+    const value = options.now === undefined ? new Date() : options.now()
+    const date = value instanceof Date ? new Date(value.getTime()) : new Date(value)
+    if (!Number.isFinite(date.getTime())) {
+      throw createServiceError('Payment service is unavailable.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
+    }
+    return date
+  }
+
+  async function executeDeliveryNotify(userId, orderNo, attempt) {
+    const startedAt = deliveryNow()
+    try {
+      await store.markDeliveryDispatching(userId, orderNo, attempt.operationId, {
+        expectedProductId: config.productId,
+        now: startedAt
+      })
+    } catch (error) {
+      throw mapDependencyError(error)
+    }
+    try {
+      await options.virtualPaymentClient.notifyProvideGoods({ orderNo })
+    } catch (error) {
+      // The public WeChat contract does not currently document any error code that
+      // proves notify_provide_goods was rejected before acceptance. Therefore every
+      // non-success result is uncertain and must be reconciled without resending.
+      const errorCode = 'DELIVERY_NOTIFY_UNCERTAIN'
+      let result
+      try {
+        result = await store.finishDeliveryNotify(userId, orderNo, attempt.operationId, {
+          kind: 'uncertain',
+          errorCode,
+          now: deliveryNow()
+        })
+      } catch (storeError) {
+        throw mapDependencyError(storeError)
+      }
+      return deliveryResponse(orderNo, result.deliveryStatus)
+    }
+    let result
+    try {
+      result = await store.finishDeliveryNotify(userId, orderNo, attempt.operationId, {
+        kind: 'success',
+        now: deliveryNow()
+      })
+    } catch (error) {
+      // The persisted dispatching attempt is intentionally left for query-based recovery.
+      throw mapDependencyError(error)
+    }
+    return deliveryResponse(orderNo, result.deliveryStatus)
+  }
+
+  async function deliverOwnedOrder(input = {}) {
+    assertEnabled(config)
+    if (
+      !isPlainObject(input) || Object.keys(input).length !== ALLOWED_DELIVERY_FIELDS.size ||
+      [...ALLOWED_DELIVERY_FIELDS].some((key) => !Object.hasOwn(input, key)) ||
+      typeof input.orderNo !== 'string' || !ORDER_NUMBER_PATTERN.test(input.orderNo)
+    ) {
+      throw createServiceError('Payment request is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
+    }
+    const userId = normalizeUserId(input.authenticatedUserId)
+    assertAllowedUser(config, userId)
+    if (
+      typeof store.claimDeliveryWork !== 'function' ||
+      typeof store.markDeliveryDispatching !== 'function' ||
+      typeof store.finishDeliveryNotify !== 'function' ||
+      typeof store.applyDeliveryQueryFact !== 'function' ||
+      !options.virtualPaymentClient ||
+      typeof options.virtualPaymentClient.notifyProvideGoods !== 'function' ||
+      typeof options.virtualPaymentClient.queryOrder !== 'function'
+    ) {
+      throw createServiceError('Payment service is unavailable.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
+    }
+    let work
+    try {
+      work = await store.claimDeliveryWork(userId, input.orderNo, {
+        expectedProductId: config.productId,
+        now: deliveryNow()
+      })
+    } catch (error) {
+      throw mapDependencyError(error)
+    }
+    if (work.action === 'notify') {
+      return executeDeliveryNotify(userId, input.orderNo, work.attempt)
+    }
+    if (work.action === 'delivered') return deliveryResponse(input.orderNo, 'delivered', { idempotent: true })
+    if (work.action === 'manual_review') return deliveryResponse(input.orderNo, 'manual_review', { idempotent: true })
+    if (work.action === 'wait') return deliveryResponse(input.orderNo, work.order.deliveryStatus, { idempotent: true })
+    if (work.action !== 'query') {
+      throw createServiceError('Payment operation failed.', 'PAYMENT_DELIVERY_CONFLICT', 409)
+    }
+
+    if (!options.identityStore || typeof options.identityStore.findWechatOpenidByUserIdForPayment !== 'function') {
+      throw createServiceError('Payment service is unavailable.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
+    }
+    let openid
+    try {
+      openid = await options.identityStore.findWechatOpenidByUserIdForPayment(userId)
+    } catch {
+      throw createServiceError('Payment delivery query is unavailable.', 'PAYMENT_DELIVERY_QUERY_UNAVAILABLE', 503)
+    }
+    if (typeof openid !== 'string' || !openid) {
+      throw createServiceError('Payment delivery query is unavailable.', 'PAYMENT_DELIVERY_QUERY_UNAVAILABLE', 503)
+    }
+    let queryResult
+    try {
+      queryResult = await options.virtualPaymentClient.queryOrder({ openid, orderNo: input.orderNo })
+    } catch {
+      throw createServiceError('Payment delivery query is unavailable.', 'PAYMENT_DELIVERY_QUERY_UNAVAILABLE', 503)
+    }
+    let fact
+    try {
+      fact = normalizeVerifiedWechatDeliveryQueryFact(queryResult, work.order, {
+        queryOperationId: work.query.operationId,
+        querySequence: work.query.querySequence,
+        claimedOrderVersion: work.query.claimedOrderVersion,
+        now: deliveryNow().getTime()
+      })
+    } catch (error) {
+      if (error && error.code === 'PAYMENT_QUERY_STATUS_UNSUPPORTED') {
+        throw createServiceError('Payment delivery query requires review.', 'PAYMENT_DELIVERY_QUERY_INVALID', 409)
+      }
+      throw createServiceError('Payment delivery query is invalid.', 'PAYMENT_DELIVERY_QUERY_INVALID', 502)
+    }
+    let outcome
+    try {
+      outcome = await store.applyDeliveryQueryFact(userId, input.orderNo, fact, {
+        expectedProductId: config.productId,
+        now: deliveryNow()
+      })
+    } catch (error) {
+      throw mapDependencyError(error)
+    }
+    if (outcome.action === 'notify') {
+      return executeDeliveryNotify(userId, input.orderNo, outcome.attempt)
+    }
+    return deliveryResponse(input.orderNo, outcome.deliveryStatus, { idempotent: outcome.idempotent })
+  }
+
   return Object.freeze({
     createOrResumeOrder,
     getOwnedOrder,
     reconcileOwnedOrder,
-    grantOwnedOrderEntitlement
+    grantOwnedOrderEntitlement,
+    deliverOwnedOrder
   })
 }

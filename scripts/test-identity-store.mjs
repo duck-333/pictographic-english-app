@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 
 import {
+  createIdentityStore,
   hashPhone,
   maskPhone,
   normalizePhone,
@@ -109,9 +110,30 @@ function testResolveIdentityConflict() {
   )
 }
 
+async function testPaymentOpenidReverseLookup() {
+  let releases = 0
+  const store = createIdentityStore({
+    pool: {
+      async getConnection() {
+        return {
+          async execute(sql, values) {
+            assert.match(sql, /SELECT openid FROM `wechat_user_bindings` WHERE user_id = \? LIMIT 2/)
+            assert.deepEqual(values, ['42'])
+            return [[{ openid: 'openid-payment-42' }], []]
+          },
+          release() { releases += 1 }
+        }
+      }
+    }
+  })
+  assert.equal(await store.findWechatOpenidByUserIdForPayment('42'), 'openid-payment-42')
+  assert.equal(releases, 1)
+}
+
 testNormalizePhone()
 testHashPhone()
 testMaskPhone()
 testResolveIdentityConflict()
+await testPaymentOpenidReverseLookup()
 
 console.log('identity-store tests passed')

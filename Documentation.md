@@ -750,3 +750,46 @@ IDENTITY_STORE_ERROR
 → book-benefit-foundation
 → CAMPAIGN_PHONE_IDENTITY_HASH_SECRET
 ```
+
+## 2026-09-02：微信虚拟支付批次7发货确认
+
+- 使用微信官方支付轮询分支：批次5可信 `query_order` paid事实、批次6会员权益完成后，批次7才允许调用服务端 `notify_provide_goods`。
+- `notify_provide_goods`固定为官方HTTPS host/path，参数只放Query String：`access_token`、服务端订单号 `order_id`、沙箱 `env=1`；无业务JSON正文，不套用批次3的 `pay_sig`。
+- 只有完整读取、未超64 KiB且正文为空或仅空白的2xx响应才是成功。传输、TLS/socket、超时、请求中止、HTTP非2xx、读取失败、截断、超限、HTML、畸形JSON、未知JSON和任何非空2xx正文一律属于 `uncertain`。
+- 当前官方资料没有提供能够证明请求在被接受前失败的公共错误码，因此明确拒绝白名单为空；非零 `errcode` 也不能恢复自动notify资格。
+- notify响应使用真正的有界流读取：先检查可信Content-Length，再逐块累计字节，越限立即取消reader；不保存或向日志、错误及HTTP响应传播token或正文。
+- 010同时保存delivery attempt和持久化query operation。随机operation、每单递增attempt/query sequence、订单version绑定、租约和活动生成列唯一约束分别序列化notify与query；不保存token、URL、请求正文或微信原始响应。
+- 发货分为三个短阶段：事务内领取、事务外HTTP、事务内完成/记录不确定。任何数据库连接和行锁都不会跨越微信HTTP。
+- 网络不确定进入 `confirming`，用户点击、进程重启、租约到期或查到状态2都不能再次notify。只允许当前持久化query operation落库；租约接管产生更高sequence，旧operation的迟到结果只能作为stale丢弃。
+- 状态4且有效 `provide_time`完成delivered；状态2/3继续有界确认并最终进入manual review；退款、关闭、未知或无法安全确认的状态直接进入manual review。明确拒绝白名单为空期间不会创建第二笔notify attempt。
+- Store在真正dispatch前的同一短事务内重新锁定订单和完整attempt/query历史，独立重建paid及delivery canonical摘要，并再次调用 `verifyMembershipGrantInTransaction()`验证grant、会员流水、快照与完整账本；事务提交并释放connection后才允许HTTP。
+- 010为attempt/order、attempt/event以及query/order、query/attempt、query/event建立RESTRICT外键，并为活动claim、租约、历史扫描和operation/sequence建立索引及唯一约束。
+- delivery流程只调用批次6的 `verifyMembershipGrantInTransaction()`，不调用会员发放入口；MySQL测试逐表确认grant、会员流水、快照和quota累计字段不变。
+- 本批不实现 `xpay_goods_deliver_notify` webhook，不调用真实微信，不运行生产migration，不部署。
+
+### 2026-09-04：批次7第三轮定向修复与验收
+
+- 终态转换先在订单锁、同一事务/connection中关闭活动query（stale、completed_at、清空lease），再推进订单version。历史query保留原operation/sequence/version；manual_review/delivered不允许活动query。确认窗口耗尽后迟到状态2/4均stale，四张支付表快照不变；并发转换只增加一次version。
+- 010增加attempt `completion_source`、`claimed_at`、`finished_at`。direct_notify必须无query事件、query_count=0、success及合法dispatch/response/finish；query_confirmation必须绑定同attempt的applied状态4事件、正provide_time和独立重算的摘要。校验claimed <= dispatch <= finish、query claim <= observation <= completed；完成无活动lease。
+- Query持久化并独立重算：user_id、observed_environment、request_env、response_env_type、observed_currency、observed_order_no、observed_provider_order_id、observed_provider_transaction_id、wechat_status、order_type、order_amount_fen、paid_amount_fen、paid_at_seconds、provided_at_seconds、queried_at_seconds、operation_id、query_sequence、claimed_order_version、observation_id；另校验order_id/attempt_id关联。21个独立字段/关联篡改fixture均被拒绝，恢复原值后历史可正常读取。
+- Client接受原生204/null body、200空正文/空白正文；非法Content-Length、声明/读取超限、reader失败、非2xx均取消未消费资源；UTF-8错误在完整消费并释放后返回uncertain。cancel抛错不泄漏敏感值；真实ReadableStream超时取消/释放各一次、locked=false。
+- 正式只读schema验收为 `npm run check:virtual-payment-delivery-schema`，并通过 `predev:api`接入标准API启动（虚拟支付关闭时不连接DB）。Store发货前也在已有connection检查。直接执行server/index.mjs会绕过npm启动钩子，因此不得作为绕过验收的发布方式；本轮未部署/启动实际API。
+- `applyDeliveryMigration(connection)`只创建缺失表，前后执行exact-schema检查；已有错误结构返回固定 `PAYMENT_DELIVERY_SCHEMA_MISMATCH`，要求受控人工恢复，不自动DROP/ALTER。覆盖列顺序/类型/null/default、生成列表达式及STORED、索引唯一性/列顺序/可见性/方向、五个外键和引用/规则、引擎/排序规则。
+- MySQL 8.0.46仅127.0.0.1:3308随机数据库实跑：第二表故障后第一表精确残留，修复故障重跑与全新SHOW CREATE TABLE一致；仅第二表场景可续跑；缺字段/错误索引/缺外键/错误生成表达式/两表之一不完整均拒绝，正式启动验收函数亦拒绝。两份010逐字一致、UTF-8有效且无BOM。
+- MySQL还覆盖direct/query成功来源混淆、状态2伪成功、finished早于dispatch、跨订单关联、活动query终态关闭的affectedRows/commit/rollback故障（四表无部分推进）、release故障、同单并发、connectionLimit=1及不同用户不全局阻塞。会员权益快照/流水不变。
+- 离线：批次1～7、认证/手机号/identity、会员MVP（含管理员赠送）、migration/DATETIME/事务核心、购书福利其余回归通过；`check:server:delivery`、修改/新增MJS语法、package解析及git diff --check通过。
+- 既有问题不修复：`check:server`在membership-grant-schedule:525的LF/CRLF断言失败；单独Word API测试在:466 Object.keys(undefined/null)失败；book-benefit-production-preflight:120的LF断言失败。book-benefit-schema-manifest和production-exact-schema本次单独实跑通过，不把历史失败描述成本轮失败。
+- 状态：第三轮定向修复完成，等待第三次独立攻击性复审。全局check:server不宣称通过；未运行HBuilderX/微信开发者工具，未调用真实微信。独立复审明确通过前禁止暂存、提交、推送、合并和部署。
+- 清理已核验：随机测试数据库无残留；本轮容器及同名volume `codex-vp7-r3-f2c21ac9c386`已移除，3308无监听。两个旧容器保持原退出状态，未启动/停止/修改。分支仍为feature/virtual-payment-delivery-confirmation，HEAD/master/origin/master均为8077e5c91dc355db7ed3cb0ca48dfd39afdbacf1，暂存区为空。
+
+### 2026-09-04：批次7第四轮最小修复
+
+- 仅修改generated expression比较与真实启动入口，不调整状态机、attempt/query/canonical或010，不新增表、状态、011或依赖。
+- 表达式按引号感知token比较：字面量、反引号标识符内容（空格/大小写/转义）原样保留；引号外忽略空白并统一关键字大小写。仅兼容MySQL输出的_utf8mb4字面量引导符、转义的字面量定界符、整个表达式/完整WHEN条件的冗余括号，IN列表和其他token保持精确比较。
+- 正式assertDeliverySchema离线fixture：原始表达式与外部空白变化通过；claim ed、前后空格、Claimed、另一状态值、CASE条件、返回列、引用标识符内容和转义字面量变化均以固定脱敏schema mismatch拒绝。大小写采用更保守的精确合同比较，不依赖当前case-insensitive collation放宽。
+- 覆盖上一轮启动说明：server/index.mjs实际直接启动路径在listen之前await同一个checkVirtualPaymentDeliverySchema，失败固定输出API_STARTUP_CHECK_FAILED并非零退出。遵循既有VIRTUAL_PAYMENT_ENABLED；移除predev:api重复钩子，保留独立只读验收命令和Store同connection检查。未运行migration或自动修表。
+- 隔离MySQL8.0.46/127.0.0.1:3308测试：实际ALTER generated expression为claim ed后正式校验器与Store拒绝，notify=0，恢复后通过。npm run dev:api、直接Node、PM2等价直接Node（不是安装PM2）均实跑正确schema监听、缺010表/错误表达式/缺外键/数据库错误不监听且非零退出，输出不含测试凭据、token、SQL或连接串。
+- connection清理：离线注入查询错误后唯一connection结束一次；真实启动检查完成后数据库PROCESSLIST不残留启动连接。测试服务使用随机本地端口并在结束后释放；Windows测试需允许终止其专用子进程树。
+- 本轮专项离线及原有批次7MySQL套件通过；check:server:delivery、MJS语法、package解析、git diff --check通过。check:server仍在会员525行LF/CRLF断言失败；单独复跑Word466行Object.keys异常、购书福利preflight120行CRLF断言仍失败，未修改。
+- 完成后等待下一次独立复审，不暂存、提交、推送、合并、部署；未调用真实微信或连接生产数据库。
+- 第四轮最终套件通过（Store明确返回schema mismatch，Service按既有规则映射为PAYMENT_SERVICE_UNAVAILABLE，notify=0）。随机测试数据库已清理；本轮专用容器/volume为codex-vp7-r4-ae8d1047，验收后移除。首轮沙箱禁止taskkill导致的测试子进程已经精确核对父子关系后清理，没有操作其他Node进程。

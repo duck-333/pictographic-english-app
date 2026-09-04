@@ -68,3 +68,20 @@
 - OpenAI 官方长任务建议：把目标、计划、状态沉到仓库文件中，让长任务可以跨会话、跨代理持续推进。
 - 官方文章：[Run long-horizon tasks with Codex](https://developers.openai.com/blog/run-long-horizon-tasks-with-codex)
 - 官方 AGENTS 说明：[AGENTS.md](https://developers.openai.com/codex/guides/agents-md)
+
+## 2026-09-02 当前开发目标
+
+- 完成微信虚拟支付批次7：仅在批次5可信paid事实和批次6会员权益完整性均通过后，可靠调用 `notify_provide_goods`。
+- 仅完整空白2xx算notify成功；当前明确拒绝白名单为空，其他传输、HTTP、读取、超限、解析和未知响应全部进入uncertain，永不自动再次notify。
+- 用持久化、单执行者、operation/sequence/version绑定的query claim补偿确认；迟到查询不得覆盖新查询、新attempt、delivered或manual review。
+- 真正dispatch前在同一短事务中重新验证paid canonical证据、会员grant/流水/快照/账本和完整attempt/query历史，提交并释放connection后才调用HTTP。
+- 本批不重新发放会员、不实现消息推送webhook、不调用真实微信、不运行生产migration或部署。
+
+### 2026-09-04 批次7第三轮边界
+
+- 仅修复终态活动query、成功来源和时间证据、204/资源清理、持久化canonical及010精确结构与部分迁移恢复，并补真实MySQL攻击验收。
+- 保持批次5/6规则和UI不变，不创建011，不修既有CRLF/Word API/购书福利门禁问题；完成后停止，等待第三次独立复审，禁止提交。
+
+### 2026-09-04 批次7第四轮边界
+
+- 只修generated expression的引号感知比较，以及server/index.mjs监听前复用schema检查；不扩展数据模型、一致性理论攻击范围或既有门禁修复。专项验收后停止，等待独立复审，不提交或部署。

@@ -13,6 +13,7 @@ import { createVirtualPaymentRoutes } from './virtual-payment-routes.mjs'
 import { createWechatLoginClient } from './wechat-login.mjs'
 import { toBasicWord, toFullWord } from './word-access-policy.mjs'
 import { createWordStore } from './word-store.mjs'
+import { checkVirtualPaymentDeliverySchema } from '../scripts/check-virtual-payment-delivery-schema.mjs'
 
 const DEFAULT_PORT = 3001
 const DEFAULT_HOST = '0.0.0.0'
@@ -1930,5 +1931,11 @@ export function startServer(options = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  startServer()
+  try {
+    await checkVirtualPaymentDeliverySchema()
+    startServer()
+  } catch {
+    console.error('API_STARTUP_CHECK_FAILED: schema/configuration check failed; controlled recovery required.')
+    process.exitCode = 1
+  }
 }

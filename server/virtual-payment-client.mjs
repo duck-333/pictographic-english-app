@@ -68,6 +68,19 @@ function normalizeOrderReference(input, options = {}) {
   })
 }
 
+function normalizeNotifyReference(input) {
+  if (
+    !isPlainObject(input) ||
+    Object.keys(input).length !== 1 ||
+    !Object.hasOwn(input, 'orderNo') ||
+    typeof input.orderNo !== 'string' ||
+    !ORDER_NUMBER_PATTERN.test(input.orderNo)
+  ) {
+    throw createClientError('Virtual payment order reference is invalid.', 'VIRTUAL_PAYMENT_ORDER_REFERENCE_INVALID', 400)
+  }
+  return Object.freeze({ orderNo: input.orderNo })
+}
+
 function assertEnabledSandbox(config) {
   if (!config || !config.enabled) {
     throw createClientError('Virtual payment is disabled.', 'VIRTUAL_PAYMENT_DISABLED', 503)
@@ -92,7 +105,7 @@ function createRequestBody(reference) {
   })
 }
 
-async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
+async function fetchWithTimeout(fetchImpl, url, options, timeoutMs, consumeResponse) {
   const controller = new AbortController()
   let timeoutId
   const timeoutPromise = new Promise((resolve, reject) => {
@@ -103,46 +116,115 @@ async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
   })
   try {
     return await Promise.race([
-      Promise.resolve().then(() => fetchImpl(url, {
-        ...options,
-        signal: controller.signal
-      })),
+      Promise.resolve().then(async () => {
+        const response = await fetchImpl(url, { ...options, signal: controller.signal })
+        return consumeResponse(response, controller.signal)
+      }),
       timeoutPromise
     ])
   } catch (error) {
     if (error && error.code === 'VIRTUAL_PAYMENT_CLIENT_TIMEOUT') throw error
+    if (error && typeof error.code === 'string' && error.code.startsWith('VIRTUAL_PAYMENT_')) throw error
     throw createClientError('Wechat virtual payment service is unavailable.', 'VIRTUAL_PAYMENT_CLIENT_UNAVAILABLE', 503)
   } finally {
     clearTimeout(timeoutId)
   }
 }
 
-async function readWechatResponseBody(response) {
-  if (!response || typeof response.status !== 'number' || typeof response.text !== 'function') {
+async function readWechatResponseBody(response, signal) {
+  if (!response || !Number.isInteger(response.status)) {
+    try { await response?.body?.cancel() } catch {}
     throw createClientError('Wechat virtual payment response is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
   }
   if (response.status < 200 || response.status >= 300) {
+    try { await response.body?.cancel() } catch {}
     throw createClientError('Wechat virtual payment request failed.', 'VIRTUAL_PAYMENT_HTTP_ERROR')
   }
-  const contentLength = Number(response.headers && response.headers.get && response.headers.get('content-length'))
-  if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+  let contentLengthValue
+  try {
+    contentLengthValue = response.headers && typeof response.headers.get === 'function'
+      ? response.headers.get('content-length') : null
+  } catch {
+    try { await response.body?.cancel() } catch {}
+    throw createClientError('Wechat virtual payment response is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
+  }
+  const contentLength = contentLengthValue === null ? null : Number(contentLengthValue)
+  if (contentLength !== null && (!/^\d+$/.test(contentLengthValue) || !Number.isSafeInteger(contentLength) || contentLength < 0)) {
+    try { await response.body?.cancel() } catch {}
+    throw createClientError('Wechat virtual payment response is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
+  }
+  if (contentLength !== null && contentLength > MAX_RESPONSE_BYTES) {
+    try { await response.body?.cancel() } catch {}
     throw createClientError('Wechat virtual payment response is too large.', 'VIRTUAL_PAYMENT_RESPONSE_TOO_LARGE')
   }
-
-  let raw
+  if (response.body === null) {
+    if (contentLength !== null && contentLength !== 0) {
+      throw createClientError('Wechat virtual payment response is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
+    }
+    return ''
+  }
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    try { await response.body?.cancel() } catch {}
+    throw createClientError('Wechat virtual payment response is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
+  }
+  let reader
+  const chunks = []
+  let byteLength = 0
+  let completed = false
+  let cancelled = false
+  const cancelReader = async () => {
+    if (cancelled || !reader) return
+    cancelled = true
+    try { await reader.cancel() } catch {}
+  }
+  const onAbort = () => { void cancelReader() }
   try {
-    raw = await response.text()
+    reader = response.body.getReader()
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) throw new Error('Aborted response.')
+    while (true) {
+      const result = await reader.read()
+      if (!result || typeof result.done !== 'boolean') {
+        throw new Error('Invalid response stream result.')
+      }
+      if (signal?.aborted) throw new Error('Aborted response.')
+      if (result.done) { completed = true; break }
+      if (!(result.value instanceof Uint8Array)) {
+        throw new Error('Invalid response stream chunk.')
+      }
+      byteLength += result.value.byteLength
+      if (byteLength > MAX_RESPONSE_BYTES) {
+        await cancelReader()
+        throw createClientError('Wechat virtual payment response is too large.', 'VIRTUAL_PAYMENT_RESPONSE_TOO_LARGE')
+      }
+      chunks.push(result.value)
+    }
+  } catch {
+    if (byteLength > MAX_RESPONSE_BYTES) {
+      throw createClientError('Wechat virtual payment response is too large.', 'VIRTUAL_PAYMENT_RESPONSE_TOO_LARGE')
+    }
+    throw createClientError('Wechat virtual payment response is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
+    if (!reader) { try { await response.body?.cancel() } catch {} }
+    if (!completed) await cancelReader()
+    try { reader?.releaseLock() } catch {}
+  }
+  const bytes = new Uint8Array(byteLength)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   } catch {
     throw createClientError('Wechat virtual payment response is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
   }
-  if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > MAX_RESPONSE_BYTES) {
-    throw createClientError('Wechat virtual payment response is too large.', 'VIRTUAL_PAYMENT_RESPONSE_TOO_LARGE')
-  }
-  return raw
 }
 
-async function readWechatJson(response) {
-  const raw = await readWechatResponseBody(response)
+async function readWechatJson(response, signal) {
+  const raw = await readWechatResponseBody(response, signal)
   if (!raw) {
     throw createClientError('Wechat virtual payment response is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
   }
@@ -169,11 +251,12 @@ async function readWechatJson(response) {
   return payload
 }
 
-async function requireEmptyWechatResponse(response) {
-  const raw = await readWechatResponseBody(response)
-  if (raw.trim()) {
-    throw createClientError('Wechat virtual payment response is unexpected.', 'VIRTUAL_PAYMENT_UNEXPECTED_RESPONSE')
-  }
+async function requireEmptyWechatResponse(response, signal) {
+  const raw = await readWechatResponseBody(response, signal)
+  if (!raw.trim()) return
+  // There is currently no documented public errcode that proves the request was
+  // rejected before WeChat could accept it. Keep the explicit-rejection allowlist empty.
+  throw createClientError('Wechat virtual payment response is unexpected.', 'VIRTUAL_PAYMENT_UNEXPECTED_RESPONSE')
 }
 
 function optionalInteger(value, fieldName) {
@@ -261,18 +344,20 @@ export function createVirtualPaymentClient(options = {}) {
     const requestUrl = new URL(path, WECHAT_API_ORIGIN)
     requestUrl.searchParams.set('access_token', accessToken)
     for (const [key, value] of Object.entries(query)) requestUrl.searchParams.set(key, value)
-    const response = await fetchWithTimeout(fetchImpl, requestUrl, {
+    return fetchWithTimeout(fetchImpl, requestUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json; charset=utf-8'
       },
-      body: requestBody
-    }, timeoutMs)
-    if (options.expectEmptyResponse) {
-      await requireEmptyWechatResponse(response)
-      return null
-    }
-    return readWechatJson(response)
+      ...(requestBody === undefined ? {} : { body: requestBody }),
+      redirect: 'error'
+    }, timeoutMs, async (response, signal) => {
+      if (options.expectEmptyResponse) {
+        await requireEmptyWechatResponse(response, signal)
+        return null
+      }
+      return readWechatJson(response, signal)
+    })
   }
 
   async function queryOrder(input = {}) {
@@ -286,11 +371,11 @@ export function createVirtualPaymentClient(options = {}) {
 
   async function notifyProvideGoods(input = {}) {
     assertEnabledSandbox(config)
-    const reference = normalizeOrderReference(input)
-    const requestBody = reference.orderNo
-      ? JSON.stringify({ order_id: reference.orderNo, env: 1 })
-      : JSON.stringify({ wx_order_id: reference.wechatOrderId, env: 1 })
-    await postWechat(NOTIFY_PROVIDE_GOODS_PATH, requestBody, {}, { expectEmptyResponse: true })
+    const reference = normalizeNotifyReference(input)
+    await postWechat(NOTIFY_PROVIDE_GOODS_PATH, undefined, {
+      order_id: reference.orderNo,
+      env: '1'
+    }, { expectEmptyResponse: true })
     return Object.freeze({ accepted: true })
   }
 

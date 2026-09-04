@@ -52,10 +52,10 @@ const ENTITLEMENT_TRANSITIONS = new Map([
 
 const DELIVERY_TRANSITIONS = new Map([
   ['not_ready', new Set(['pending'])],
-  ['pending', new Set(['confirming', 'retryable_failed', 'manual_review'])],
+  ['pending', new Set(['confirming', 'delivered', 'retryable_failed', 'manual_review'])],
   ['confirming', new Set(['delivered', 'retryable_failed', 'manual_review'])],
   ['delivered', new Set()],
-  ['retryable_failed', new Set(['confirming', 'manual_review'])],
+  ['retryable_failed', new Set(['pending', 'confirming', 'delivered', 'manual_review'])],
   ['manual_review', new Set()]
 ])
 

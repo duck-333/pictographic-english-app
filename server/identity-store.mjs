@@ -697,6 +697,54 @@ export function createIdentityStore(options = {}) {
     return result
   }
 
+  async function findWechatOpenidByUserIdForPayment(userIdValue) {
+    let userId
+    try {
+      userId = normalizePaymentBindingUserId(userIdValue)
+    } catch {
+      throw createPaymentIdentityAmbiguousError()
+    }
+    let connection = null
+    let result = null
+    let pendingError = null
+    try {
+      connection = await getPool().getConnection()
+      const executionResult = await connection.execute(
+        `SELECT openid FROM ${quoteIdentifier(WECHAT_BINDINGS_TABLE)} WHERE user_id = ? LIMIT 2`,
+        [userId]
+      )
+      if (!Array.isArray(executionResult) || !Array.isArray(executionResult[0])) {
+        throw createPaymentIdentityAmbiguousError()
+      }
+      const rows = executionResult[0]
+      if (rows.length === 0) {
+        result = null
+      } else if (
+        rows.length !== 1 || !rows[0] || typeof rows[0] !== 'object' ||
+        typeof rows[0].openid !== 'string' || !rows[0].openid ||
+        rows[0].openid.length > 128 || /[\s\u0000-\u001f\u007f]/u.test(rows[0].openid)
+      ) {
+        throw createPaymentIdentityAmbiguousError()
+      } else {
+        result = rows[0].openid
+      }
+    } catch (error) {
+      pendingError = error && error.code === 'WECHAT_IDENTITY_AMBIGUOUS'
+        ? createPaymentIdentityAmbiguousError()
+        : createPaymentIdentityQueryError()
+    } finally {
+      if (connection) {
+        try {
+          await connection.release()
+        } catch {
+          pendingError = createPaymentIdentityQueryError()
+        }
+      }
+    }
+    if (pendingError) throw pendingError
+    return result
+  }
+
   async function resolveWechatPhoneIdentity(identity = {}) {
     const openid = normalizeString(identity.openid)
     const unionid = normalizeString(identity.unionid)
@@ -861,6 +909,7 @@ export function createIdentityStore(options = {}) {
 
   return {
     findWechatBindingForPayment,
+    findWechatOpenidByUserIdForPayment,
     resolveWechatPhoneIdentity
   }
 }
