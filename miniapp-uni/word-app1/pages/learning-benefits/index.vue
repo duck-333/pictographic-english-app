@@ -47,7 +47,7 @@ export default {
   },
   computed: {
     pendingRecord() { return this.records.find((r) => !['granted', 'delivered', 'manual_review', 'closed', 'failed'].includes(r.hint)) || null },
-    expiryText() { return String(this.entitlement.membershipExpireAt || '').slice(0, 10) }
+    expiryText() { return String((this.entitlement && this.entitlement.membershipExpireAt) || '').slice(0, 10) }
   },
   onShow() {
     if (this.pageDisposed) return

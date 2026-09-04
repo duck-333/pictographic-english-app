@@ -19,7 +19,8 @@ function getEnvApiBaseUrl() {
 }
 
 function normalizeApiBaseUrl(value) {
-  return String(value || '').trim().replace(/\/+$/, '')
+  if (typeof value !== 'string') return ''
+  return value.trim().replace(/\/+$/, '')
 }
 
 export function isDevelopmentApiBaseUrl(value) {
@@ -37,5 +38,6 @@ export function getWordApiBaseUrl(options = {}) {
     ? options.apiBaseUrl
     : getEnvApiBaseUrl()
   const candidate = normalizeApiBaseUrl(configured)
-  return isDevelopmentApiBaseUrl(candidate) ? candidate : PRODUCTION_WORD_API_BASE_URL
+  // An unconfigured development preview must never fall back to production.
+  return isDevelopmentApiBaseUrl(candidate) ? candidate : 'https://sandbox.invalid'
 }

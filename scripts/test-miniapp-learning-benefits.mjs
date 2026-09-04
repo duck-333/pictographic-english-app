@@ -30,6 +30,17 @@ const component = (await import(`data:text/javascript,${encodeURIComponent(scrip
 const page = component.data()
 for (const [name, fn] of Object.entries(component.methods)) page[name] = fn.bind(page)
 for (const [name, fn] of Object.entries(component.computed)) Object.defineProperty(page, name, { get: () => fn.call(page) })
+const renewalCondition = benefits.match(/<text v-if="([^"]+)" class="note">购买后顺延30天/)[1]
+const showsRenewal = new Function('entitlement', `return Boolean(${renewalCondition})`)
+for (const entitlement of [null, undefined, {}, { membershipActive: false }]) {
+  page.entitlement = entitlement
+  assert.equal(page.expiryText, '')
+  assert.equal(showsRenewal(entitlement), false)
+}
+page.entitlement = { membershipActive: true, membershipExpireAt: '2026-10-04T00:00:00.000Z' }
+assert.equal(page.expiryText, '2026-10-04')
+assert.equal(showsRenewal(page.entitlement), true)
+page.entitlement = null
 page.records = [{ hint: 'granted' }, { hint: 'unknown' }]
 assert.equal(page.pendingRecord.hint, 'unknown')
 page.records = [{ hint: 'granted' }, { hint: 'manual_review' }]
@@ -93,6 +104,28 @@ assert(benefits.includes('加载更多') && benefits.includes('重新查找购�
   assert.equal(JSON.stringify({ nextCursor: page.nextCursor, discoveryFailed: page.discoveryFailed, records: page.records, busy: page.busy }), snapshot)
 }
 console.log('Recovery page: manual pagination and unloaded discovery responses passed.')
+
+// Actual refresh failure must preserve unknown membership, including late failure after unload.
+for (const unload of [false, true]) {
+  const entry = component.data()
+  for (const [name, fn] of Object.entries(component.methods)) entry[name] = fn.bind(entry)
+  let rejectRefresh
+  entry.purchase = { list: () => [], dispose() {},
+    discover: async () => ({ ok: true, orders: [], nextCursor: null }),
+    api: { context: () => ({}), refresh: () => new Promise((resolve, reject) => { rejectRefresh = reject }) } }
+  const pending = entry.refresh()
+  while (!rejectRefresh) await Promise.resolve()
+  if (unload) component.onUnload.call(entry)
+  const snapshot = JSON.stringify(entry)
+  rejectRefresh(new Error('sandbox.invalid blocked'))
+  await pending
+  assert.equal(entry.entitlement, null)
+  assert.equal(component.computed.expiryText.call(entry), '')
+  assert.equal(showsRenewal(entry.entitlement), false)
+  if (unload) assert.equal(JSON.stringify(entry), snapshot)
+  else assert(entry.availabilityMessage && !entry.availabilityMessage.includes('sandbox.invalid'))
+}
+console.log('Entitlement null/undefined/empty/nonmember/active and refresh failure/late unloaded failure passed.')
 
 {
   const entry = component.data(), savedUni = globalThis.uni
