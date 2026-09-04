@@ -296,6 +296,7 @@
       <view class="empty-mark">象</view>
       <text class="empty-title">{{ notFoundTitle }}</text>
       <text class="empty-description">{{ notFoundDescription }}</text>
+      <button v-if="quotaInsufficientFallback" class="access-lock-button" @tap="handleAccessLockAction">开通会员或获取更多次数</button>
     </view>
 
     <bottom-nav current="/pages/index/index" />
@@ -409,6 +410,8 @@ export default {
       loading: true,
       loadErrorMessage: '',
       wordAccessClientRequestId: '',
+      refreshAccessOnReturn: false,
+      quotaInsufficientFallback: false,
       notFoundQuery: '',
       notFoundTitle: '暂未收录这个单词',
       notFoundDescription: '这个单词还没有讲解内容。'
@@ -421,6 +424,12 @@ export default {
   onUnload() {
     this.clearClipPlaybackTimer()
     this.destroyPronunciationAudio()
+  },
+  onShow() {
+    if (this.refreshAccessOnReturn) {
+      this.refreshAccessOnReturn = false
+      this.loadWord({ id: this.word && this.word.id || this.notFoundQuery })
+    }
   },
   onHide() {
     this.pauseActiveClip()
@@ -720,6 +729,7 @@ export default {
 
       this.loading = true
       this.loadErrorMessage = ''
+      this.quotaInsufficientFallback = false
       this.word = null
       this.notFoundQuery = raw
       this.notFoundTitle = '词条暂未发布或已下架'
@@ -740,6 +750,7 @@ export default {
         }
       } catch (error) {
         if (isQuotaInsufficientError(error)) {
+          this.quotaInsufficientFallback = true
           this.notFoundTitle = '剩余查词次数不足'
           this.notFoundDescription = '剩余查词次数不足，请购买会员或获取更多权益。'
           if (typeof uni !== 'undefined' && uni && typeof uni.showToast === 'function') {
@@ -874,7 +885,9 @@ export default {
       if (this.word && this.word.id) {
         savePendingWordId(this.word.id)
       }
-      this.goMine()
+      if (this.isLoginRequiredAccess) { this.goMine(); return }
+      this.refreshAccessOnReturn = true
+      uni.navigateTo({ url: '/pages/learning-benefits/index' })
     },
     handlePartTap(event) {
       const dataset = event && event.currentTarget ? event.currentTarget.dataset : {}

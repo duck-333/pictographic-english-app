@@ -9,6 +9,10 @@
       }
     },
     {
+      "path": "pages/learning-benefits/index",
+      "style": { "navigationBarTitleText": "获取学习权益", "navigationBarBackgroundColor": "#f0f9ff", "navigationBarTextStyle": "black" }
+    },
+    {
       "path": "pages/word-detail/index",
       "style": {
         "navigationBarTitleText": "单词详情",

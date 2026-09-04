@@ -95,6 +95,11 @@
       </view>
     </view>
 
+    <view class="section">
+      <text class="section-title">获取学习权益</text>
+      <button class="book-benefit-primary-button" @tap="openLearningBenefits">获取学习权益</button>
+    </view>
+
     <view class="section book-benefit-redeem-card">
       <view class="section-head">
         <text class="section-title">兑换30天学习权益</text>
@@ -296,6 +301,7 @@ export default {
     this.refreshData()
   },
   methods: {
+    openLearningBenefits() { uni.navigateTo({ url: '/pages/learning-benefits/index' }) },
     async refreshData() {
       const favoriteLoadToken = this.favoriteLoadToken + 1
       const recentLoadToken = this.recentLoadToken + 1

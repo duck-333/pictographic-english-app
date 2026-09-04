@@ -89,7 +89,7 @@ function requestJson(path, options = {}) {
   })
 }
 
-function requestWechatLoginCode(options = {}) {
+export function requestWechatLoginCode(options = {}) {
   if (!hasUniApi('login')) {
     return Promise.reject(createAuthError('Wechat login is not available in this runtime.', {
       code: 'WECHAT_LOGIN_UNAVAILABLE'

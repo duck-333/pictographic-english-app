@@ -237,6 +237,19 @@
 
 ## 每次长任务的标准流程
 
+### 2026-09-04 批次8实施与验收状态
+
+- 第二轮聚焦修复：补create支付参数早期校验、entitlement时间/boolean、delivery boolean与状态对应关系；表驱动非法响应全部停止，已通过的记录归并和生命周期保持原实现。等待下一次聚焦独立复审，不提交。
+
+- 第一次审查定向修复：完成记录全集归并/双向唯一映射、端点响应状态校验、Controller和页面生命周期代次隔离。原true+false重付、GET缺deliveryStatus、pause/resume/卸载迟到结果与共享锁fixture通过。只等待聚焦独立复审，不扩大服务端或安全设计。
+
+- 已实现：学习权益页面及两处入口、sandbox支付Client、单操作购买编排、多订单本地恢复、明确另购确认、原支付参数透传和granted优先刷新。
+- 每次操作只执行有限的GET及必要reconcile/entitlement/delivery，不设置后台无限轮询；离页后停止后续请求，回来手动查询。已标记可能拉起支付的订单只查询。
+- 三份新增离线测试接入test:miniapp:purchase及check:miniapp，覆盖方法/鉴权/正文、保存失败、取消/未知/明确另购、多单及用户环境隔离、幂等恢复、平台限制及页面生命周期。
+- check:miniapp、check:server:delivery、会员MVP和购书福利兑换/UI回归通过。全局check:server与三个既有失败的具体结果记录在Documentation，不修无关问题。
+- 本轮仅完成JS/MJS和Vue脚本语法验证，未执行HBuilderX完整编译或微信开发者工具预览；后续必须按正确源码目录编译并验证页面与sandbox真机行为，不把离线测试描述为真机验收。
+- 批次9上线前必须补跨设备/清空storage的服务端订单找回能力。当前等待独立代码审查，未暂存、提交、推送或部署。
+
 1. 主代理读取 `AGENTS.md`、`Prompt.md`、`Plan.md`、`Documentation.md`。
 2. 主代理确认本次只做哪个阶段、哪些文件可以改。
 3. 如需并行，主代理分配 3-5 个子代理，并写清每个子代理的文件边界。

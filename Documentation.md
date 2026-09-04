@@ -793,3 +793,34 @@ IDENTITY_STORE_ERROR
 - 本轮专项离线及原有批次7MySQL套件通过；check:server:delivery、MJS语法、package解析、git diff --check通过。check:server仍在会员525行LF/CRLF断言失败；单独复跑Word466行Object.keys异常、购书福利preflight120行CRLF断言仍失败，未修改。
 - 完成后等待下一次独立复审，不暂存、提交、推送、合并、部署；未调用真实微信或连接生产数据库。
 - 第四轮最终套件通过（Store明确返回schema mismatch，Service按既有规则映射为PAYMENT_SERVICE_UNAVAILABLE，notify=0）。随机测试数据库已清理；本轮专用容器/volume为codex-vp7-r4-ae8d1047，验收后移除。首轮沙箱禁止taskkill导致的测试子进程已经精确核对父子关系后清理，没有操作其他Node进程。
+
+### 2026-09-04：批次8小程序购买接入（等待独立审查）
+
+#### 第一次审查后的三项最小修复
+
+第二轮端点契约补齐（覆盖上一轮“必要字段”尚不完整的描述）：
+- 只补客户端校验与fixture；记录归并、epoch/pause/resume/dispose和页面隔离未重构。create进入编排即复用validatePaymentParams检查mode、signData和两个64位小写hex签名的严格字符串类型及原有payload约束，原生调用前仍复用同一函数；不改字符串、不补默认值。
+- entitlement增加membershipStartedAt/membershipExpiresAt严格toISOString字符串格式及start < end，idempotent严格boolean；不要求deliveryStatus、不重新计算30天账本。delivery增加四个严格boolean，confirming/manualReview/retryable分别且仅当状态为confirming/manual_review/retryable_failed时为true，其余状态三者全false。
+- 表驱动非法fixture：create 43、GET 18、reconcile 18、entitlement 29、delivery 49项全部拒绝，拒绝响应后新增网络/原生调用全部为0。完整购买测试中的累计invoke/reconcile/entitlement/refresh/delivery分别为0/0/0/0/0、1/0/0/0/0、1/1/0/0/0、1/1/1/0/0、1/1/1/1/1；delivery收到错误前会员已可靠granted并刷新，保留该事实、不写delivered成功。
+- 正常四种delivery状态、支付参数原样传递、所有原重复记录/生命周期fixture保持通过。第二轮仅修改两个实现JS、两个测试MJS及项目文档。check:miniapp、check:server:delivery、三份专项、JS/MJS与Vue脚本语法、package解析及git diff --check通过；三个既有门禁问题仍保留，HBuilderX/微信预览仍待sandbox联调前验证。未改服务端/migration、未暂存提交推送部署或真实微信调用。
+
+- 恢复记录先校验整个集合，再按clientRequestId归并并反向检查orderNo唯一归属。同意图允许空orderNo与已知orderNo归并；mayHaveInvoked取OR、创建时间取最早、更新时间取最新，冲突提示重建为unknown。完整校验后才写回规范集合，写回失败停止；冲突/损坏不删除，固定提示“本地购买记录异常，请查询订单或联系客服”。
+- 原始true/false攻击fixture两种顺序及三条重复记录均规范为一条true；包括首次支付在内原生调用总数始终为1。两种ID映射冲突、归属/类型损坏、归并写回失败均在创建/支付前拒绝；正常多订单仍通过。
+- 按端点拆分编排所需响应校验：create/GET/reconcile要求orderNo及paymentStatus、entitlementStatus、deliveryStatus，校验枚举和跨状态关系；entitlement只要求其正式orderNo、paid/granted，不要求deliveryStatus；delivery要求paid/granted和合法deliveryStatus。支付参数仍在原生调用前按既有规则校验，不补缺省状态。
+- GET paid/granted但deliveryStatus缺失、类型错、未知或矛盾时固定安全失败；测试中reconcile、entitlement、权益刷新、delivery和成功展示均为0，本地不写成功。
+- Controller使用epoch和每run身份：pause递增代次并取消自有请求/原生回调等待计时器，resume不复活旧代次；dispose永久停用。每个异步返回后检查代次，失效结果安静结束；finally仅能释放自己持有的共享锁。中止客户端等待不意味着取消服务端订单或关闭原生支付弹窗。
+- 页面分别记录隐藏/卸载和代次。卸载后旧run的catch/finally不再修改loading、message、records、成功状态或reloadRecords；旧GET在pause/resume后不得reconcile，新run可独立查询且锁不受旧finally影响。新增测试覆盖迟到GET、login code、create、grant、refresh、delivery及原生success/fail回调。
+- 本轮check:miniapp、三份专项测试、check:server:delivery、登录API、会员MVP、entitlement service/routes、购书福利兑换/UI回归通过；JS/MJS及Vue脚本语法、package解析和diff空白检查通过。三个既有失败仍为会员525行CRLF、Word466行Object.keys、购书福利preflight120行CRLF，未修改。
+- 本轮仅改三个批次8实现文件、三份专项测试及三份项目文档；没有改server/migration/package.json或引入依赖。HBuilderX完整构建/微信开发者工具仍是sandbox联调前置，未宣称完成；未调用真实微信、未部署、未暂存/提交/推送/合并，等待聚焦独立复审。
+
+- 基线51897c4ef2b5e0cc64d794773f8650e8f6722001，分支feature/virtual-payment-miniapp-purchase。服务端及migration未修改，未新增依赖。
+- 新增pages/learning-benefits/index.vue，复用现有蓝白样式；我的学习权益区域及详情额度不足以navigateTo进入。详情返回复用原查词请求ID刷新权限。页面展示30天/¥30.00/非自动续费/会员不限次数；有效会员提示顺延30天，无邀请入口。
+- virtual-payment-api-client.js使用现有auth session及同一个明确配置的开发后端，缺配置/生产域名回退/release均fail closed；不改变全局回退规则。购买前校验微信运行时、android/harmony/windows和requestVirtualPayment能力；devtools不冒充android。auth-api-client仅导出已有微信login code帮助函数。
+- 正式时序：确认弹窗→新login code→保存购买意图→创建/幂等恢复订单→保存orderNo→持久化mayHaveInvoked→原样传递服务端signData及签名→所有回调仅作为查询提示→GET→必要时新login code reconcile→可靠paid后entitlement→granted立即刷新权益→delivery。每次只有一个共享购买Promise，不后台新建或重新支付。
+- 每次查询最多一次GET、一次必要reconcile及必要发放/发货请求，无无限轮询。HTTP有超时，原生回调等待有界；离页后不继续推进后续请求，回到页面按本地记录手动恢复。granted后跳过reconcile及entitlement；delivery confirming显示“会员已到账，订单确认中”，manual_review仅显示安全处理提示，仍允许主动另购。实际微信弹窗生命周期及长时间无回调必须后续真机验证。
+- 本地key按sandbox、后端URL和项目userId隔离。记录白名单为userId/environment/clientRequestId/orderNo/mayHaveInvoked/createdAt/updatedAt/hint；不存loginCode/paymentParams/signData/签名/openid/sessionKey/密钥/token/provider交易号/原始错误。写入后读回验证，任何调用支付前必要保存失败均不拉起微信；不静默淘汰未确认旧单，本批不自动清理历史记录。
+- cancel和未知保留原单，不标failed/closed；默认“查询上次购买结果”。“仍要另购30天会员”显示用户确认的双单可能分别到账并顺延警告，取消弹窗不创建；确认才生成新意图，新旧记录互不覆盖。创建响应中断且未可能调用微信时复用原clientRequestId；可能调用标记一旦写入，即使崩溃发生在真正调用前也只能查旧单。
+- 自动测试：test-miniapp-virtual-payment-client.mjs、test-miniapp-virtual-payment-purchase.mjs、test-miniapp-learning-benefits.mjs已接入test:miniapp:purchase和check:miniapp。覆盖请求契约、精确空正文、原签名字符串透传、敏感字段不落盘、三处存储失败、单Promise、防自动重付、取消/明确另购/恢复、数值2/3拒绝、grant响应中断恢复、granted跳过重复操作、用户/环境隔离、平台限制、页面脚本及生命周期。
+- check:miniapp（含原手机号登录及音频检查）、check:server:delivery、会员MVP（含管理员）及购书福利兑换/UI测试通过。check:server在既有会员test-membership-grant-schedule.mjs:525 LF/CRLF断言失败；单独Word API:466 Object.keys(undefined/null)、购书福利production-preflight:120 CRLF断言仍失败，均未修复。
+- Vue脚本通过node语法检查，但未运行HBuilderX完整uni-app构建、微信开发者工具页面预览或sandbox真机交易。本轮没有调用真实微信、部署、运行migration、操作MySQL或提交/推送。后续需验证页面导航/返回权益刷新、微信弹窗成功/取消/挂起、Android/鸿蒙/Windows能力及iOS/devtools禁用行为。
+- 跨设备或清空storage后的订单找回：批次9上线前必需能力，本批不实现；本地恢复不承诺覆盖这些情况。当前仅交付代码与离线验证，等待独立审查。
