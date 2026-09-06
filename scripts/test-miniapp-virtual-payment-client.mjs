@@ -90,6 +90,8 @@ for (const platform of ['ios', 'mac', 'macos', 'devtools', 'unknown', 'linux', '
   assert.equal(requests.length, before)
 }
 for (const platform of ['android', 'harmony', 'windows']) assert.equal(createVirtualPaymentApi({ ...options, wx: { ...native, getDeviceInfo: () => ({ platform }) } }).context(true).platform, platform)
+assert.doesNotThrow(() => createVirtualPaymentApi({ ...options, env: { ...env, VUE_APP_WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com' } }).context(true))
+assert.throws(() => createVirtualPaymentApi({ ...options, env: { ...env, VUE_APP_WORD_API_BASE_URL: 'https://other.baxiaota.com' } }).context(true))
 for (const override of [
   { wx: {} }, { wx: { ...native, requestVirtualPayment: undefined } },
   { wx: { ...native, getAccountInfoSync: () => ({ miniProgram: { envVersion: 'release' } }) } },

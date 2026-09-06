@@ -73,7 +73,7 @@ export function createVirtualPaymentApi(options = {}) {
     const host = authority && authority[1].toLowerCase().split(':')[0]
     if (env.NODE_ENV !== 'development' || !authority || authority[1].includes('@') ||
         baseUrl !== configured || baseUrl === PRODUCTION_WORD_API_BASE_URL ||
-        host === 'baxiaota.com' || host.endsWith('.baxiaota.com')) throw paymentError('PAYMENT_SANDBOX_UNAVAILABLE')
+        host === 'baxiaota.com' || (host.endsWith('.baxiaota.com') && host !== 'sandbox-api.baxiaota.com')) throw paymentError('PAYMENT_SANDBOX_UNAVAILABLE')
     const native = runtime()
     let version
     try { version = native.getAccountInfoSync().miniProgram.envVersion } catch (_) {}
