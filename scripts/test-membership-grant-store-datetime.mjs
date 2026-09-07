@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { createUserEntitlementStore } from '../server/user-entitlement-store.mjs'
 
 const USER_ID = '42'
-const NOW = new Date('2026-08-05T02:27:58.000Z')
+const NOW = new Date('2026-08-05T02:27:58.338Z')
+const DATABASE_NOW = new Date('2026-08-05T02:27:58.000Z')
 const DAY_MS = 24 * 60 * 60 * 1000
 
 function cloneState(value) {
@@ -204,21 +205,28 @@ const store = createUserEntitlementStore({ pool: fakeDatabase.pool, now: () => n
 const first = await store.grantMembershipDuration(grantInput('operation-1'))
 let snapshot = fakeDatabase.snapshot()
 assert.equal(first.idempotent, false)
-assert.equal(new Date(first.membershipExpireAt).getTime(), NOW.getTime() + 30 * DAY_MS)
+const firstMetadata = JSON.parse(snapshot.transactions[0].metadata_json)
+assert.equal(first.effectiveStartAt, DATABASE_NOW.toISOString())
+assert.equal(new Date(snapshot.grants[0].granted_at).toISOString(), DATABASE_NOW.toISOString())
+assert.equal(new Date(snapshot.grants[0].effective_start_at).toISOString(), DATABASE_NOW.toISOString())
+assert.equal(new Date(snapshot.grants[0].effective_end_at).toISOString(), first.effectiveEndAt)
+assert.equal(firstMetadata.effectiveStartAt, first.effectiveStartAt)
+assert.equal(firstMetadata.effectiveEndAt, first.effectiveEndAt)
+assert.equal(new Date(first.membershipExpireAt).getTime(), DATABASE_NOW.getTime() + 30 * DAY_MS)
 assert.equal(snapshot.grants.length, 1)
 assert.equal(snapshot.transactions.length, 1)
 assert.equal(snapshot.entitlement.quota_balance, 9)
-assert.equal(fakeDatabase.membershipStartedAtSqlValues[0].toISOString(), NOW.toISOString())
+assert.equal(fakeDatabase.membershipStartedAtSqlValues[0].toISOString(), DATABASE_NOW.toISOString())
 
 const second = await store.grantMembershipDuration(grantInput('operation-2'))
 snapshot = fakeDatabase.snapshot()
 assert.equal(second.idempotent, false)
-assert.equal(new Date(second.effectiveStartAt).getTime(), NOW.getTime() + 30 * DAY_MS)
-assert.equal(new Date(second.membershipExpireAt).getTime(), NOW.getTime() + 60 * DAY_MS)
+assert.equal(new Date(second.effectiveStartAt).getTime(), DATABASE_NOW.getTime() + 30 * DAY_MS)
+assert.equal(new Date(second.membershipExpireAt).getTime(), DATABASE_NOW.getTime() + 60 * DAY_MS)
 assert.equal(snapshot.grants.length, 2)
 assert.equal(snapshot.transactions.length, 2)
 assert.equal(snapshot.entitlement.quota_balance, 9)
-assert.equal(fakeDatabase.membershipStartedAtSqlValues[1].toISOString(), NOW.toISOString())
+assert.equal(fakeDatabase.membershipStartedAtSqlValues[1].toISOString(), DATABASE_NOW.toISOString())
 
 const retry = await store.grantMembershipDuration(grantInput('operation-1'))
 snapshot = fakeDatabase.snapshot()
@@ -237,6 +245,6 @@ snapshot = fakeDatabase.snapshot()
 assert.equal(snapshot.grants.length, 2)
 assert.equal(snapshot.transactions.length, 2)
 assert.equal(snapshot.entitlement.quota_balance, 9)
-assert.equal(new Date(snapshot.entitlement.membership_expire_at).getTime(), NOW.getTime() + 60 * DAY_MS)
+assert.equal(new Date(snapshot.entitlement.membership_expire_at).getTime(), DATABASE_NOW.getTime() + 60 * DAY_MS)
 
 console.log('membership grant mysql DATETIME regression tests passed')

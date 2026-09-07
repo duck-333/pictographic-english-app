@@ -384,6 +384,41 @@ function paymentMembershipTransaction({
 }
 
 {
+  const fixture = membershipIntegrityFixture({
+    metadata: {
+      effectiveStartAt: '2026-08-31T00:00:00.338Z',
+      effectiveEndAt: '2026-09-30T00:00:00.338Z'
+    }
+  })
+  const result = await fixture.verify()
+  assert.equal(result.idempotent, true)
+  assert.equal(result.grantId, '9')
+  assert.equal(fixture.calls.writes, 0)
+}
+
+for (const metadata of [
+  {
+    effectiveStartAt: '2026-08-31T00:00:01.338Z',
+    effectiveEndAt: '2026-09-30T00:00:01.338Z'
+  },
+  {
+    effectiveStartAt: '2026-08-31T00:00:00.338Z',
+    effectiveEndAt: '2026-09-30T00:00:00.339Z'
+  },
+  {
+    effectiveStartAt: '2026-08-31T00:00:00Z',
+    effectiveEndAt: '2026-09-30T00:00:00Z'
+  }
+]) {
+  const fixture = membershipIntegrityFixture({ metadata })
+  await assert.rejects(
+    fixture.verify(),
+    (error) => error.code === 'MEMBERSHIP_GRANT_INTEGRITY_INVALID'
+  )
+  assert.equal(fixture.calls.writes, 0)
+}
+
+{
   const registration = ledgerTransaction({
     id: 5, transactionId: 'ent-registration-ledger', transactionType: 'REGISTER_BONUS',
     amount: 30, balanceAfter: 30, source: 'registration', sourceId: '42',

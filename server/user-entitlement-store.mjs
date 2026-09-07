@@ -328,6 +328,21 @@ function normalizeDate(value, fieldName, code, options = {}) {
   return date
 }
 
+function truncateDateToDatabaseSecond(value) {
+  const date = new Date(value.getTime())
+  date.setUTCMilliseconds(0)
+  return date
+}
+
+function strictCanonicalIsoDate(value) {
+  if (typeof value !== 'string') throw createMembershipGrantIntegrityError()
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime()) || date.toISOString() !== value) {
+    throw createMembershipGrantIntegrityError()
+  }
+  return date
+}
+
 function formatDate(value) {
   if (value instanceof Date && Number.isFinite(value.getTime())) {
     return value.toISOString()
@@ -1574,7 +1589,13 @@ export function createUserEntitlementStore(options = {}) {
       'Redemption code id',
       'REDEMPTION_CODE_ID_INVALID'
     )
-    const currentTime = normalizeDate(input.now === undefined ? now() : input.now, 'Membership grant time', 'MEMBERSHIP_GRANT_TIME_INVALID')
+    const currentTime = truncateDateToDatabaseSecond(
+      normalizeDate(
+        input.now === undefined ? now() : input.now,
+        'Membership grant time',
+        'MEMBERSHIP_GRANT_TIME_INVALID'
+      )
+    )
 
     let entitlement = await ensureUserEntitlementInTransaction(connection, userId)
     let grants = await listUserMembershipGrants(connection, userId, {
@@ -1988,6 +2009,10 @@ export function createUserEntitlementStore(options = {}) {
       'effectiveStartAt', 'membershipGrantId', 'membershipType'
     ].sort()
     transaction.metadata = metadata
+    const metadataEffectiveStartAt = strictCanonicalIsoDate(metadata.effectiveStartAt)
+    const metadataEffectiveEndAt = strictCanonicalIsoDate(metadata.effectiveEndAt)
+    const metadataDurationMilliseconds =
+      metadataEffectiveEndAt.getTime() - metadataEffectiveStartAt.getTime()
     if (transaction.transactionId !== expectedTransactionId || transaction.userId !== userId ||
         transaction.transactionType !== ENTITLEMENT_TRANSACTION_TYPES.MEMBERSHIP_GRANT || transaction.amount !== 0 ||
         transaction.source !== sourceType ||
@@ -1999,7 +2024,9 @@ export function createUserEntitlementStore(options = {}) {
         metadataKeys.length !== expectedMetadataKeys.length || metadataKeys.some((key, index) => key !== expectedMetadataKeys[index]) ||
         metadata.membershipGrantId !== grantId || metadata.membershipType !== 'monthly' ||
         metadata.daysGranted !== MEMBERSHIP_GRANT_DAYS || metadata.durationSeconds !== MEMBERSHIP_GRANT_DURATION_SECONDS ||
-        metadata.effectiveStartAt !== grant.effectiveStartAt || metadata.effectiveEndAt !== grant.effectiveEndAt ||
+        truncateDateToDatabaseSecond(metadataEffectiveStartAt).toISOString() !== grant.effectiveStartAt ||
+        truncateDateToDatabaseSecond(metadataEffectiveEndAt).toISOString() !== grant.effectiveEndAt ||
+        metadataDurationMilliseconds !== MEMBERSHIP_GRANT_DURATION_SECONDS * 1000 ||
         metadata.durationRule !== '30x24_hours_not_calendar_month') {
       throw createMembershipGrantIntegrityError()
     }
