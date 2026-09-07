@@ -17,7 +17,8 @@ const EXPECTED_PORT = 3308
 const EXPECTED_VERSION = '8.0.46'
 const EXPECTED_CONFIRMATION = 'local-docker-virtual-payment-only'
 const SAFE_DATABASE_PATTERN = /^virtual_payment_entitlement_test_[a-f0-9]{12}$/
-const NOW = new Date('2026-08-31T00:00:00.000Z')
+const NOW = new Date('2026-08-31T00:00:00.338Z')
+const DATABASE_NOW = new Date('2026-08-31T00:00:00.000Z')
 const MIGRATIONS = [
   '001_create_user_phone_bindings.sql',
   '004_create_user_entitlements.sql',
@@ -178,6 +179,74 @@ async function runScenarios(pool, databaseConfig) {
   assert.equal(firstTransactions[0].source, 'wechat_order')
   assert.equal(firstTransactions[0].source_id, first.orderNo)
   assert.equal(firstTransactions[0].grant_transaction_id, null)
+  const firstMetadata = typeof firstTransactions[0].metadata_json === 'string'
+    ? JSON.parse(firstTransactions[0].metadata_json)
+    : firstTransactions[0].metadata_json
+  assert.equal(firstMetadata.effectiveStartAt, DATABASE_NOW.toISOString())
+  assert.equal(
+    firstMetadata.effectiveEndAt,
+    new Date(DATABASE_NOW.getTime() + 2_592_000_000).toISOString()
+  )
+  const updateFirstMetadataTimes = async (effectiveStartAt, effectiveEndAt) => {
+    const [updateResult] = await pool.execute(
+      `UPDATE entitlement_transactions
+          SET metadata_json = JSON_SET(
+            metadata_json,
+            '$.effectiveStartAt', ?,
+            '$.effectiveEndAt', ?
+          )
+        WHERE transaction_id = ?`,
+      [effectiveStartAt, effectiveEndAt, firstGrant.membership.transactionId]
+    )
+    assert.equal(updateResult.affectedRows, 1)
+  }
+
+  const legacyMetadataEndAt =
+    new Date(NOW.getTime() + 2_592_000_000).toISOString()
+  await updateFirstMetadataTimes(NOW.toISOString(), legacyMetadataEndAt)
+  const legacyMetadataReplay = await store.grantTrustedPaidOrderEntitlement(
+    '301',
+    first.orderNo,
+    { expectedProductId: 'sandbox-product', now: NOW }
+  )
+  assert.equal(legacyMetadataReplay.idempotent, true)
+  assert.equal(
+    legacyMetadataReplay.membership.grantId,
+    firstGrant.membership.grantId
+  )
+  for (const invalidMetadata of [
+    {
+      effectiveStartAt: new Date(NOW.getTime() + 1_000).toISOString(),
+      effectiveEndAt: new Date(NOW.getTime() + 2_592_001_000).toISOString()
+    },
+    {
+      effectiveStartAt: NOW.toISOString(),
+      effectiveEndAt: new Date(NOW.getTime() + 2_592_000_001).toISOString()
+    }
+  ]) {
+    await updateFirstMetadataTimes(
+      invalidMetadata.effectiveStartAt,
+      invalidMetadata.effectiveEndAt
+    )
+    await assert.rejects(
+      store.grantTrustedPaidOrderEntitlement(
+        '301',
+        first.orderNo,
+        { expectedProductId: 'sandbox-product', now: NOW }
+      ),
+       (error) => error.code === 'PAYMENT_ENTITLEMENT_INCOMPLETE'
+    )
+  }
+
+  await updateFirstMetadataTimes(NOW.toISOString(), legacyMetadataEndAt)
+  const [[orderAfterRejectedMetadata]] = await pool.execute(
+    `SELECT entitlement_status, delivery_status
+       FROM virtual_payment_orders
+      WHERE order_no = ?`,
+    [first.orderNo]
+  )
+  assert.equal(orderAfterRejectedMetadata.entitlement_status, 'granted')
+  assert.equal(orderAfterRejectedMetadata.delivery_status, 'not_ready')
   assert.equal(firstSnapshot.membership_type, 'monthly')
   assert.equal(firstSnapshot.membership_status, 'active')
   assert.equal(new Date(firstSnapshot.membership_started_at).toISOString(), firstGrant.membership.membershipStartedAt)
@@ -367,8 +436,8 @@ async function runScenarios(pool, databaseConfig) {
   const revokedFutureGrant = await store.grantTrustedPaidOrderEntitlement('304', revokedFutureOrder.orderNo, {
     expectedProductId: 'sandbox-product', now: NOW
   })
-  assert.equal(revokedFutureGrant.membership.effectiveStartAt, NOW.toISOString())
-  assert.equal(revokedFutureGrant.membership.effectiveEndAt, new Date(NOW.getTime() + 2_592_000_000).toISOString())
+  assert.equal(revokedFutureGrant.membership.effectiveStartAt, DATABASE_NOW.toISOString())
+  assert.equal(revokedFutureGrant.membership.effectiveEndAt, new Date(DATABASE_NOW.getTime() + 2_592_000_000).toISOString())
   const revokedReplay = await store.grantTrustedPaidOrderEntitlement('304', revokedFutureOrder.orderNo, {
     expectedProductId: 'sandbox-product', now: NOW
   })
@@ -387,8 +456,8 @@ async function runScenarios(pool, databaseConfig) {
   })
   assert.equal(historicalPaymentA.membership.effectiveStartAt, january.toISOString())
   assert.equal(historicalPaymentA.membership.effectiveEndAt, '2026-01-31T00:00:00.000Z')
-  assert.equal(currentPaymentB.membership.effectiveStartAt, NOW.toISOString())
-  assert.equal(currentPaymentB.membership.effectiveEndAt, new Date(NOW.getTime() + 2_592_000_000).toISOString())
+  assert.equal(currentPaymentB.membership.effectiveStartAt, DATABASE_NOW.toISOString())
+  assert.equal(currentPaymentB.membership.effectiveEndAt, new Date(DATABASE_NOW.getTime() + 2_592_000_000).toISOString())
   const historicalReplay = await store.grantTrustedPaidOrderEntitlement('309', historicalOrderA.orderNo, {
     expectedProductId: 'sandbox-product', now: NOW
   })
@@ -398,12 +467,12 @@ async function runScenarios(pool, databaseConfig) {
   assert.equal(historicalReplay.idempotent, true)
   assert.equal(currentReplay.idempotent, true)
   assert.equal(historicalReplay.membership.grantId, historicalPaymentA.membership.grantId)
-  assert.equal(historicalReplay.membership.membershipStartedAt, NOW.toISOString())
+  assert.equal(historicalReplay.membership.membershipStartedAt, DATABASE_NOW.toISOString())
   assert.equal(historicalReplay.membership.membershipExpireAt, currentPaymentB.membership.membershipExpireAt)
   const [[gapSnapshot]] = await pool.execute(
     'SELECT membership_started_at, membership_expire_at FROM user_entitlements WHERE user_id = ?', ['309']
   )
-  assert.equal(new Date(gapSnapshot.membership_started_at).toISOString(), NOW.toISOString())
+  assert.equal(new Date(gapSnapshot.membership_started_at).toISOString(), DATABASE_NOW.toISOString())
   assert.equal(
     new Date(gapSnapshot.membership_expire_at).toISOString(),
     currentPaymentB.membership.membershipExpireAt,
