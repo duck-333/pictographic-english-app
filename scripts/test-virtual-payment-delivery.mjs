@@ -140,18 +140,31 @@ for (const [status, expectedDeliveryStatus] of [[3, 'confirming'], [6, 'manual_r
   assert.equal(notifyCalls, 0)
 }
 
-for (const [clientCode, expectedStatus] of [
-  ['VIRTUAL_PAYMENT_CLIENT_TIMEOUT', 'confirming'],
-  ['VIRTUAL_PAYMENT_CLIENT_UNAVAILABLE', 'confirming'],
-  ['VIRTUAL_PAYMENT_HTTP_ERROR', 'confirming'],
-  ['VIRTUAL_PAYMENT_WECHAT_ERROR', 'confirming'],
-  ['VIRTUAL_PAYMENT_RESPONSE_INVALID', 'confirming'],
-  ['VIRTUAL_PAYMENT_RESPONSE_TOO_LARGE', 'confirming'],
-  ['VIRTUAL_PAYMENT_UNEXPECTED_RESPONSE', 'confirming']
-]) {
+const safeDeliveryNotifyCodes = [
+  'VIRTUAL_PAYMENT_CLIENT_TIMEOUT',
+  'VIRTUAL_PAYMENT_CLIENT_UNAVAILABLE',
+  'VIRTUAL_PAYMENT_HTTP_ERROR',
+  'VIRTUAL_PAYMENT_WECHAT_ERROR',
+  'VIRTUAL_PAYMENT_RESPONSE_INVALID',
+  'VIRTUAL_PAYMENT_RESPONSE_TOO_LARGE',
+  'VIRTUAL_PAYMENT_UNEXPECTED_RESPONSE'
+]
+const deliveryNotifyErrorCases = [
+  ...safeDeliveryNotifyCodes.map((code) => ({ label: code, hasCode: true, code, expectedCode: code })),
+  { label: 'missing code', hasCode: false },
+  { label: 'number code', hasCode: true, code: 503 },
+  { label: 'object code', hasCode: true, code: { fixture: true } },
+  { label: 'control-character code', hasCode: true, code: 'BAD\u0000CODE\n' },
+  { label: 'URL and token-shaped code', hasCode: true, code: 'https://invalid.example/test?access_token=FAKE_TEST_TOKEN' },
+  { label: 'overlong code', hasCode: true, code: 'X'.repeat(65) },
+  { label: 'unknown string code', hasCode: true, code: 'SENSITIVE_INTERNAL_FAILURE' }
+]
+
+for (const { label, hasCode, code, expectedCode = 'DELIVERY_NOTIFY_UNCERTAIN' } of deliveryNotifyErrorCases) {
   const results = []
   let claimCalls = 0
   let notifyCalls = 0
+  let queryCalls = 0
   const store = baseStore({
     async claimDeliveryWork() {
       claimCalls += 1
@@ -161,7 +174,7 @@ for (const [clientCode, expectedStatus] of [
     },
     async markDeliveryDispatching() {},
     async finishDeliveryNotify(userId, orderNo, operationId, result) {
-      results.push(result.kind)
+      results.push(result)
       return { deliveryStatus: result.kind === 'uncertain' ? 'confirming' : 'retryable_failed' }
     },
     async applyDeliveryQueryFact(userId, orderNo, fact) {
@@ -172,16 +185,29 @@ for (const [clientCode, expectedStatus] of [
   const service = serviceWith({ store, client: {
     async notifyProvideGoods() {
       notifyCalls += 1
-      const error = new Error('sensitive'); error.code = clientCode; throw error
+      const error = new Error('fixture message with https://invalid.example and access_token=FAKE_TEST_TOKEN')
+      if (hasCode) error.code = code
+      throw error
     },
-    async queryOrder() { return { ...query4, status: 2, providedAtSeconds: 0 } }
+    async queryOrder() {
+      queryCalls += 1
+      return { ...query4, status: 2, providedAtSeconds: 0 }
+    }
   } })
   const result = await service.deliverOwnedOrder({ authenticatedUserId: '42', orderNo: ORDER_NO })
-  assert.equal(result.deliveryStatus, expectedStatus)
-  assert.deepEqual(results, ['uncertain'])
+  assert.equal(result.deliveryStatus, 'confirming', label)
+  assert.deepEqual(results, [{
+    kind: 'uncertain',
+    errorCode: expectedCode,
+    now: NOW
+  }], label)
+  assert.equal(notifyCalls, 1, label)
+  assert.equal(queryCalls, 0, label)
   const afterQuery = await service.deliverOwnedOrder({ authenticatedUserId: '42', orderNo: ORDER_NO })
-  assert.equal(afterQuery.deliveryStatus, 'confirming')
-  assert.equal(notifyCalls, 1)
+  assert.equal(afterQuery.deliveryStatus, 'confirming', label)
+  assert.equal(claimCalls, 2, label)
+  assert.equal(notifyCalls, 1, label)
+  assert.equal(queryCalls, 1, label)
 }
 
 {

@@ -18,12 +18,28 @@ const ALLOWED_DELIVERY_FIELDS = new Set(['authenticatedUserId', 'orderNo'])
 const ORDER_NUMBER_PATTERN = /^VP[A-F0-9]{30}$/
 const CANONICAL_UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
+const SAFE_DELIVERY_NOTIFY_ERROR_CODES = new Set([
+  'VIRTUAL_PAYMENT_CLIENT_TIMEOUT',
+  'VIRTUAL_PAYMENT_CLIENT_UNAVAILABLE',
+  'VIRTUAL_PAYMENT_HTTP_ERROR',
+  'VIRTUAL_PAYMENT_WECHAT_ERROR',
+  'VIRTUAL_PAYMENT_RESPONSE_INVALID',
+  'VIRTUAL_PAYMENT_RESPONSE_TOO_LARGE',
+  'VIRTUAL_PAYMENT_UNEXPECTED_RESPONSE'
+])
 
 function createServiceError(message, code, statusCode) {
   const error = new Error(message)
   error.code = code
   error.statusCode = statusCode
   return error
+}
+
+function deliveryNotifyErrorCode(error) {
+  const code = error && typeof error.code === 'string' ? error.code : ''
+  return SAFE_DELIVERY_NOTIFY_ERROR_CODES.has(code)
+    ? code
+    : 'DELIVERY_NOTIFY_UNCERTAIN'
 }
 
 function isPlainObject(value) {
@@ -597,7 +613,7 @@ export function createVirtualPaymentService(options = {}) {
       // The public WeChat contract does not currently document any error code that
       // proves notify_provide_goods was rejected before acceptance. Therefore every
       // non-success result is uncertain and must be reconciled without resending.
-      const errorCode = 'DELIVERY_NOTIFY_UNCERTAIN'
+      const errorCode = deliveryNotifyErrorCode(error)
       let result
       try {
         result = await store.finishDeliveryNotify(userId, orderNo, attempt.operationId, {

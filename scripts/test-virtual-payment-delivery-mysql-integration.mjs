@@ -192,16 +192,57 @@ async function runScenarios(pool, singleConnectionPool) {
   let wrongSchemaNotifyCalls = 0
   try {
     await pool.query(`ALTER TABLE virtual_payment_delivery_queries MODIFY COLUMN active_order_id BIGINT UNSIGNED GENERATED ALWAYS AS (${correctQueryExpression.replace("'claimed'", "'claim ed'")}) STORED`)
-    await assert.rejects(assertDeliverySchema(pool), (error) => error.code === 'PAYMENT_DELIVERY_SCHEMA_MISMATCH')
-    await assert.rejects(store.claimDeliveryWork('701', successful.order.orderNo, { expectedProductId: PRODUCT_ID, now: clock() }), (error) => error.code === 'PAYMENT_DELIVERY_SCHEMA_MISMATCH')
+    await assert.rejects(
+      assertDeliverySchema(pool),
+      (error) => error.code === 'PAYMENT_DELIVERY_SCHEMA_MISMATCH',
+      'formal schema checker must reject claim ed'
+    )
+    await assert.rejects(
+      store.claimDeliveryWork('701', successful.order.orderNo, { expectedProductId: PRODUCT_ID, now: clock() }),
+      (error) => error.code === 'PAYMENT_DELIVERY_SCHEMA_MISMATCH',
+      'delivery Store must reject claim ed'
+    )
     const wrongSchemaService = serviceFor('701', store, { async notifyProvideGoods() { wrongSchemaNotifyCalls++ } })
-    await assert.rejects(wrongSchemaService.deliverOwnedOrder({ authenticatedUserId: '701', orderNo: successful.order.orderNo }), (error) => error.code === 'PAYMENT_SERVICE_UNAVAILABLE')
+    await assert.rejects(
+      wrongSchemaService.deliverOwnedOrder({ authenticatedUserId: '701', orderNo: successful.order.orderNo }),
+      (error) => error.code === 'PAYMENT_SERVICE_UNAVAILABLE',
+      'delivery Service must reject claim ed before notify'
+    )
     assert.equal(wrongSchemaNotifyCalls, 0)
   } finally {
     await pool.query(`ALTER TABLE virtual_payment_delivery_queries MODIFY COLUMN active_order_id BIGINT UNSIGNED GENERATED ALWAYS AS (${correctQueryExpression}) STORED`)
   }
   await assertDeliverySchema(pool)
   console.log('MySQL altered claim ed expression rejected by formal checker and delivery Store; notify=0.')
+
+  const observable = await createGrantedOrder(store, '700', 'delivery-request-700', '700')
+  const observableService = serviceFor('700', store, {
+    async notifyProvideGoods() {
+      const error = new Error('sensitive')
+      error.code = 'VIRTUAL_PAYMENT_UNEXPECTED_RESPONSE'
+      throw error
+    },
+    async queryOrder() { throw new Error('not used') }
+  })
+  const observableResult = await observableService.deliverOwnedOrder({
+    authenticatedUserId: '700',
+    orderNo: observable.order.orderNo
+  })
+  assert.equal(observableResult.deliveryStatus, 'confirming')
+  const [[observableOrder]] = await pool.execute(
+    'SELECT delivery_status, last_error_code FROM virtual_payment_orders WHERE id = ?',
+    [observable.order.id]
+  )
+  assert.equal(observableOrder.delivery_status, 'confirming')
+  assert.equal(observableOrder.last_error_code, 'VIRTUAL_PAYMENT_UNEXPECTED_RESPONSE')
+  const [[observableAttempt]] = await pool.execute(
+    'SELECT attempt_status, result_kind, last_error_code FROM virtual_payment_delivery_attempts WHERE order_id = ?',
+    [observable.order.id]
+  )
+  assert.equal(observableAttempt.attempt_status, 'confirming')
+  assert.equal(observableAttempt.result_kind, 'uncertain')
+  assert.equal(observableAttempt.last_error_code, 'VIRTUAL_PAYMENT_UNEXPECTED_RESPONSE')
+
   const beforeSuccessfulMembership = await membershipSnapshot(pool, '701')
   const claimed = await store.claimDeliveryWork('701', successful.order.orderNo, { expectedProductId: PRODUCT_ID, now: clock() })
   assert.equal(claimed.action, 'notify')
@@ -897,10 +938,14 @@ async function testSchemaRecovery(root, config, baseSql) {
       if (scenario === 'second_create_failure') {
         const injected = {
           execute: (...args) => connection.execute(...args),
-          query: (sql) => connection.query(sql.includes('CREATE TABLE IF NOT EXISTS `virtual_payment_delivery_queries`')
-            ? sql.replace('REFERENCES `virtual_payment_delivery_attempts`', 'REFERENCES `missing_delivery_parent`') : sql)
+          async query(sql) {
+            if (sql.includes('CREATE TABLE IF NOT EXISTS `virtual_payment_delivery_queries`')) {
+              throw new Error('Injected second delivery table creation failure.')
+            }
+            return connection.query(sql)
+          }
         }
-        await assert.rejects(applyDeliveryMigration(injected))
+        await assert.rejects(applyDeliveryMigration(injected), 'second delivery table creation failure must reject')
         assert.deepEqual(await assertDeliverySchema(connection, { allowPartial: true }), [contract[0].table])
       } else if (scenario === 'only_second') {
         await connection.query('SET FOREIGN_KEY_CHECKS = 0')
@@ -911,13 +956,26 @@ async function testSchemaRecovery(root, config, baseSql) {
         let first = contract[0].statement
         if (scenario === 'missing_column') first = first.replace(/  `completion_source`[^\n]+\n/, '')
         if (scenario === 'wrong_index') first = first.replace('(`attempt_status`, `next_action_at`)', '(`next_action_at`, `attempt_status`)')
-        if (scenario === 'missing_fk') first = first.replace(/,\n  CONSTRAINT `fk_virtual_payment_delivery_attempt_event`[\s\S]*?ON DELETE RESTRICT/, '')
+        if (scenario === 'missing_fk') first = first.replace(/,\r?\n  CONSTRAINT `fk_virtual_payment_delivery_attempt_event`[\s\S]*?ON DELETE RESTRICT/, '')
         if (scenario === 'wrong_generated') first = first.replace("'uncertain', 'confirming') THEN", "'uncertain') THEN")
+        if (scenario !== 'both_incomplete') assert.notEqual(first, contract[0].statement, `${scenario} fixture must alter the first table`)
         await connection.query(first)
-        if (scenario === 'both_incomplete') await connection.query(contract[1].statement.replace(/  `response_env_type`[^\n]+\n/, ''))
+        if (scenario === 'both_incomplete') {
+          const second = contract[1].statement.replace(/  `response_env_type`[^\n]+\n/, '')
+          assert.notEqual(second, contract[1].statement, 'both_incomplete fixture must alter the second table')
+          await connection.query(second)
+        }
         for (let retry = 0; retry < 2; retry++) {
-          await assert.rejects(applyDeliveryMigration(connection), (error) => error.code === 'PAYMENT_DELIVERY_SCHEMA_MISMATCH' && error.message === 'Payment delivery schema mismatch; controlled manual recovery is required.')
-          await assert.rejects(checkVirtualPaymentDeliverySchema({ VIRTUAL_PAYMENT_ENABLED: 'true', DB_USER: config.user, DB_PASSWORD: config.password }, async () => ({ execute: (...args) => connection.execute(...args), async end() {} })), (error) => error.code === 'PAYMENT_DELIVERY_SCHEMA_MISMATCH')
+          await assert.rejects(
+            applyDeliveryMigration(connection),
+            (error) => error.code === 'PAYMENT_DELIVERY_SCHEMA_MISMATCH' && error.message === 'Payment delivery schema mismatch; controlled manual recovery is required.',
+            `${scenario} migration rejection ${retry + 1}`
+          )
+          await assert.rejects(
+            checkVirtualPaymentDeliverySchema({ VIRTUAL_PAYMENT_ENABLED: 'true', DB_USER: config.user, DB_PASSWORD: config.password }, async () => ({ execute: (...args) => connection.execute(...args), async end() {} })),
+            (error) => error.code === 'PAYMENT_DELIVERY_SCHEMA_MISMATCH',
+            `${scenario} startup schema rejection ${retry + 1}`
+          )
         }
         continue
       }
