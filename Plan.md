@@ -286,3 +286,23 @@
 - 验证客户端只有development＋精确sandbox域名＋显式开关才显示¥1.00；生产或其他域名无可用1元入口。
 - 自动测试通过后保持未提交，进入独立复审；未经复审不部署、不创建真实订单。
 - 当聊天上下文变长、工具输出过多、或连续完成 3-5 个功能块后，主代理要提醒用户压缩上下文或重新开一个窗口，并确保 `Documentation.md` 已记录当前状态。
+
+## 2026-09-11：退役 `admin.baxiaota.com`
+
+目标：
+- 正式后台只由 `https://baxiaota.com/admin/` 提供，正式 API 只由 `https://baxiaota.com/api/...` 提供。
+- 移除微信 request 合法域名、DNS 和 Nginx 中仅用于旧地址跳转的 admin 子域名资源。
+- 主域名、sandbox、支付代码、支付配置、订单和数据库保持不变。
+
+已完成：
+- 合并后全仓复查 `admin.baxiaota.com` 为 0 命中；生产后台静态目录、API 发布目录及 PM2 环境同样为 0 命中。
+- 微信 request 合法域名已移除旧 admin 域名，保留 `https://baxiaota.com` 和 `https://sandbox-api.baxiaota.com`；登录和会员权益读取回归正常。
+- DNSPod 的 `admin` A 记录已删除；Cloudflare、Google、阿里公共 DNS 均返回名称不存在，主域名和 sandbox A 记录保持正常。
+- `/etc/nginx/sites-enabled/pictographic-admin` 单一软链接已停用；`nginx -t` 成功后平滑 reload，Nginx 状态 active，生效配置无 admin vhost。
+- 公网回归：主站、`/admin/`、正式 `/api/health`、sandbox `/api/health` 均为 200 且 TLS 正常。
+
+剩余收尾：
+- 评估并单独清理只服务旧证书验证的 `_dnsauth.admin` TXT，禁止误删 `_dnsauth`、`@` 或 `sandbox-api`。
+- 保留 `/etc/nginx/sites-available/pictographic-admin` 和旧证书文件，直到回退窗口结束；之后再分别取得授权清理。
+- 主域名免费证书已独立重新申请并部署：覆盖 `baxiaota.com`、`www.baxiaota.com`，北京时间 2026-12-10 11:59:59 到期；公网证书、首页、`/admin/` 和 `/api/health` 已验证正常。该免费证书不自动续期，后续必须在到期前再次人工申请并部署。
+- 新旧主域名证书的回滚备份和上传暂存副本目前保留；确认回退窗口结束后，再分别取得授权清理，不与旧 admin 证书材料混合操作。
