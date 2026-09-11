@@ -1,23 +1,26 @@
 import assert from 'node:assert/strict'
-import { createPurchaseController, EXTRA_PURCHASE_WARNING, recordMessage } from '../miniapp-uni/word-app1/common/virtual-payment-purchase.js'
+import { createPurchaseController, EXTRA_PURCHASE_WARNING, purchaseConfirmation, recordMessage } from '../miniapp-uni/word-app1/common/virtual-payment-purchase.js'
+
+assert.equal(purchaseConfirmation('¥1.00'), '购买30天会员，¥1.00，一次性购买，非自动续费。有效会员购买后顺延30天。是否继续？')
 
 const clone = (x) => JSON.parse(JSON.stringify(x))
-const paymentParams = (orderNo) => ({ mode: 'short_series_goods', signData: JSON.stringify({ env: 1, buyQuantity: 1, currencyType: 'CNY', goodsPrice: 3000, outTradeNo: orderNo }, null, 2), paySig: 'a'.repeat(64), signature: 'b'.repeat(64) })
+const paymentParams = (orderNo, priceFen = 3000) => ({ mode: 'short_series_goods', signData: JSON.stringify({ env: 1, buyQuantity: 1, currencyType: 'CNY', goodsPrice: priceFen, outTradeNo: orderNo }, null, 2), paySig: 'a'.repeat(64), signature: 'b'.repeat(64) })
 function harness(overrides = {}) {
   const disk = new Map(), calls = [], confirmations = [], createdOrders = new Map()
   let current = { userId: '42', token: 'jwt', baseUrl: 'https://sandbox.test', environment: 'sandbox' }
   let count = 0, writes = 0, failNextRead = false
   const order = (n, paymentStatus = 'pending', entitlementStatus = 'not_ready', deliveryStatus = 'not_ready') => ({ orderNo: n, paymentStatus, entitlementStatus, deliveryStatus })
   const api = {
+    product: () => ({ priceFen: overrides.priceFen || 3000, priceText: overrides.priceFen === 100 ? '¥1.00' : '¥30.00' }),
     context: () => ({ ...current }),
     assertContext(owner) { assert.deepEqual(owner, current) },
     async prepare() { calls.push('code'); return 'secret-code' },
-    async create(owner, id) { calls.push(['create', id]); if (overrides.createFailure) throw new Error('network'); if (!createdOrders.has(id)) createdOrders.set(id, 'VP' + (++count).toString(16).toUpperCase().padStart(30, '0')); return { ...order(createdOrders.get(id)), paymentParams: paymentParams(createdOrders.get(id)) } },
+    async create(owner, id) { calls.push(['create', id]); if (overrides.createFailure) throw new Error('network'); if (!createdOrders.has(id)) createdOrders.set(id, 'VP' + (++count).toString(16).toUpperCase().padStart(30, '0')); return { ...order(createdOrders.get(id)), paymentParams: paymentParams(createdOrders.get(id), overrides.priceFen || 3000) } },
     async invoke(owner, params) {
       calls.push('invoke')
       const rows = [...disk.values()].flat()
       assert(rows.some((r) => r.orderNo && r.mayHaveInvoked), 'persist possible invocation BEFORE native call')
-      assert.equal(params.signData, paymentParams(JSON.parse(params.signData).outTradeNo).signData)
+      assert.equal(params.signData, paymentParams(JSON.parse(params.signData).outTradeNo, overrides.priceFen || 3000).signData)
       if (overrides.crashAtInvoke) throw new Error('simulated crash after durable marker')
       return overrides.cancel ? 'cancelled' : 'unknown'
     },
@@ -31,6 +34,13 @@ function harness(overrides = {}) {
   const controller = createPurchaseController({ api, storage, confirm: async (text) => { confirmations.push(text); return overrides.rejectConfirmation !== true },
     onEntitlement: () => calls.push('display-granted') })
   return { controller, api, calls, confirmations, disk, overrides, order, reopen: () => createPurchaseController({ api, storage, confirm: async () => true }), setOwner: (value) => { current = { ...current, ...value } } }
+}
+{
+  const h = harness({ priceFen: 100 })
+  await h.controller.buy()
+  assert.equal(h.confirmations[0], purchaseConfirmation('¥1.00'))
+  assert.equal(JSON.parse(paymentParams(h.controller.list()[0].orderNo, 100).signData).goodsPrice, 100)
+  assert.equal(h.calls.filter((value) => value === 'invoke').length, 1)
 }
 // Endpoint contract matrix. Mutations stop at the response boundary: no later calls.
 const remove = (field) => (value) => { delete value[field] }

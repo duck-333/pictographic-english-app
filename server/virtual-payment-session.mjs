@@ -55,7 +55,7 @@ export function createSensitivePaymentSession(input = {}, sessionKey) {
   return Object.freeze(result)
 }
 
-function isValidatedPaymentSignData(signData) {
+function isValidatedPaymentSignData(signData, expectedPriceFen) {
   if (
     typeof signData !== 'string' ||
     !signData ||
@@ -84,7 +84,7 @@ function isValidatedPaymentSignData(signData) {
     payload.currencyType === 'CNY' &&
     typeof payload.productId === 'string' &&
     SAFE_CONFIG_VALUE_PATTERN.test(payload.productId) &&
-    payload.goodsPrice === 3000 &&
+    payload.goodsPrice === expectedPriceFen &&
     typeof payload.outTradeNo === 'string' &&
     ORDER_NUMBER_PATTERN.test(payload.outTradeNo) &&
     typeof payload.attach === 'string' &&
@@ -92,10 +92,11 @@ function isValidatedPaymentSignData(signData) {
   )
 }
 
-export function createPaymentSessionSignature(paymentSession, signData) {
+export function createPaymentSessionSignature(paymentSession, signData, expectedPriceFen = 3000) {
   if (
     !paymentSessionKeys.has(paymentSession) ||
-    !isValidatedPaymentSignData(signData)
+    ![100, 3000].includes(expectedPriceFen) ||
+    !isValidatedPaymentSignData(signData, expectedPriceFen)
   ) {
     throw createPaymentSessionError(
       'Wechat payment session service is unavailable.',

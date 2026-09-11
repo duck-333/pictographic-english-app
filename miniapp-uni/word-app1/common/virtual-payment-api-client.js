@@ -4,6 +4,23 @@ import { requestWechatLoginCode } from './auth-api-client.js'
 import { getUserEntitlements } from './user-entitlements-api-client.js'
 
 const ROOT = '/api/user/virtual-payment/orders'
+const SANDBOX_API_BASE_URL = 'https://sandbox-api.baxiaota.com'
+const STANDARD_PRODUCT = Object.freeze({ priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
+const SANDBOX_TEST_PRODUCT = Object.freeze({ priceFen: 100, priceText: '¥1.00', sandboxTest: true })
+
+function rawApiBaseUrl(env) {
+  return env.VUE_APP_WORD_API_BASE_URL || env.UNI_APP_WORD_API_BASE_URL || env.WORD_API_BASE_URL
+}
+
+export function getVirtualPaymentClientProduct(options = {}) {
+  const env = options.env || (typeof process !== 'undefined' && process.env ? process.env : {})
+  const selectedBaseUrl = rawApiBaseUrl(env)
+  const rawEnabled = env.VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED
+  return env.NODE_ENV === 'development' && selectedBaseUrl === SANDBOX_API_BASE_URL &&
+    rawEnabled === 'true'
+    ? SANDBOX_TEST_PRODUCT
+    : STANDARD_PRODUCT
+}
 export function validateRecoveryPage(value, cursor = null) {
   const fail = () => { throw paymentError('PAYMENT_RESPONSE_INVALID') }
   const exact = (object, fields) => object && typeof object === 'object' && !Array.isArray(object) &&
@@ -28,14 +45,14 @@ export function validateRecoveryPage(value, cursor = null) {
   return value
 }
 export function paymentError(code) { const error = new Error('购买操作暂未完成'); error.code = code; return error }
-export function validatePaymentParams(params, orderNo) {
+export function validatePaymentParams(params, orderNo, expectedPriceFen = 3000) {
   if (!params || Array.isArray(params) || params.mode !== 'short_series_goods' ||
       typeof params.signData !== 'string' || !params.signData.length ||
       typeof params.paySig !== 'string' || !/^[a-f0-9]{64}$/.test(params.paySig) ||
       typeof params.signature !== 'string' || !/^[a-f0-9]{64}$/.test(params.signature)) throw paymentError('PAYMENT_RESPONSE_INVALID')
   let data
   try { data = JSON.parse(params.signData) } catch (_) { throw paymentError('PAYMENT_RESPONSE_INVALID') }
-  if (!data || data.env !== 1 || data.buyQuantity !== 1 || data.currencyType !== 'CNY' || data.goodsPrice !== 3000 ||
+  if (!data || data.env !== 1 || data.buyQuantity !== 1 || data.currencyType !== 'CNY' || data.goodsPrice !== expectedPriceFen ||
       data.outTradeNo !== orderNo || typeof orderNo !== 'string' || !/^VP[A-F0-9]{30}$/.test(orderNo)) throw paymentError('PAYMENT_RESPONSE_INVALID')
   return params
 }
@@ -54,6 +71,7 @@ export function paymentMessage(error) {
 }
 
 export function createVirtualPaymentApi(options = {}) {
+  const product = getVirtualPaymentClientProduct({ env: options.env })
   const runtime = () => {
     if (options.wx) return options.wx
     let native = null
@@ -65,7 +83,7 @@ export function createVirtualPaymentApi(options = {}) {
   const session = options.getSession || getAuthSession
   function environment(purchase = false) {
     const env = options.env || (typeof process !== 'undefined' && process.env ? process.env : {})
-    const configured = String(env.VUE_APP_WORD_API_BASE_URL || env.UNI_APP_WORD_API_BASE_URL || env.WORD_API_BASE_URL || '').trim().replace(/\/+$/, '')
+    const configured = String(rawApiBaseUrl(env) || '').trim().replace(/\/+$/, '')
     const baseUrl = getWordApiBaseUrl({ nodeEnv: env.NODE_ENV, apiBaseUrl: configured })
     // Use the same explicit development backend as login and entitlements. Never
     // let the global production fallback authorize a sandbox payment request.
@@ -127,7 +145,7 @@ export function createVirtualPaymentApi(options = {}) {
   }
   const freshCode = options.loginCode || requestWechatLoginCode
   return {
-    environment, context, assertContext,
+    environment, context, assertContext, product: () => product,
     async discover(owner, cursor = null, run) {
       if (cursor !== null && (typeof cursor !== 'string' || !/^VP[A-F0-9]{30}$/.test(cursor))) throw paymentError('PAYMENT_RESPONSE_INVALID')
       const result = await request(owner, 'GET', `${ROOT}/recovery${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`, undefined, run)
@@ -158,7 +176,7 @@ export function createVirtualPaymentApi(options = {}) {
     invoke(owner, params, orderNo, run) {
       if (run) run.check()
       assertContext(owner, true)
-      validatePaymentParams(params, orderNo)
+      validatePaymentParams(params, orderNo, product.priceFen)
       return new Promise((resolve) => {
         let settled = false, unsubscribe = () => {}
         const finish = (hint) => { if (settled) return; settled = true; clearTimeout(timer); unsubscribe(); resolve(hint) }

@@ -9,6 +9,7 @@ import {
   transitionPaymentStatus
 } from './virtual-payment-state.mjs'
 import { createWechatQueryCanonicalFact } from './virtual-payment-reconciliation.mjs'
+import { isVirtualPaymentProductId, virtualPaymentProductForPrice } from './virtual-payment-config.mjs'
 
 const DEFAULT_DB_HOST = '127.0.0.1'
 const DEFAULT_DB_PORT = 3306
@@ -191,6 +192,17 @@ function requireString(value, maximumLength = 191) {
   return value
 }
 
+function requireProductId(value, options = {}) {
+  if (!isVirtualPaymentProductId(value)) {
+    throw createStoreError(
+      options.message || 'Payment order data is invalid.',
+      options.code || 'PAYMENT_ORDER_CONFLICT',
+      options.statusCode || 409
+    )
+  }
+  return value
+}
+
 function requireExactString(value, expected) {
   if (typeof value !== 'string' || value !== expected) {
     throw createStoreError('Payment order data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
@@ -248,18 +260,26 @@ function normalizeOrderRow(row) {
   if (!CLIENT_PLATFORMS.has(clientPlatform)) {
     throw createStoreError('Payment order data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
   }
+  const unitPriceFen = requireUnsignedInteger(row.unit_price_fen)
+  const product = virtualPaymentProductForPrice(unitPriceFen)
+  const orderAmountFen = requireUnsignedInteger(row.order_amount_fen)
+  const paidAmountFen = row.paid_amount_fen === null ? null : requireUnsignedInteger(row.paid_amount_fen)
+  if (!product || orderAmountFen !== product.priceFen * product.quantity ||
+      (paidAmountFen !== null && paidAmountFen !== orderAmountFen)) {
+    throw createStoreError('Payment order data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
+  }
   return Object.freeze({
     id: normalizeBigIntId(row.id),
     orderNo: normalizeOrderNo(row.order_no),
     userId: normalizeBigIntId(row.user_id),
     clientRequestId: normalizeVirtualPaymentClientRequestId(row.client_request_id),
     internalSku: requireExactString(row.internal_sku, 'membership_30d'),
-    productId: requireString(row.product_id),
+    productId: requireProductId(row.product_id),
     productName: requireExactString(row.product_name, '30天学习会员'),
     quantity: requireUnsignedInteger(row.quantity, { expected: 1 }),
-    unitPriceFen: requireUnsignedInteger(row.unit_price_fen, { expected: 3000 }),
-    orderAmountFen: requireUnsignedInteger(row.order_amount_fen, { expected: 3000 }),
-    paidAmountFen: row.paid_amount_fen === null ? null : requireUnsignedInteger(row.paid_amount_fen),
+    unitPriceFen,
+    orderAmountFen,
+    paidAmountFen,
     currency: requireExactString(row.currency, 'CNY'),
     environment: requireExactString(row.environment, 'sandbox'),
     wechatEnv: requireUnsignedInteger(row.wechat_env, { expected: 1, maximum: 255 }),
@@ -425,6 +445,7 @@ function safeDeliveryErrorCode(value) {
 }
 
 function normalizeDeliveryQueryFact(value) {
+  const product = virtualPaymentProductForPrice(value && value.orderAmountFen)
   const keys = [
     'source', 'observationId', 'queryOperationId', 'querySequence', 'claimedOrderVersion',
     'userId', 'environment', 'wechatEnv', 'environmentType', 'currency', 'orderNo',
@@ -446,7 +467,7 @@ function normalizeDeliveryQueryFact(value) {
     typeof value.providerTransactionId !== 'string' || value.providerTransactionId.length < 1 ||
     value.providerTransactionId.length > 128 || /[\u0000-\u001f\u007f]/.test(value.providerTransactionId) ||
     !Number.isSafeInteger(value.wechatStatus) || value.wechatStatus < 0 || value.wechatStatus > 10 ||
-    value.orderType !== 0 || value.orderAmountFen !== 3000 || value.paidAmountFen !== 3000 ||
+    value.orderType !== 0 || !product || value.paidAmountFen !== product.priceFen ||
     !Number.isSafeInteger(value.paidAtSeconds) || value.paidAtSeconds <= 0 ||
     !Number.isSafeInteger(value.queriedAtSeconds) || value.queriedAtSeconds <= 0 ||
     ![null, 0].includes(value.providedAtSeconds) && (!Number.isSafeInteger(value.providedAtSeconds) || value.providedAtSeconds <= 0) ||
@@ -515,8 +536,11 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
   const providerTransactionId = requireProviderTransactionReference(row.provider_transaction_id, {
     nullable: eventRule ? !eventRule.paid : true
   })
+  const orderAmountFen = requireUnsignedInteger(row.order_amount_fen)
+  const product = virtualPaymentProductForPrice(orderAmountFen)
+  if (!product) throw createStoreError('Payment event data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
   const paidAmountFen = eventRule && eventRule.paid
-    ? requireUnsignedInteger(row.paid_amount_fen, { expected: 3000 })
+    ? requireUnsignedInteger(row.paid_amount_fen, { expected: product.priceFen })
     : null
   const paidAt = eventRule && eventRule.paid ? normalizeRequiredDate(row.paid_at) : null
   const paidAtSeconds = paidAt === null ? null : Date.parse(paidAt) / 1000
@@ -553,8 +577,8 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
       orderNo: row.delivery_query_order_no, providerOrderId: row.delivery_query_provider_order_id,
       providerTransactionId: row.delivery_query_provider_transaction_id, wechatStatus,
       orderType: requireUnsignedInteger(row.delivery_query_order_type, { expected: 0, maximum: 255 }),
-      orderAmountFen: requireUnsignedInteger(row.delivery_query_order_amount_fen, { expected: 3000 }),
-      paidAmountFen: requireUnsignedInteger(row.delivery_query_paid_amount_fen, { expected: 3000 }),
+      orderAmountFen: requireUnsignedInteger(row.delivery_query_order_amount_fen, { expected: product.priceFen }),
+      paidAmountFen: requireUnsignedInteger(row.delivery_query_paid_amount_fen, { expected: product.priceFen }),
       paidAtSeconds: deliveryPaidAtSeconds, providedAtSeconds, queriedAtSeconds
     })
     const rebuiltDeliveryHash = crypto.createHash('sha256').update(deliveryRaw, 'utf8').digest()
@@ -614,7 +638,7 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
       meaning: eventRule.meaning,
       targetPaymentStatus: eventRule.target,
       orderType: 0,
-      orderAmountFen: requireUnsignedInteger(row.order_amount_fen, { expected: 3000 }),
+      orderAmountFen,
       paidAmountFen,
       paidAtSeconds
     })
@@ -645,23 +669,27 @@ function requireProviderTransactionReference(value, options = {}) {
 }
 
 function normalizeTrustedReconciliationContext(value) {
+  const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).join(',') : ''
+  const expectedPriceFen = keys === 'expectedProductId' ? 3000 : value && value.expectedPriceFen
   if (
     !value ||
     typeof value !== 'object' ||
     Array.isArray(value) ||
-    Object.keys(value).join(',') !== 'expectedProductId' ||
-    typeof value.expectedProductId !== 'string' ||
-    value.expectedProductId.length === 0 ||
-    value.expectedProductId.length > 191 ||
-    /^\s+$/u.test(value.expectedProductId) ||
-    /[\u0000-\u001f\u007f]/.test(value.expectedProductId)
+    !['expectedProductId', 'expectedProductId,expectedPriceFen'].includes(keys) ||
+    !virtualPaymentProductForPrice(expectedPriceFen)
   ) {
     throw createStoreError('Payment reconciliation context is invalid.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
   }
-  return Object.freeze({ expectedProductId: value.expectedProductId })
+  const expectedProductId = requireProductId(value.expectedProductId, {
+    message: 'Payment reconciliation context is invalid.',
+    code: 'PAYMENT_SERVICE_UNAVAILABLE',
+    statusCode: 503
+  })
+  return Object.freeze({ expectedProductId, expectedPriceFen })
 }
 
 function normalizeReconciliationFact(value) {
+  const product = virtualPaymentProductForPrice(value && value.orderAmountFen)
   const expectedFacts = new Map([
     [1, ['order_created', 'confirming']],
     [2, ['paid_pending_delivery', 'paid']],
@@ -696,7 +724,7 @@ function normalizeReconciliationFact(value) {
     typeof value.orderType !== 'number' ||
     !Number.isSafeInteger(value.orderType) ||
     value.orderType !== 0 ||
-    value.orderAmountFen !== 3000 ||
+    !product ||
     !['confirming', 'paid', 'closed'].includes(value.targetPaymentStatus)
   ) {
     throw createStoreError('Payment reconciliation fact is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
@@ -716,7 +744,7 @@ function normalizeReconciliationFact(value) {
   }
   if (value.targetPaymentStatus === 'paid') {
     if (
-      value.paidAmountFen !== 3000 ||
+      value.paidAmountFen !== product.priceFen ||
       providerTransactionId === null ||
       !(value.paidAt instanceof Date) ||
       !Number.isFinite(value.paidAt.getTime()) ||
@@ -1091,13 +1119,14 @@ export function createVirtualPaymentStore(options = {}) {
     return findTrustedWechatQueryPaidEvidenceWithExecutor(execute, userId, orderNo)
   }
 
-  function assertTrustedPaidOrderForEntitlement(order, expectedProductId, userId) {
+  function assertTrustedPaidOrderForEntitlement(order, expectedProductId, expectedPriceFen, userId) {
+    const product = virtualPaymentProductForPrice(expectedPriceFen)
     if (
       order.userId !== userId || order.paymentStatus !== 'paid' ||
-      order.internalSku !== 'membership_30d' || order.productId !== expectedProductId ||
-      order.productName !== '30天学习会员' || order.quantity !== 1 ||
-      order.unitPriceFen !== 3000 || order.orderAmountFen !== 3000 || order.paidAmountFen !== 3000 ||
-      order.currency !== 'CNY' || order.environment !== 'sandbox' || order.wechatEnv !== 1 ||
+      !product || order.internalSku !== product.internalSku || order.productId !== expectedProductId ||
+      order.productName !== product.displayName || order.quantity !== product.quantity ||
+      order.unitPriceFen !== product.priceFen || order.orderAmountFen !== product.priceFen || order.paidAmountFen !== product.priceFen ||
+      order.currency !== product.currency || order.environment !== 'sandbox' || order.wechatEnv !== 1 ||
       order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
       order.providerOrderId === null || order.providerTransactionId === null || order.paidAt === null ||
       order.deliveryStatus !== 'not_ready' || order.deliveredAt !== null
@@ -1117,7 +1146,8 @@ export function createVirtualPaymentStore(options = {}) {
   async function grantTrustedPaidOrderEntitlement(userIdValue, orderNoValue, contextValue = {}) {
     const userId = normalizeUserId(userIdValue)
     const orderNo = normalizeOrderNo(orderNoValue)
-    const expectedProductId = requireString(contextValue.expectedProductId)
+    const expectedProductId = requireProductId(contextValue.expectedProductId)
+    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? 3000 : contextValue.expectedPriceFen
     const currentTime = contextValue.now instanceof Date && Number.isFinite(contextValue.now.getTime())
       ? new Date(contextValue.now.getTime())
       : null
@@ -1142,7 +1172,7 @@ export function createVirtualPaymentStore(options = {}) {
         [userId, orderNo]
       ))
       if (!lockedOrder) throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
-      assertTrustedPaidOrderForEntitlement(lockedOrder, expectedProductId, userId)
+      assertTrustedPaidOrderForEntitlement(lockedOrder, expectedProductId, expectedPriceFen, userId)
       const hasEvidence = await findTrustedWechatQueryPaidEvidenceWithExecutor(
         (sql, values) => connection.execute(sql, values),
         userId,
@@ -1234,13 +1264,14 @@ export function createVirtualPaymentStore(options = {}) {
     }, { isolationLevel: 'READ COMMITTED' })
   }
 
-  function assertTrustedGrantedOrderForDelivery(order, expectedProductId, userId) {
+  function assertTrustedGrantedOrderForDelivery(order, expectedProductId, expectedPriceFen, userId) {
+    const product = virtualPaymentProductForPrice(expectedPriceFen)
     if (
       order.userId !== userId || order.paymentStatus !== 'paid' ||
-      order.internalSku !== 'membership_30d' || order.productId !== expectedProductId ||
-      order.productName !== '30天学习会员' || order.quantity !== 1 ||
-      order.unitPriceFen !== 3000 || order.orderAmountFen !== 3000 || order.paidAmountFen !== 3000 ||
-      order.currency !== 'CNY' || order.environment !== 'sandbox' || order.wechatEnv !== 1 ||
+      !product || order.internalSku !== product.internalSku || order.productId !== expectedProductId ||
+      order.productName !== product.displayName || order.quantity !== product.quantity ||
+      order.unitPriceFen !== product.priceFen || order.orderAmountFen !== product.priceFen || order.paidAmountFen !== product.priceFen ||
+      order.currency !== product.currency || order.environment !== 'sandbox' || order.wechatEnv !== 1 ||
       order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
       order.providerOrderId === null || order.providerTransactionId === null || order.paidAt === null ||
       order.entitlementStatus !== 'granted' || order.membershipGrantId === null ||
@@ -1252,11 +1283,11 @@ export function createVirtualPaymentStore(options = {}) {
     }
   }
 
-  async function verifyDeliveryPrerequisites(connection, order, expectedProductId, userId) {
+  async function verifyDeliveryPrerequisites(connection, order, expectedProductId, expectedPriceFen, userId) {
     try { await assertDeliverySchema(connection) } catch {
       throw createStoreError('Payment delivery schema mismatch; controlled recovery required.', 'PAYMENT_DELIVERY_SCHEMA_MISMATCH', 503)
     }
-    assertTrustedGrantedOrderForDelivery(order, expectedProductId, userId)
+    assertTrustedGrantedOrderForDelivery(order, expectedProductId, expectedPriceFen, userId)
     const hasEvidence = await findTrustedWechatQueryPaidEvidenceWithExecutor(
       (sql, values) => connection.execute(sql, values), userId, order.orderNo,
       { includeDeliveryHistory: true }
@@ -1389,7 +1420,7 @@ export function createVirtualPaymentStore(options = {}) {
         query.observedCurrency !== 'CNY' || query.observedOrderNo !== order.orderNo ||
         query.observedProviderOrderId !== order.providerOrderId ||
         query.observedProviderTransactionId !== order.providerTransactionId ||
-        query.orderAmountFen !== 3000 || query.paidAmountFen !== 3000 ||
+        query.orderAmountFen !== order.orderAmountFen || query.paidAmountFen !== order.orderAmountFen ||
         !query.paidAtSeconds || query.paidAtSeconds !== Date.parse(order.paidAt) / 1000 ||
         !query.queriedAtSeconds ||
         query.eventOrderId !== order.id || query.eventOrderNo !== order.orderNo ||
@@ -1564,7 +1595,8 @@ export function createVirtualPaymentStore(options = {}) {
   async function claimDeliveryWork(userIdValue, orderNoValue, contextValue = {}) {
     const userId = normalizeUserId(userIdValue)
     const orderNo = normalizeOrderNo(orderNoValue)
-    const expectedProductId = requireString(contextValue.expectedProductId)
+    const expectedProductId = requireProductId(contextValue.expectedProductId)
+    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? 3000 : contextValue.expectedPriceFen
     const currentTime = deliveryTimestamp(contextValue.now)
     return runTransaction(async (connection) => {
       const order = normalizeSingleOrder(await connection.execute(
@@ -1573,7 +1605,7 @@ export function createVirtualPaymentStore(options = {}) {
         [userId, orderNo]
       ))
       if (!order) throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
-      await verifyDeliveryPrerequisites(connection, order, expectedProductId, userId)
+      await verifyDeliveryPrerequisites(connection, order, expectedProductId, expectedPriceFen, userId)
       const attemptState = await listDeliveryAttemptsForUpdate(connection, order, userId)
 
       if (order.deliveryStatus === 'delivered') {
@@ -1709,14 +1741,15 @@ export function createVirtualPaymentStore(options = {}) {
     const orderNo = normalizeOrderNo(orderNoValue)
     const operationId = requireString(operationIdValue, 64)
     const currentTime = deliveryTimestamp(contextValue.now)
-    const expectedProductId = requireString(contextValue.expectedProductId)
+    const expectedProductId = requireProductId(contextValue.expectedProductId)
+    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? 3000 : contextValue.expectedPriceFen
     return runTransaction(async (connection) => {
       const order = normalizeSingleOrder(await connection.execute(
         `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE} WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
         [userId, orderNo]
       ))
       if (!order) throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
-      await verifyDeliveryPrerequisites(connection, order, expectedProductId, userId)
+      await verifyDeliveryPrerequisites(connection, order, expectedProductId, expectedPriceFen, userId)
       const attemptState = await listDeliveryAttemptsForUpdate(connection, order, userId)
       const attempt = attemptState.attempts.find((item) => item.operationId === operationId)
       if (
@@ -1819,7 +1852,8 @@ export function createVirtualPaymentStore(options = {}) {
   async function applyDeliveryQueryFact(userIdValue, orderNoValue, factValue, contextValue = {}) {
     const userId = normalizeUserId(userIdValue)
     const orderNo = normalizeOrderNo(orderNoValue)
-    const expectedProductId = requireString(contextValue.expectedProductId)
+    const expectedProductId = requireProductId(contextValue.expectedProductId)
+    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? 3000 : contextValue.expectedPriceFen
     const currentTime = deliveryTimestamp(contextValue.now)
     const fact = normalizeDeliveryQueryFact(factValue)
     if (fact.orderNo !== orderNo) throw createStoreError('Payment delivery query fact is invalid.', 'PAYMENT_DELIVERY_QUERY_INVALID', 502)
@@ -1840,10 +1874,11 @@ export function createVirtualPaymentStore(options = {}) {
       ) {
         return Object.freeze({ deliveryStatus: order.deliveryStatus, action: 'stale', attempt: null, idempotent: true })
       }
-      await verifyDeliveryPrerequisites(connection, order, expectedProductId, userId)
+      await verifyDeliveryPrerequisites(connection, order, expectedProductId, expectedPriceFen, userId)
       const targetAttempt = attemptState.attempts.find((attempt) => attempt.id === query.attemptId)
       if (
         !targetAttempt || !['confirming', 'uncertain', 'explicit_failed'].includes(targetAttempt.status) ||
+        fact.orderAmountFen !== order.orderAmountFen || fact.paidAmountFen !== order.orderAmountFen ||
         fact.userId !== userId || fact.orderNo !== order.orderNo || fact.providerOrderId !== order.providerOrderId ||
         fact.providerTransactionId !== order.providerTransactionId ||
         fact.paidAtSeconds !== Date.parse(order.paidAt) / 1000
@@ -1992,15 +2027,19 @@ export function createVirtualPaymentStore(options = {}) {
     }
     const userId = normalizeUserId(input.userId)
     const clientRequestId = normalizeVirtualPaymentClientRequestId(input.clientRequestId)
-    const productId = requireString(input.productId)
+    const productId = requireProductId(input.productId, {
+      message: 'Payment request is invalid.',
+      code: 'PAYMENT_REQUEST_INVALID',
+      statusCode: 400
+    })
+    const product = virtualPaymentProductForPrice(input.unitPriceFen)
     const clientPlatform = requireString(input.clientPlatform, 32)
     if (
-      input.internalSku !== 'membership_30d' ||
-      input.productName !== '30天学习会员' ||
-      input.quantity !== 1 ||
-      input.unitPriceFen !== 3000 ||
-      input.orderAmountFen !== 3000 ||
-      input.currency !== 'CNY' ||
+      !product || input.internalSku !== product.internalSku ||
+      input.productName !== product.displayName ||
+      input.quantity !== product.quantity ||
+      input.orderAmountFen !== product.priceFen * product.quantity ||
+      input.currency !== product.currency ||
       input.environment !== 'sandbox' ||
       input.wechatEnv !== 1 ||
       input.paymentChannel !== 'wechat_virtual_payment' ||
@@ -2103,7 +2142,13 @@ export function createVirtualPaymentStore(options = {}) {
       if (!lockedOrder) {
         throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
       }
-      if (lockedOrder.productId !== context.expectedProductId) {
+      if (
+        lockedOrder.productId !== context.expectedProductId ||
+        lockedOrder.unitPriceFen !== context.expectedPriceFen ||
+        lockedOrder.orderAmountFen !== context.expectedPriceFen ||
+        fact.orderAmountFen !== lockedOrder.orderAmountFen ||
+        (fact.paidAmountFen !== null && fact.paidAmountFen !== lockedOrder.orderAmountFen)
+      ) {
         throw createStoreError('Payment order conflicts with current configuration.', 'PAYMENT_ORDER_CONFLICT', 409)
       }
       if (

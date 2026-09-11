@@ -2,7 +2,9 @@ import crypto from 'node:crypto'
 
 import {
   getVirtualPaymentConfig,
-  VIRTUAL_PAYMENT_PRODUCT
+  isVirtualPaymentProductId,
+  VIRTUAL_PAYMENT_PRODUCT,
+  virtualPaymentProductForPrice
 } from './virtual-payment-config.mjs'
 import { createPaymentSessionSignature } from './virtual-payment-session.mjs'
 
@@ -14,7 +16,11 @@ const SAFE_CONFIG_VALUE_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/
 const SAFE_OPENID_PATTERN = /^[^\s\u0000-\u001f\u007f]{1,128}$/u
 const WECHAT_ORDER_NUMBER_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
 const ASCII_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
-const ALLOWED_PAYMENT_INPUT_FIELDS = new Set(['orderNo', 'attach', 'paymentSession'])
+const PAYMENT_PRODUCT_CONTEXT_FIELDS = Object.freeze([
+  'productId', 'internalSku', 'mode', 'displayName', 'priceFen', 'quantity',
+  'durationSeconds', 'currency', 'membershipSourceType'
+])
+const ALLOWED_PAYMENT_INPUT_FIELDS = new Set(['orderNo', 'attach', 'paymentSession', 'productContext'])
 
 function createSigningError(message, code = 'VIRTUAL_PAYMENT_SIGNING_FAILED', statusCode = 500) {
   const error = new Error(message)
@@ -62,7 +68,7 @@ function assertAuthoritativeConfig(config) {
     config.environment !== 'sandbox' ||
     config.wechatEnv !== 1 ||
     !assertSafeConfigValue(config.offerId) ||
-    !assertSafeConfigValue(config.productId) ||
+    !isVirtualPaymentProductId(config.productId) ||
     typeof config.appKey !== 'string' ||
     !config.appKey ||
     config.appKey.length > 512 ||
@@ -72,10 +78,9 @@ function assertAuthoritativeConfig(config) {
   }
   const product = config.product
   if (
-    product !== VIRTUAL_PAYMENT_PRODUCT ||
+    virtualPaymentProductForPrice(product && product.priceFen) !== product ||
     product.internalSku !== 'membership_30d' ||
     product.mode !== 'short_series_goods' ||
-    product.priceFen !== 3000 ||
     product.quantity !== 1 ||
     product.durationSeconds !== 2592000 ||
     product.currency !== 'CNY'
@@ -102,14 +107,45 @@ function hmacSha256Hex(key, value) {
   return crypto.createHmac('sha256', key).update(value, 'utf8').digest('hex')
 }
 
-function buildSignData(config, orderNo, attach) {
+function normalizeProductContext(value, config) {
+  if (value === undefined) {
+    return Object.freeze({ productId: config.productId, product: config.product })
+  }
+  if (!isPlainObject(value)) {
+    throw createSigningError('Virtual payment product context is invalid.', 'VIRTUAL_PAYMENT_PRODUCT_INVALID', 503)
+  }
+  const keys = Object.keys(value)
+  const product = virtualPaymentProductForPrice(value.priceFen)
+  const usesStandardProduct = product === VIRTUAL_PAYMENT_PRODUCT
+  if (
+    keys.length !== PAYMENT_PRODUCT_CONTEXT_FIELDS.length ||
+    PAYMENT_PRODUCT_CONTEXT_FIELDS.some((field) => !Object.hasOwn(value, field)) ||
+    !product ||
+    !isVirtualPaymentProductId(value.productId) ||
+    (usesStandardProduct && value.productId !== config.standardProductId) ||
+    (!usesStandardProduct && value.productId === config.standardProductId) ||
+    value.internalSku !== product.internalSku ||
+    value.mode !== product.mode ||
+    value.displayName !== product.displayName ||
+    value.quantity !== product.quantity ||
+    value.durationSeconds !== product.durationSeconds ||
+    value.currency !== product.currency ||
+    value.membershipSourceType !== product.membershipSourceType
+  ) {
+    throw createSigningError('Virtual payment product context is invalid.', 'VIRTUAL_PAYMENT_PRODUCT_INVALID', 503)
+  }
+  return Object.freeze({ productId: value.productId, product })
+}
+
+function buildSignData(config, productContext, orderNo, attach) {
+  const product = productContext.product
   const signDataObject = Object.freeze({
     offerId: config.offerId,
-    buyQuantity: VIRTUAL_PAYMENT_PRODUCT.quantity,
+    buyQuantity: product.quantity,
     env: config.wechatEnv,
-    currencyType: VIRTUAL_PAYMENT_PRODUCT.currency,
-    productId: config.productId,
-    goodsPrice: VIRTUAL_PAYMENT_PRODUCT.priceFen,
+    currencyType: product.currency,
+    productId: productContext.productId,
+    goodsPrice: product.priceFen,
     outTradeNo: orderNo,
     attach
   })
@@ -167,18 +203,19 @@ export function createVirtualPaymentSigningService(options = {}) {
     assertAuthoritativeConfig(config)
     const orderNo = normalizeOrderNumber(input.orderNo)
     const attach = normalizeAttach(input.attach)
-    const { signData } = buildSignData(config, orderNo, attach)
+    const productContext = normalizeProductContext(input.productContext, config)
+    const { signData } = buildSignData(config, productContext, orderNo, attach)
     const paySig = hmacSha256Hex(config.appKey, `${PAYMENT_REQUEST_URI}&${signData}`)
 
     let signature
     try {
-      signature = createPaymentSessionSignature(input.paymentSession, signData)
+      signature = createPaymentSessionSignature(input.paymentSession, signData, productContext.product.priceFen)
     } catch {
       throw createSigningError('Virtual payment session signature failed.', 'VIRTUAL_PAYMENT_SESSION_SIGNATURE_FAILED', 503)
     }
 
     return Object.freeze({
-      mode: VIRTUAL_PAYMENT_PRODUCT.mode,
+      mode: productContext.product.mode,
       signData,
       paySig,
       signature

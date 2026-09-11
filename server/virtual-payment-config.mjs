@@ -2,9 +2,12 @@ const ENABLED_VARIABLE = 'VIRTUAL_PAYMENT_ENABLED'
 const ENVIRONMENT_VARIABLE = 'VIRTUAL_PAYMENT_ENV'
 const SANDBOX_OFFER_ID_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID'
 const SANDBOX_PRODUCT_ID_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID'
+const SANDBOX_TEST_PRODUCT_ENABLED_VARIABLE = 'VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED'
+const SANDBOX_TEST_PRODUCT_ID_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID'
 const SANDBOX_APP_KEY_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY'
 const SANDBOX_USER_IDS_VARIABLE = 'VIRTUAL_PAYMENT_SANDBOX_USER_IDS'
 const MAX_SAFE_USER_ID = BigInt(Number.MAX_SAFE_INTEGER)
+const VIRTUAL_PAYMENT_PRODUCT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/
 
 export const VIRTUAL_PAYMENT_PRODUCT = Object.freeze({
   internalSku: 'membership_30d',
@@ -16,6 +19,21 @@ export const VIRTUAL_PAYMENT_PRODUCT = Object.freeze({
   currency: 'CNY',
   membershipSourceType: 'wechat_order'
 })
+
+export const VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT = Object.freeze({
+  ...VIRTUAL_PAYMENT_PRODUCT,
+  priceFen: 100
+})
+
+export function virtualPaymentProductForPrice(priceFen) {
+  if (priceFen === VIRTUAL_PAYMENT_PRODUCT.priceFen) return VIRTUAL_PAYMENT_PRODUCT
+  if (priceFen === VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT.priceFen) return VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT
+  return null
+}
+
+export function isVirtualPaymentProductId(value) {
+  return typeof value === 'string' && VIRTUAL_PAYMENT_PRODUCT_ID_PATTERN.test(value)
+}
 
 function configError(message, options = {}) {
   const error = new Error(message)
@@ -41,6 +59,14 @@ export function parseVirtualPaymentEnabled(value) {
   })
 }
 
+function parseSandboxTestProductEnabled(value) {
+  if (value === undefined || value === null || value === '' || value === 'false') return false
+  if (value === 'true') return true
+  throw configError(`${SANDBOX_TEST_PRODUCT_ENABLED_VARIABLE} must be exactly true or false.`, {
+    variableName: SANDBOX_TEST_PRODUCT_ENABLED_VARIABLE
+  })
+}
+
 function requireVariable(env, variableName) {
   const value = normalizeString(env && env[variableName])
   if (!value) {
@@ -50,6 +76,21 @@ function requireVariable(env, variableName) {
     })
   }
   return value
+}
+
+function readProductId(env, variableName, options = {}) {
+  const raw = env && env[variableName]
+  if (raw === undefined || raw === null || raw === '') {
+    if (options.optional) return null
+    throw configError(`${variableName} is required when virtual payment is enabled.`, {
+      code: 'VIRTUAL_PAYMENT_CONFIG_REQUIRED',
+      variableName
+    })
+  }
+  if (!isVirtualPaymentProductId(raw)) {
+    throw configError(`${variableName} is invalid.`, { variableName })
+  }
+  return raw
 }
 
 function parseSandboxUserIds(value) {
@@ -96,6 +137,7 @@ export function getVirtualPaymentConfig(options = {}) {
       enabled: false,
       environment: null,
       wechatEnv: null,
+      sandboxTestProductEnabled: false,
       product: VIRTUAL_PAYMENT_PRODUCT
     })
   }
@@ -116,19 +158,41 @@ export function getVirtualPaymentConfig(options = {}) {
   }
 
   const offerId = requireVariable(env, SANDBOX_OFFER_ID_VARIABLE)
-  const productId = requireVariable(env, SANDBOX_PRODUCT_ID_VARIABLE)
+  const productId = readProductId(env, SANDBOX_PRODUCT_ID_VARIABLE)
+  const sandboxTestProductEnabled = parseSandboxTestProductEnabled(
+    env && env[SANDBOX_TEST_PRODUCT_ENABLED_VARIABLE]
+  )
+  const sandboxTestProductId = readProductId(env, SANDBOX_TEST_PRODUCT_ID_VARIABLE, { optional: true })
+  if (sandboxTestProductEnabled && !sandboxTestProductId) {
+    throw configError(`${SANDBOX_TEST_PRODUCT_ID_VARIABLE} is required when the sandbox test product is enabled.`, {
+      code: 'VIRTUAL_PAYMENT_CONFIG_REQUIRED',
+      variableName: SANDBOX_TEST_PRODUCT_ID_VARIABLE
+    })
+  }
+  if (sandboxTestProductId && sandboxTestProductId === productId) {
+    throw configError('Sandbox products must use distinct product ids.', {
+      variableName: SANDBOX_TEST_PRODUCT_ID_VARIABLE
+    })
+  }
   const appKey = requireVariable(env, SANDBOX_APP_KEY_VARIABLE)
   const sandboxUserIds = parseSandboxUserIds(env && env[SANDBOX_USER_IDS_VARIABLE])
 
+  const activeProduct = sandboxTestProductEnabled
+    ? VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT
+    : VIRTUAL_PAYMENT_PRODUCT
+  const activeProductId = sandboxTestProductEnabled ? sandboxTestProductId : productId
   return Object.freeze({
     enabled: true,
     environment: 'sandbox',
     wechatEnv: 1,
     offerId,
-    productId,
+    productId: activeProductId,
+    standardProductId: productId,
+    sandboxTestProductId,
+    sandboxTestProductEnabled,
     appKey,
     sandboxUserIds,
-    product: VIRTUAL_PAYMENT_PRODUCT
+    product: activeProduct
   })
 }
 
@@ -137,6 +201,8 @@ export const VIRTUAL_PAYMENT_CONFIG_VARIABLES = Object.freeze({
   environment: ENVIRONMENT_VARIABLE,
   sandboxOfferId: SANDBOX_OFFER_ID_VARIABLE,
   sandboxProductId: SANDBOX_PRODUCT_ID_VARIABLE,
+  sandboxTestProductEnabled: SANDBOX_TEST_PRODUCT_ENABLED_VARIABLE,
+  sandboxTestProductId: SANDBOX_TEST_PRODUCT_ID_VARIABLE,
   sandboxAppKey: SANDBOX_APP_KEY_VARIABLE,
   sandboxUserIds: SANDBOX_USER_IDS_VARIABLE
 })

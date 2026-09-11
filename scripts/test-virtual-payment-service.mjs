@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 
+import { createSensitivePaymentSession } from '../server/virtual-payment-session.mjs'
 import { createVirtualPaymentService } from '../server/virtual-payment-service.mjs'
+import { createVirtualPaymentSigningService } from '../server/virtual-payment-signing.mjs'
 
 const ORDER_NO = 'VPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 
@@ -40,6 +42,7 @@ function order(overrides = {}) {
     paymentStatus: 'initializing',
     entitlementStatus: 'not_ready',
     deliveryStatus: 'not_ready',
+    clientResult: null,
     membershipGrantId: null,
     entitlementTransactionId: null,
     paidAt: null,
@@ -78,7 +81,17 @@ function createHarness(overrides = {}) {
     },
     async createOrder(input) {
       calls.push(['create', input])
-      currentOrder = order({ clientPlatform: input.clientPlatform })
+      currentOrder = order({
+        internalSku: input.internalSku,
+        productId: input.productId,
+        productName: input.productName,
+        quantity: input.quantity,
+        unitPriceFen: input.unitPriceFen,
+        orderAmountFen: input.orderAmountFen,
+        currency: input.currency,
+        clientPlatform: input.clientPlatform,
+        ...(overrides.createdOrderOverrides || {})
+      })
       return { order: currentOrder, idempotent: false }
     },
     async markOrderPending(userId, orderNo) {
@@ -86,7 +99,8 @@ function createHarness(overrides = {}) {
       currentOrder = order({
         ...(currentOrder || {}),
         paymentStatus: 'pending',
-        updatedAt: '2026-08-30T00:00:01.000Z'
+        updatedAt: '2026-08-30T00:00:01.000Z',
+        ...(overrides.pendingOrderOverrides || {})
       })
       return currentOrder
     }
@@ -99,7 +113,7 @@ function createHarness(overrides = {}) {
   }
   const signingService = overrides.signingService || {
     createPaymentParameters(input) {
-      calls.push(['sign', input.orderNo, input.attach])
+      calls.push(['sign', input])
       return Object.freeze({
         mode: 'short_series_goods',
         signData: '{"safe":"signed"}',
@@ -145,6 +159,210 @@ assert.deepEqual(createCall, {
   clientPlatform: 'android'
 })
 assert.equal(JSON.stringify(createCall).includes('loginCode'), false)
+assert.deepEqual(harness.calls.find((call) => call[0] === 'sign')[1].productContext, {
+  productId: 'sandbox-product',
+  internalSku: 'membership_30d',
+  mode: 'short_series_goods',
+  displayName: '30天学习会员',
+  priceFen: 3000,
+  quantity: 1,
+  durationSeconds: 2592000,
+  currency: 'CNY',
+  membershipSourceType: 'wechat_order'
+})
+
+const sandboxTestHarness = createHarness({ env: enabledEnv({
+  VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+  WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'sandbox-test-product'
+}) })
+await sandboxTestHarness.service.createOrResumeOrder(request())
+assert.deepEqual(sandboxTestHarness.calls.find((call) => call[0] === 'create')[1], {
+  ...createCall,
+  productId: 'sandbox-test-product',
+  unitPriceFen: 100,
+  orderAmountFen: 100
+})
+assert.equal(sandboxTestHarness.getCurrentOrder().unitPriceFen, 100)
+const legacyOrderUnderTestSwitch = createHarness({
+  env: enabledEnv({
+    VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'sandbox-test-product'
+  }),
+  currentOrder: order()
+})
+assert.equal((await legacyOrderUnderTestSwitch.service.getOwnedOrder({ authenticatedUserId: '42', orderNo: ORDER_NO })).orderNo, ORDER_NO)
+
+for (const historicalEnv of [
+  enabledEnv(),
+  enabledEnv({
+    VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'rotated-sandbox-test-product'
+  })
+]) {
+  const historicalTestOrder = createHarness({
+    env: historicalEnv,
+    currentOrder: order({ productId: 'retired-sandbox-test-product', unitPriceFen: 100, orderAmountFen: 100 })
+  })
+  const summary = await historicalTestOrder.service.getOwnedOrder({ authenticatedUserId: '42', orderNo: ORDER_NO })
+  assert.equal(summary.orderNo, ORDER_NO)
+}
+
+for (const [label, historicalEnv] of [
+  ['switch disabled', enabledEnv({ VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'false' })],
+  ['test id missing', enabledEnv()],
+  ['test id rotated', enabledEnv({
+    VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'rotated-sandbox-test-product'
+  })]
+]) {
+  const historical = createHarness({
+    env: historicalEnv,
+    currentOrder: order({
+      productId: 'retired-sandbox-test-product',
+      unitPriceFen: 100,
+      orderAmountFen: 100
+    })
+  })
+  const firstResume = await historical.service.createOrResumeOrder(request())
+  const secondResume = await historical.service.createOrResumeOrder(request({ loginCode: 'another-fresh-code' }))
+  assert.deepEqual(secondResume.paymentParams, firstResume.paymentParams, label)
+  assert.equal(historical.calls.filter((call) => call[0] === 'create').length, 0, label)
+  assert.equal(historical.calls.filter((call) => call[0] === 'sign').length, 2, label)
+  for (const signCall of historical.calls.filter((call) => call[0] === 'sign')) {
+    assert.equal(signCall[1].productContext.productId, 'retired-sandbox-test-product', label)
+    assert.equal(signCall[1].productContext.priceFen, 100, label)
+  }
+}
+
+const historicalStandard = createHarness({ currentOrder: order() })
+await historicalStandard.service.createOrResumeOrder(request())
+assert.equal(historicalStandard.calls.filter((call) => call[0] === 'create').length, 0)
+assert.equal(historicalStandard.calls.find((call) => call[0] === 'sign')[1].productContext.productId, 'sandbox-product')
+assert.equal(historicalStandard.calls.find((call) => call[0] === 'sign')[1].productContext.priceFen, 3000)
+
+{
+  const historicalEnv = enabledEnv({
+    VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'rotated-sandbox-test-product'
+  })
+  const signing = createVirtualPaymentSigningService({ env: historicalEnv })
+  let signingCalls = 0
+  const integratedHistory = createHarness({
+    env: historicalEnv,
+    currentOrder: order({
+      productId: 'retired-sandbox-test-product',
+      unitPriceFen: 100,
+      orderAmountFen: 100
+    }),
+    paymentSessionService: {
+      async exchangeAndVerifyPaymentSession() {
+        return createSensitivePaymentSession({ userId: '42', openid: 'openid-history-fixture' }, 'session-key-history-fixture')
+      }
+    },
+    signingService: {
+      createPaymentParameters(input) {
+        signingCalls += 1
+        return signing.createPaymentParameters(input)
+      }
+    }
+  })
+  const resumed = await integratedHistory.service.createOrResumeOrder(request())
+  const signData = JSON.parse(resumed.paymentParams.signData)
+  assert.equal(signData.productId, 'retired-sandbox-test-product')
+  assert.equal(signData.goodsPrice, 100)
+  assert.equal(signingCalls, 1)
+  assert.equal(integratedHistory.calls.some((call) => call[0] === 'create'), false)
+}
+
+for (const invalidResumeSnapshot of [
+  order({ entitlementGrantedAt: '2026-08-30T00:00:01.000Z' }),
+  order({ deliveredAt: '2026-08-30T00:00:01.000Z' }),
+  order({ clientResult: 'success' }),
+  order({ clientResult: 'cancelled' }),
+  order({ clientResult: 'failed' }),
+  order({ clientPlatform: 'ios' }),
+  order({ clientPlatform: 'windows' })
+]) {
+  const invalidResume = createHarness({ currentOrder: invalidResumeSnapshot })
+  await assert.rejects(
+    invalidResume.service.createOrResumeOrder(request()),
+    (error) => ['PAYMENT_ORDER_CONFLICT', 'PAYMENT_ORDER_NOT_PAYABLE'].includes(error.code)
+  )
+  assert.deepEqual(invalidResume.calls.map((call) => call[0]), ['findRequest'])
+}
+
+const samePlatformResume = createHarness({ currentOrder: order({ clientPlatform: 'harmony' }) })
+await samePlatformResume.service.createOrResumeOrder(request({ platform: 'harmony' }))
+assert.deepEqual(samePlatformResume.calls.map((call) => call[0]), ['findRequest', 'exchange', 'sign', 'pending'])
+
+const mismatchedCreatedPlatform = createHarness({ createdOrderOverrides: { clientPlatform: 'windows' } })
+await assert.rejects(
+  mismatchedCreatedPlatform.service.createOrResumeOrder(request()),
+  (error) => error.code === 'PAYMENT_ORDER_CONFLICT'
+)
+assert.deepEqual(mismatchedCreatedPlatform.calls.map((call) => call[0]), ['findRequest', 'exchange', 'create'])
+
+for (const pendingOrderOverrides of [
+  { clientPlatform: 'windows' },
+  { entitlementGrantedAt: '2026-08-30T00:00:01.000Z' },
+  { deliveredAt: '2026-08-30T00:00:01.000Z' },
+  { clientResult: 'success' },
+  { clientResult: 'cancelled' },
+  { clientResult: 'failed' }
+]) {
+  const invalidPending = createHarness({ currentOrder: order(), pendingOrderOverrides })
+  await assert.rejects(
+    invalidPending.service.createOrResumeOrder(request()),
+    (error) => ['PAYMENT_ORDER_CONFLICT', 'PAYMENT_ORDER_NOT_PAYABLE'].includes(error.code)
+  )
+  assert.deepEqual(invalidPending.calls.map((call) => call[0]), ['findRequest', 'exchange', 'sign', 'pending'])
+  assert.equal(invalidPending.calls.some((call) => call[0] === 'create'), false)
+}
+
+for (const invalidSnapshot of [
+  order({ productId: 'sandbox-product', unitPriceFen: 100, orderAmountFen: 100 }),
+  order({ productId: 'retired-sandbox-test-product', unitPriceFen: 3000, orderAmountFen: 3000 }),
+  order({ productId: 'https://invalid.example.test/product', unitPriceFen: 100, orderAmountFen: 100 }),
+  order({ productId: 'retired-sandbox-test-product', unitPriceFen: 100, orderAmountFen: 100, currency: 'USD' }),
+  order({ productId: 'retired-sandbox-test-product', unitPriceFen: 100, orderAmountFen: 100, quantity: 2 }),
+  order({ productId: 'retired-sandbox-test-product', unitPriceFen: 100, orderAmountFen: 100, internalSku: 'other' }),
+  order({ productId: 'retired-sandbox-test-product', unitPriceFen: 100, orderAmountFen: 100, productName: '' })
+]) {
+  const invalidHistory = createHarness({ currentOrder: invalidSnapshot })
+  await assert.rejects(
+    invalidHistory.service.createOrResumeOrder(request()),
+    (error) => error.code === 'PAYMENT_ORDER_CONFLICT'
+  )
+  assert.equal(invalidHistory.calls.some((call) => call[0] === 'create'), false)
+  assert.equal(invalidHistory.calls.some((call) => call[0] === 'sign'), false)
+}
+
+for (const mismatchedSnapshot of [
+  order({ productId: 'sandbox-product', unitPriceFen: 100, orderAmountFen: 100 }),
+  order({ productId: 'retired-sandbox-test-product', unitPriceFen: 3000, orderAmountFen: 3000 })
+]) {
+  const mismatch = createHarness({ currentOrder: mismatchedSnapshot })
+  await assert.rejects(
+    mismatch.service.getOwnedOrder({ authenticatedUserId: '42', orderNo: ORDER_NO }),
+    (error) => error.code === 'PAYMENT_ORDER_CONFLICT'
+  )
+}
+
+for (const invalidConfig of [
+  { WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID: 'https://invalid.example.test/product' },
+  { WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID: 'x'.repeat(129) },
+  {
+    VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'https://invalid.example.test/test-product'
+  }
+]) {
+  let storeCalls = 0
+  assert.throws(() => createVirtualPaymentService({
+    env: enabledEnv(invalidConfig),
+    store: { async createOrder() { storeCalls += 1 } }
+  }), (error) => error.code === 'PAYMENT_SERVICE_UNAVAILABLE')
+  assert.equal(storeCalls, 0)
+}
 
 for (const allowedPlatform of ['harmony', 'windows']) {
   const platformHarness = createHarness()

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 
+import { normalizeVerifiedWechatDeliveryQueryFact } from '../server/virtual-payment-delivery.mjs'
 import { createVirtualPaymentService } from '../server/virtual-payment-service.mjs'
 
 const ORDER_NO = 'VPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
@@ -14,6 +15,7 @@ const env = {
 }
 const order = Object.freeze({
   id: '7', orderNo: ORDER_NO, userId: '42', providerOrderId: 'WXORDER1',
+  productId: 'sandbox-product',
   providerTransactionId: 'WXPAY1', paymentStatus: 'paid', entitlementStatus: 'granted',
   deliveryStatus: 'confirming', internalSku: 'membership_30d', productName: '30天学习会员',
   quantity: 1, unitPriceFen: 3000, orderAmountFen: 3000, currency: 'CNY',
@@ -27,6 +29,16 @@ const query4 = Object.freeze({
   providedAtSeconds: Math.floor(NOW.getTime() / 1000) - 600,
   environmentType: 2, environment: 'sandbox'
 })
+const sandboxTestOrder = Object.freeze({ ...order, productId: 'sandbox-test-product', unitPriceFen: 100, orderAmountFen: 100 })
+const sandboxTestQuery = Object.freeze({ ...query4, orderFeeFen: 100, paidFeeFen: 100 })
+const sandboxTestFact = normalizeVerifiedWechatDeliveryQueryFact(sandboxTestQuery, sandboxTestOrder, {
+  queryOperationId: 'f'.repeat(64), querySequence: 1, claimedOrderVersion: order.version, now: NOW.getTime()
+})
+assert.equal(sandboxTestFact.orderAmountFen, 100)
+assert.equal(sandboxTestFact.paidAmountFen, 100)
+assert.throws(() => normalizeVerifiedWechatDeliveryQueryFact(query4, sandboxTestOrder, {
+  queryOperationId: 'f'.repeat(64), querySequence: 1, claimedOrderVersion: order.version, now: NOW.getTime()
+}), (error) => error.code === 'PAYMENT_DELIVERY_QUERY_INVALID')
 
 function baseStore(overrides = {}) {
   return {
@@ -55,6 +67,53 @@ function queryWork(operationId) {
     action: 'query', order, attempt: { operationId },
     query: { operationId, querySequence: 1, claimedOrderVersion: order.version }
   }
+}
+
+for (const historicalEnv of [
+  env,
+  {
+    ...env,
+    VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'rotated-sandbox-test-product'
+  }
+]) {
+  const historicalOrder = Object.freeze({
+    ...sandboxTestOrder,
+    productId: 'retired-sandbox-test-product'
+  })
+  let appliedContext
+  const store = baseStore({
+    async findByUserAndOrderNo() { return historicalOrder },
+    async claimDeliveryWork() {
+      return {
+        action: 'query', order: historicalOrder, attempt: { operationId: '8'.repeat(64) },
+        query: { operationId: '8'.repeat(64), querySequence: 1, claimedOrderVersion: historicalOrder.version }
+      }
+    },
+    async markDeliveryDispatching() { throw new Error('must not run') },
+    async finishDeliveryNotify() { throw new Error('must not run') },
+    async applyDeliveryQueryFact(userId, orderNo, fact, context) {
+      appliedContext = context
+      assert.equal(fact.orderAmountFen, 100)
+      return { action: 'wait', deliveryStatus: 'confirming', idempotent: false }
+    }
+  })
+  const service = createVirtualPaymentService({
+    env: historicalEnv,
+    now: () => new Date(NOW),
+    store,
+    virtualPaymentClient: {
+      async notifyProvideGoods() { throw new Error('must not notify') },
+      async queryOrder() { return { ...sandboxTestQuery, status: 3, providedAtSeconds: 0 } }
+    },
+    identityStore: { async findWechatOpenidByUserIdForPayment() { return 'openid-42' } },
+    paymentSessionService: { async exchangeAndVerifyPaymentSession() { throw new Error('not used') } },
+    signingService: { createPaymentParameters() { throw new Error('not used') } }
+  })
+  const result = await service.deliverOwnedOrder({ authenticatedUserId: '42', orderNo: ORDER_NO })
+  assert.equal(result.deliveryStatus, 'confirming')
+  assert.equal(appliedContext.expectedProductId, 'retired-sandbox-test-product')
+  assert.equal(appliedContext.expectedPriceFen, 100)
 }
 
 {

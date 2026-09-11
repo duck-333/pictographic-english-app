@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { createVirtualPaymentApi, paymentMessage, validatePaymentParams } from '../miniapp-uni/word-app1/common/virtual-payment-api-client.js'
+import { createVirtualPaymentApi, getVirtualPaymentClientProduct, paymentMessage, validatePaymentParams } from '../miniapp-uni/word-app1/common/virtual-payment-api-client.js'
 
 const env = { NODE_ENV: 'development', VUE_APP_WORD_API_BASE_URL: 'https://sandbox.example.test' }
 const session = { token: 'jwt-fixture', expiresAt: '2099-01-01', user: { id: '42', hasWechatBinding: true } }
@@ -28,6 +28,71 @@ assert(requests.every((r) => r.header.Authorization === 'Bearer jwt-fixture' && 
 await api.refresh(owner)
 const params = { mode: 'short_series_goods', signData: JSON.stringify({ env: 1, buyQuantity: 1, currencyType: 'CNY', goodsPrice: 3000, outTradeNo: orderNo }, null, 2), paySig: 'a'.repeat(64), signature: 'b'.repeat(64) }
 assert.equal(validatePaymentParams(params, orderNo), params, 'validation preserves the original parameter object and strings')
+const sandboxTestEnv = { ...env, VUE_APP_WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com', VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true' }
+assert.deepEqual(getVirtualPaymentClientProduct({ env: sandboxTestEnv }), { priceFen: 100, priceText: '¥1.00', sandboxTest: true })
+assert.deepEqual(getVirtualPaymentClientProduct({
+  env: { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: 'https://baxiaota.com' },
+  apiBaseUrl: 'https://sandbox-api.baxiaota.com'
+}), { priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
+assert.deepEqual(getVirtualPaymentClientProduct({ env: {
+  ...sandboxTestEnv,
+  VUE_APP_WORD_API_BASE_URL: 'https://sandbox.example.test',
+  UNI_APP_WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com'
+} }), { priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
+for (const fallbackEnv of [
+  { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: '', UNI_APP_WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com' },
+  { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: '', UNI_APP_WORD_API_BASE_URL: '', WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com' }
+]) assert.deepEqual(getVirtualPaymentClientProduct({ env: fallbackEnv }), { priceFen: 100, priceText: '¥1.00', sandboxTest: true })
+for (const disabledEnv of [
+  { ...sandboxTestEnv, NODE_ENV: 'production' },
+  { ...sandboxTestEnv, NODE_ENV: ' development' },
+  { ...sandboxTestEnv, NODE_ENV: 'Development' },
+  { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: 'https://sandbox.example.test' },
+  { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: ' https://sandbox-api.baxiaota.com' },
+  { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com ' },
+  { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com/' },
+  { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com///' },
+  { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: ['https://sandbox-api.baxiaota.com'] },
+  { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: true },
+  { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'TRUE' },
+  { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'True' },
+  { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: '1' },
+  { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: ' true ' },
+  { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 1 },
+  { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: {} },
+  { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: '' },
+  { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'false' },
+  { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: undefined }
+]) assert.deepEqual(getVirtualPaymentClientProduct({ env: disabledEnv }), { priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
+for (const rawBaseUrl of [
+  ' https://sandbox-api.baxiaota.com',
+  'https://sandbox-api.baxiaota.com ',
+  'https://sandbox-api.baxiaota.com/',
+  'https://sandbox-api.baxiaota.com///'
+]) {
+  const normalizedApi = createVirtualPaymentApi({
+    ...options,
+    env: { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: rawBaseUrl }
+  })
+  assert.deepEqual(normalizedApi.product(), { priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
+  assert.equal(normalizedApi.environment().baseUrl, 'https://sandbox-api.baxiaota.com')
+}
+const testParams = { ...params, signData: JSON.stringify({ env: 1, buyQuantity: 1, currencyType: 'CNY', goodsPrice: 100, outTradeNo: orderNo }) }
+assert.equal(validatePaymentParams(testParams, orderNo, 100), testParams)
+assert.throws(() => validatePaymentParams(testParams, orderNo), { code: 'PAYMENT_RESPONSE_INVALID' })
+assert.throws(() => validatePaymentParams(params, orderNo, 100), { code: 'PAYMENT_RESPONSE_INVALID' })
+{
+  let invoked
+  const sandboxTestApi = createVirtualPaymentApi({ ...options, env: sandboxTestEnv, wx: {
+    ...native,
+    requestVirtualPayment(args) { invoked = args; args.success({}) }
+  } })
+  const sandboxTestOwner = sandboxTestApi.context(true)
+  assert.equal((await sandboxTestApi.invoke(sandboxTestOwner, testParams, orderNo)), 'unknown')
+  assert.equal(invoked.signData, testParams.signData)
+  assert.equal(JSON.parse(invoked.signData).goodsPrice, 100)
+  assert.throws(() => sandboxTestApi.invoke(sandboxTestOwner, params, orderNo), { code: 'PAYMENT_RESPONSE_INVALID' })
+}
 for (const field of ['mode', 'signData', 'paySig', 'signature']) {
   for (const invalid of [undefined, null, 1, {}, [], '']) {
     const bad = { ...params, [field]: invalid }, count = nativeCalls.length

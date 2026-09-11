@@ -3,7 +3,7 @@
     <view class="card">
       <text class="eyebrow">获取学习权益</text>
       <text class="title">购买30天会员</text>
-      <text class="price">¥30.00</text>
+      <text class="price">{{ productPriceText }}</text>
       <text class="description">一次性购买，非自动续费</text>
       <text class="description">会员期间不限学习次数</text>
       <text v-if="entitlement && entitlement.membershipActive" class="note">购买后顺延30天</text>
@@ -42,7 +42,7 @@ import { paymentMessage } from '../../common/virtual-payment-api-client.js'
 
 export default {
   data() {
-    return { loggedIn: false, purchaseAllowed: false, queryAllowed: false, busy: false, records: [], entitlement: null,
+    return { loggedIn: false, purchaseAllowed: false, queryAllowed: false, busy: false, records: [], entitlement: null, productPriceText: '¥30.00',
       availabilityMessage: '', message: '', nextCursor: null, discoveryFailed: false, loadSequence: 0, pageEpoch: 0, pageVisible: true, pageDisposed: false }
   },
   computed: {
@@ -61,6 +61,7 @@ export default {
         onRefreshFailed: () => { this.message = '会员已到账，权益展示暂未刷新，请稍后重试' }
       })
     }
+    this.productPriceText = typeof this.purchase.api.product === 'function' ? this.purchase.api.product().priceText : '¥30.00'
     this.purchase.resume()
     this.refresh()
   },

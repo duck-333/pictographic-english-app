@@ -839,3 +839,10 @@ IDENTITY_STORE_ERROR
 - check:miniapp（含原手机号登录及音频检查）、check:server:delivery、会员MVP（含管理员）及购书福利兑换/UI测试通过。check:server在既有会员test-membership-grant-schedule.mjs:525 LF/CRLF断言失败；单独Word API:466 Object.keys(undefined/null)、购书福利production-preflight:120 CRLF断言仍失败，均未修复。
 - Vue脚本通过node语法检查，但未运行HBuilderX完整uni-app构建、微信开发者工具页面预览或sandbox真机交易。本轮没有调用真实微信、部署、运行migration、操作MySQL或提交/推送。后续需验证页面导航/返回权益刷新、微信弹窗成功/取消/挂起、Android/鸿蒙/Windows能力及iOS/devtools禁用行为。
 - 跨设备或清空storage后的订单找回：批次9上线前必需能力，本批不实现；本地恢复不承诺覆盖这些情况。当前仅交付代码与离线验证，等待独立审查。
+
+### 2026-09-10 sandbox 双商品兼容（待独立复审）
+
+- 30天会员的正式商品快照保持3000分、CNY、数量1和2592000秒不变；新增100分测试快照只由独立sandbox的显式开关及独立productId选择。客户端仍不提交价格或productId，服务端创建订单、签名、对账、权益和发货按订单的固定商品快照逐层校验。
+- 服务端新增配置名`VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED`和`WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID`。开关默认关闭；开启时测试productId必填且不得与30元productId相同。生产NODE_ENV下原有sandbox禁用门禁不变。
+- 小程序仅在development、API基址精确为`https://sandbox-api.baxiaota.com`且客户端测试开关为true时显示¥1.00并接受100分支付参数；任一条件不成立即使用原¥30.00展示和3000分校验。创建请求仍只有sku，不含金额。
+- 测试结束后优先关闭服务端和客户端测试开关并重新编译development包；历史100分订单的查询、对账、发放与发货只按订单已保存快照恢复，不依赖测试productId仍在当前配置中。微信后台可停用测试道具；不得删除订单、grant、权益流水、delivery attempt、query或退款证据。

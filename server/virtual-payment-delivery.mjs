@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
 
+import { virtualPaymentProductForPrice } from './virtual-payment-config.mjs'
+
 const ORDER_NUMBER_PATTERN = /^VP[A-F0-9]{30}$/
 const SAFE_REFERENCE_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
 const EXPECTED_RESULT_KEYS = [
@@ -30,6 +32,7 @@ function safeNullableTimestamp(value) {
 }
 
 export function normalizeVerifiedWechatDeliveryQueryFact(input, order, options = {}) {
+  const product = virtualPaymentProductForPrice(order && order.unitPriceFen)
   const queryOperationId = options.queryOperationId
   const querySequence = options.querySequence
   const claimedOrderVersion = options.claimedOrderVersion
@@ -37,11 +40,12 @@ export function normalizeVerifiedWechatDeliveryQueryFact(input, order, options =
     !isPlainObject(input) ||
     Object.keys(input).join(',') !== EXPECTED_RESULT_KEYS.join(',') ||
     !isPlainObject(order) || typeof order.userId !== 'string' || !/^[1-9][0-9]*$/.test(order.userId) ||
-    order.environment !== 'sandbox' || order.wechatEnv !== 1 || order.currency !== 'CNY' ||
+    !product || order.orderAmountFen !== product.priceFen * product.quantity ||
+    order.environment !== 'sandbox' || order.wechatEnv !== 1 || order.currency !== product.currency ||
     typeof order.orderNo !== 'string' || !ORDER_NUMBER_PATTERN.test(order.orderNo) ||
     input.orderId !== order.orderNo ||
     input.environment !== 'sandbox' || input.environmentType !== 2 ||
-    input.orderType !== 0 || input.orderFeeFen !== 3000 ||
+    input.orderType !== 0 || input.orderFeeFen !== order.orderAmountFen ||
     typeof input.status !== 'number' || !Number.isSafeInteger(input.status) ||
     input.status < 0 || input.status > 10 ||
     typeof input.wechatOrderId !== 'string' || !SAFE_REFERENCE_PATTERN.test(input.wechatOrderId) ||
@@ -59,7 +63,7 @@ export function normalizeVerifiedWechatDeliveryQueryFact(input, order, options =
       input.wechatPaymentOrderId.length < 1 || input.wechatPaymentOrderId.length > 128 ||
       /[\u0000-\u001f\u007f]/.test(input.wechatPaymentOrderId) ||
       input.wechatPaymentOrderId !== order.providerTransactionId ||
-      input.paidFeeFen !== 3000 ||
+      input.paidFeeFen !== order.orderAmountFen ||
       !safePositiveInteger(input.paidAtSeconds)
     )
   ) {
@@ -134,7 +138,7 @@ export function normalizeVerifiedWechatDeliveryQueryFact(input, order, options =
     providerTransactionId: input.wechatPaymentOrderId,
     wechatStatus: input.status,
     orderType: 0,
-    orderAmountFen: 3000,
+    orderAmountFen: order.orderAmountFen,
     paidAmountFen: input.paidFeeFen,
     paidAtSeconds: input.paidAtSeconds,
     providedAtSeconds: input.providedAtSeconds,

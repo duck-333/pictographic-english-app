@@ -210,6 +210,53 @@ function createTransactionHarness(options = {}) {
 const paidFact = normalizeVerifiedWechatQueryFact(queryResult(2), normalizedOrder(row()), {
   now: () => NOW.getTime()
 })
+const sandboxTestRow = row({
+  product_id: 'sandbox-test-product',
+  unit_price_fen: 100,
+  order_amount_fen: 100
+})
+const sandboxTestFact = normalizeVerifiedWechatQueryFact({ ...queryResult(2), orderFeeFen: 100, paidFeeFen: 100 },
+  normalizedOrder(sandboxTestRow), { now: () => NOW.getTime() })
+for (const invalidProductId of [
+  '',
+  ' ',
+  'sandbox product',
+  'https://invalid.example.test/product',
+  'bad/product',
+  `bad\nproduct`,
+  'x'.repeat(129),
+  1,
+  {},
+  null
+]) {
+  const invalidContext = createTransactionHarness()
+  await assert.rejects(
+    invalidContext.store.reconcileVerifiedWechatQuery('42', ORDER_NO, paidFact, {
+      expectedProductId: invalidProductId
+    }),
+    (error) => error.code === 'PAYMENT_SERVICE_UNAVAILABLE'
+  )
+  assert.equal(invalidContext.counters.connections, 0)
+}
+for (const validProductId of ['a', 'x'.repeat(128)]) {
+  const validContext = createTransactionHarness({ order: { product_id: validProductId } })
+  const reconciled = await validContext.store.reconcileVerifiedWechatQuery('42', ORDER_NO, paidFact, {
+    expectedProductId: validProductId
+  })
+  assert.equal(reconciled.order.productId, validProductId)
+}
+for (const [fact, orderOverrides, context] of [
+  [sandboxTestFact, {}, TRUSTED_CONTEXT],
+  [paidFact, {
+    product_id: 'sandbox-test-product', unit_price_fen: 100, order_amount_fen: 100
+  }, { expectedProductId: 'sandbox-test-product', expectedPriceFen: 100 }]
+]) {
+  const crossPrice = createTransactionHarness({ order: orderOverrides })
+  await assert.rejects(crossPrice.store.reconcileVerifiedWechatQuery('42', ORDER_NO, fact, context),
+    (error) => error.code === 'PAYMENT_ORDER_CONFLICT')
+  assert.equal(crossPrice.counters.orderUpdates, 0)
+  assert.equal(crossPrice.counters.eventInserts, 0)
+}
 const harness = createTransactionHarness()
 const first = await harness.store.reconcileVerifiedWechatQuery('42', ORDER_NO, paidFact, TRUSTED_CONTEXT)
 assert.equal(first.order.paymentStatus, 'paid')

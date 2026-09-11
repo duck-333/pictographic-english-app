@@ -52,6 +52,7 @@ function harness(overrides = {}) {
       calls.push(['grant', userId, orderNo, context])
       if (overrides.grantError) throw overrides.grantError
       current = paidOrder({
+        ...current,
         entitlementStatus: 'granted', membershipGrantId: '9',
         entitlementTransactionId: 'ent-payment', entitlementGrantedAt: NOW.toISOString()
       })
@@ -70,6 +71,29 @@ function harness(overrides = {}) {
   return { service, calls }
 }
 
+for (const historicalEnv of [
+  env(),
+  env({
+    VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'rotated-sandbox-test-product'
+  })
+]) {
+  const { service, calls } = harness({
+    env: historicalEnv,
+    order: paidOrder({
+      productId: 'retired-sandbox-test-product',
+      unitPriceFen: 100,
+      orderAmountFen: 100,
+      paidAmountFen: 100
+    })
+  })
+  const result = await service.grantOwnedOrderEntitlement({ authenticatedUserId: '42', orderNo: ORDER_NO })
+  assert.equal(result.entitlementStatus, 'granted')
+  const grantContext = calls.find(([name]) => name === 'grant')[3]
+  assert.equal(grantContext.expectedProductId, 'retired-sandbox-test-product')
+  assert.equal(grantContext.expectedPriceFen, 100)
+}
+
 {
   const { service, calls } = harness()
   const result = await service.grantOwnedOrderEntitlement({ authenticatedUserId: '42', orderNo: ORDER_NO })
@@ -78,13 +102,13 @@ function harness(overrides = {}) {
     membershipStartedAt: NOW.toISOString(), membershipExpiresAt: END, idempotent: false
   })
   assert.equal(calls.filter(([name]) => name === 'grant').length, 1)
-  assert.deepEqual(Object.keys(calls.find(([name]) => name === 'grant')[3]).sort(), ['expectedProductId', 'now'])
+  assert.deepEqual(Object.keys(calls.find(([name]) => name === 'grant')[3]).sort(), ['expectedPriceFen', 'expectedProductId', 'now'])
 }
 
 for (const mutation of [
   { paymentStatus: 'pending' }, { paymentStatus: 'confirming' }, { paymentStatus: 'closed' },
   { paidAmountFen: null }, { paidAmountFen: 2999 }, { paidAt: null },
-  { providerOrderId: null }, { providerTransactionId: null }, { productId: 'wrong-product' },
+  { providerOrderId: null }, { providerTransactionId: null }, { productId: 'https://invalid.example.test/product' },
   { deliveryStatus: 'delivered', deliveredAt: NOW.toISOString() }
 ]) {
   const { service, calls } = harness({ order: paidOrder(mutation) })

@@ -60,10 +60,11 @@ async function assertDatabaseAbsent(connection, name) {
   assert.equal(rows.length, 0)
 }
 
-function orderInput(userId, requestId) {
+function orderInput(userId, requestId, options = {}) {
+  const priceFen = options.priceFen === undefined ? 3000 : options.priceFen
   return {
-    userId, clientRequestId: requestId, internalSku: 'membership_30d', productId: PRODUCT_ID,
-    productName: '30天学习会员', quantity: 1, unitPriceFen: 3000, orderAmountFen: 3000,
+    userId, clientRequestId: requestId, internalSku: 'membership_30d', productId: options.productId || PRODUCT_ID,
+    productName: '30天学习会员', quantity: 1, unitPriceFen: priceFen, orderAmountFen: priceFen,
     currency: 'CNY', environment: 'sandbox', wechatEnv: 1,
     paymentChannel: 'wechat_virtual_payment', clientPlatform: 'android'
   }
@@ -286,6 +287,15 @@ async function runScenarios(pool, singleConnectionPool) {
   })
   assert.equal(queryWork.action, 'query')
   const providedAtSeconds = Math.floor(clock(60_000).getTime() / 1000)
+  const crossPriceFact = deliveryFact(
+    { ...uncertain.rawQuery, orderFeeFen: 100, paidFeeFen: 100 },
+    { ...queryWork.order, unitPriceFen: 100, orderAmountFen: 100 },
+    4, providedAtSeconds, clock(70_000), queryWork.query
+  )
+  await assert.rejects(store.applyDeliveryQueryFact(
+    '703', uncertain.order.orderNo, crossPriceFact,
+    { expectedProductId: PRODUCT_ID, expectedPriceFen: 3000, now: clock(70_000) }
+  ), (error) => error.code === 'PAYMENT_DELIVERY_QUERY_INVALID')
   const recovered = await store.applyDeliveryQueryFact(
     '703', uncertain.order.orderNo,
     deliveryFact(uncertain.rawQuery, queryWork.order, 4, providedAtSeconds, clock(70_000), queryWork.query),
@@ -848,6 +858,99 @@ async function runScenarios(pool, singleConnectionPool) {
   const serviceResult = await service.deliverOwnedOrder({ authenticatedUserId: '706', orderNo: serviceOrder.order.orderNo })
   assert.equal(serviceResult.deliveryStatus, 'delivered')
   assert.equal(notifyCalls, 1)
+
+  const concurrentProducts = await Promise.all([
+    store.createOrder(orderInput('716', 'delivery-request-716-standard')),
+    store.createOrder(orderInput('716', 'delivery-request-716-test', {
+      productId: 'retired-sandbox-test-product', priceFen: 100
+    }))
+  ])
+  assert.deepEqual(
+    concurrentProducts.map(({ order: createdOrder }) => [createdOrder.productId, createdOrder.unitPriceFen]).sort((a, b) => a[1] - b[1]),
+    [['retired-sandbox-test-product', 100], [PRODUCT_ID, 3000]]
+  )
+
+  for (const [userId, currentTestProductId] of [['742', null], ['743', 'rotated-sandbox-test-product']]) {
+    const historicalProductId = `retired-sandbox-test-product-${userId}`
+    const created = await store.createOrder(orderInput(userId, `delivery-request-${userId}`, {
+      productId: historicalProductId,
+      priceFen: 100
+    }))
+    await store.markOrderPending(userId, created.order.orderNo)
+    const before = await membershipSnapshot(pool, userId)
+    let nowOffset = 300_000
+    let queryCalls = 0
+    let historicalNotifyCalls = 0
+    const historicalQuery = {
+      orderId: created.order.orderNo,
+      wechatOrderId: `WX${userId}`,
+      wechatPaymentOrderId: `WXPAY${userId}`,
+      status: 2,
+      orderType: 0,
+      orderFeeFen: 100,
+      paidFeeFen: 100,
+      paidAtSeconds: Math.floor(T0.getTime() / 1000) - 3600,
+      providedAtSeconds: 0,
+      environmentType: 2,
+      environment: 'sandbox'
+    }
+    const historicalEnv = {
+      VIRTUAL_PAYMENT_ENABLED: 'true',
+      VIRTUAL_PAYMENT_ENV: 'sandbox',
+      VIRTUAL_PAYMENT_SANDBOX_USER_IDS: userId,
+      WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID: 'sandbox.offer-001',
+      WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID: PRODUCT_ID,
+      WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY: 'sandbox-key',
+      ...(currentTestProductId ? {
+        VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+        WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: currentTestProductId
+      } : {})
+    }
+    const historicalService = createVirtualPaymentService({
+      env: historicalEnv,
+      now: () => clock(nowOffset).getTime(),
+      store,
+      identityStore: { async findWechatOpenidByUserIdForPayment() { return `openid-${userId}` } },
+      paymentSessionService: {
+        async exchangeAndVerifyPaymentSession() { return { openid: `openid-${userId}`, userId } }
+      },
+      signingService: { createPaymentParameters() { throw new Error('not used') } },
+      virtualPaymentClient: {
+        async notifyProvideGoods() {
+          historicalNotifyCalls += 1
+          const error = new Error('isolated uncertain fixture')
+          error.code = 'VIRTUAL_PAYMENT_CLIENT_TIMEOUT'
+          throw error
+        },
+        async queryOrder() {
+          queryCalls += 1
+          return queryCalls === 1
+            ? historicalQuery
+            : { ...historicalQuery, status: 4, providedAtSeconds: Math.floor(clock(360_000).getTime() / 1000) }
+        }
+      }
+    })
+    assert.equal((await historicalService.getOwnedOrder({ authenticatedUserId: userId, orderNo: created.order.orderNo })).paymentStatus, 'pending')
+    assert.equal((await historicalService.reconcileOwnedOrder({
+      authenticatedUserId: userId, orderNo: created.order.orderNo, loginCode: `login-${userId}`
+    })).paymentStatus, 'paid')
+    assert.equal((await historicalService.reconcileOwnedOrder({
+      authenticatedUserId: userId, orderNo: created.order.orderNo, loginCode: `unused-${userId}`
+    })).paymentStatus, 'paid')
+    assert.equal(queryCalls, 1)
+    assert.equal((await historicalService.grantOwnedOrderEntitlement({ authenticatedUserId: userId, orderNo: created.order.orderNo })).idempotent, false)
+    assert.equal((await historicalService.grantOwnedOrderEntitlement({ authenticatedUserId: userId, orderNo: created.order.orderNo })).idempotent, true)
+    const afterGrant = JSON.parse(await membershipSnapshot(pool, userId))
+    const beforeGrant = JSON.parse(before)
+    assert.equal(afterGrant.grants - beforeGrant.grants, 1)
+    assert.equal(afterGrant.transactions - beforeGrant.transactions, 1)
+    assert.equal((await historicalService.deliverOwnedOrder({ authenticatedUserId: userId, orderNo: created.order.orderNo })).deliveryStatus, 'confirming')
+    nowOffset = 400_000
+    assert.equal((await historicalService.deliverOwnedOrder({ authenticatedUserId: userId, orderNo: created.order.orderNo })).deliveryStatus, 'delivered')
+    assert.equal(historicalNotifyCalls, 1)
+    assert.equal(queryCalls, 2)
+  }
+  console.log('MySQL sandbox dual-product history: disabled/rotated config recovery, idempotent grant and concurrent 100/3000 creation passed.')
 
   const [[orphans]] = await pool.execute(
     `SELECT COUNT(*) AS count FROM virtual_payment_delivery_attempts a

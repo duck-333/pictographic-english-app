@@ -135,6 +135,16 @@ for (const status of [2, 3, 4]) {
   )
 }
 
+const sandboxTestOrder = order({ productId: 'sandbox-test-product', unitPriceFen: 100, orderAmountFen: 100 })
+const sandboxTestFact = normalizeVerifiedWechatQueryFact(queryResult(2, {
+  orderFeeFen: 100,
+  paidFeeFen: 100
+}), sandboxTestOrder, { now: () => NOW })
+assert.equal(sandboxTestFact.orderAmountFen, 100)
+assert.equal(sandboxTestFact.paidAmountFen, 100)
+assert.throws(() => normalizeVerifiedWechatQueryFact(queryResult(2), sandboxTestOrder, { now: () => NOW }),
+  (error) => error.code === 'PAYMENT_QUERY_RESULT_INVALID')
+
 for (const status of [1, 6]) {
   assert.equal(
     normalizeVerifiedWechatQueryFact(queryResult(status, { wechatPaymentOrderId: null }), order(), {
@@ -288,6 +298,30 @@ const confirmingHarness = createServiceHarness({
 assert.equal((await confirmingHarness.service.reconcileOwnedOrder({
   authenticatedUserId: '42', orderNo: ORDER_NO, loginCode: 'fresh-code'
 })).paymentStatus, 'paid')
+
+for (const historicalEnv of [
+  enabledEnv(),
+  enabledEnv({
+    VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'rotated-sandbox-test-product'
+  })
+]) {
+  const historicalHarness = createServiceHarness({
+    env: historicalEnv,
+    currentOrder: order({
+      productId: 'retired-sandbox-test-product',
+      unitPriceFen: 100,
+      orderAmountFen: 100,
+      paymentStatus: 'confirming'
+    }),
+    queryResultOverride: queryResult(2, { orderFeeFen: 100, paidFeeFen: 100 })
+  })
+  assert.equal((await historicalHarness.service.reconcileOwnedOrder({
+    authenticatedUserId: '42', orderNo: ORDER_NO, loginCode: 'fresh-code'
+  })).paymentStatus, 'paid')
+  const reconcileCall = historicalHarness.calls.find(([name]) => name === 'reconcile')
+  assert.equal(reconcileCall[4], 'retired-sandbox-test-product')
+}
 
 const nonWhitelistedHarness = createServiceHarness({
   env: enabledEnv({ VIRTUAL_PAYMENT_SANDBOX_USER_IDS: '99' })
@@ -518,7 +552,7 @@ for (const damagedPaidFields of [
   { providerTransactionId: null },
   { providerTransactionId: '   ' },
   { providerTransactionId: 'TRANSACTION\u0000SENTINEL' },
-  { productId: 'DAMAGED_PRODUCT_SENTINEL' },
+  { productId: 'https://DAMAGED_PRODUCT_SENTINEL.invalid' },
   { internalSku: 'damaged_sku' },
   { productName: 'damaged product' },
   { quantity: 2 },

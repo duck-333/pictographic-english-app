@@ -2,6 +2,9 @@ import { createVirtualPaymentApi, paymentError, validatePaymentParams, validateR
 
 export const EXTRA_PURCHASE_WARNING = '上次购买结果尚未确认。继续将新购买一份30天会员；若两笔均支付成功，将分别到账并顺延。是否继续？'
 export const PURCHASE_CONFIRMATION = '购买30天会员，¥30.00，一次性购买，非自动续费。有效会员购买后顺延30天。是否继续？'
+export function purchaseConfirmation(priceText = '¥30.00') {
+  return `购买30天会员，${priceText}，一次性购买，非自动续费。有效会员购买后顺延30天。是否继续？`
+}
 let running = null
 let sequence = 0
 const STALE = Symbol('inactive purchase operation')
@@ -100,7 +103,8 @@ export function createPurchaseController(options = {}) {
   }
   function validateCreate(value, record) {
     validateSummary(value, record)
-    validatePaymentParams(value.paymentParams, record.orderNo)
+    const product = typeof api.product === 'function' ? api.product() : { priceFen: 3000 }
+    validatePaymentParams(value.paymentParams, record.orderNo, product.priceFen)
     return value
   }
   function validateReconcile(value, record) { return validateSummary(value, record) }
@@ -248,7 +252,8 @@ export function createPurchaseController(options = {}) {
         if (resumeId && !record) throw paymentError('PAYMENT_STORAGE_FAILED')
         if (record && record.mayHaveInvoked) return recover(owner, record, run)
         const unresolved = discoveryIncomplete || list.some((r) => !['granted', 'delivered', 'manual_review', 'closed', 'failed'].includes(r.hint) && r.clientRequestId !== resumeId)
-        if (!await options.confirm(unresolved ? EXTRA_PURCHASE_WARNING : PURCHASE_CONFIRMATION)) return null
+        const product = typeof api.product === 'function' ? api.product() : { priceText: '¥30.00' }
+        if (!await options.confirm(unresolved ? EXTRA_PURCHASE_WARNING : purchaseConfirmation(product.priceText))) return null
         active(owner, run)
         api.assertContext(owner, true)
         const loginCode = await api.prepare(owner)

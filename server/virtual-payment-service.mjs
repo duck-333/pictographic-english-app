@@ -1,4 +1,9 @@
-import { getVirtualPaymentConfig, VIRTUAL_PAYMENT_PRODUCT } from './virtual-payment-config.mjs'
+import {
+  getVirtualPaymentConfig,
+  isVirtualPaymentProductId,
+  VIRTUAL_PAYMENT_PRODUCT,
+  virtualPaymentProductForPrice
+} from './virtual-payment-config.mjs'
 import { normalizeVerifiedWechatDeliveryQueryFact } from './virtual-payment-delivery.mjs'
 import { normalizeVerifiedWechatQueryFact } from './virtual-payment-reconciliation.mjs'
 import { normalizeVirtualPaymentClientRequestId } from './virtual-payment-store.mjs'
@@ -114,17 +119,33 @@ function assertCreateInput(input) {
   }
 }
 
-function assertOrderMatchesConfig(order, config, userId, clientRequestId) {
+function savedProductForOrder(order, config) {
+  const product = virtualPaymentProductForPrice(order && order.unitPriceFen)
+  const productId = order && order.productId
+  const usesStandardProduct = product === VIRTUAL_PAYMENT_PRODUCT
+  if (
+    !product ||
+    !isVirtualPaymentProductId(productId) ||
+    (usesStandardProduct && productId !== config.standardProductId) ||
+    (!usesStandardProduct && productId === config.standardProductId)
+  ) {
+    throw createServiceError('Payment order conflicts with saved product facts.', 'PAYMENT_ORDER_CONFLICT', 409)
+  }
+  return product
+}
+
+function assertOrderMatchesProduct(order, productId, product, userId, clientRequestId, platform) {
   if (
     order.userId !== userId ||
     (clientRequestId !== undefined && order.clientRequestId !== clientRequestId) ||
-    order.internalSku !== VIRTUAL_PAYMENT_PRODUCT.internalSku ||
-    order.productId !== config.productId ||
-    order.productName !== VIRTUAL_PAYMENT_PRODUCT.displayName ||
-    order.quantity !== VIRTUAL_PAYMENT_PRODUCT.quantity ||
-    order.unitPriceFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen ||
-    order.orderAmountFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen * VIRTUAL_PAYMENT_PRODUCT.quantity ||
-    order.currency !== VIRTUAL_PAYMENT_PRODUCT.currency ||
+    (platform !== undefined && order.clientPlatform !== platform) ||
+    order.internalSku !== product.internalSku ||
+    order.productId !== productId ||
+    order.productName !== product.displayName ||
+    order.quantity !== product.quantity ||
+    order.unitPriceFen !== product.priceFen ||
+    order.orderAmountFen !== product.priceFen * product.quantity ||
+    order.currency !== product.currency ||
     order.environment !== 'sandbox' ||
     order.wechatEnv !== 1 ||
     order.paymentChannel !== PAYMENT_CHANNEL
@@ -133,13 +154,34 @@ function assertOrderMatchesConfig(order, config, userId, clientRequestId) {
   }
 }
 
+function assertOrderMatchesConfig(order, config, userId, clientRequestId, platform) {
+  assertOrderMatchesProduct(order, config.productId, config.product, userId, clientRequestId, platform)
+}
+
+function signingProductContext(productId, product) {
+  return Object.freeze({
+    productId,
+    internalSku: product.internalSku,
+    mode: product.mode,
+    displayName: product.displayName,
+    priceFen: product.priceFen,
+    quantity: product.quantity,
+    durationSeconds: product.durationSeconds,
+    currency: product.currency,
+    membershipSourceType: product.membershipSourceType
+  })
+}
+
 function assertPayable(order) {
   if (
     !['initializing', 'pending'].includes(order.paymentStatus) ||
     order.entitlementStatus !== 'not_ready' ||
     order.deliveryStatus !== 'not_ready' ||
     order.membershipGrantId !== null ||
-    order.entitlementTransactionId !== null
+    order.entitlementTransactionId !== null ||
+    order.entitlementGrantedAt !== null ||
+    order.deliveredAt !== null ||
+    order.clientResult !== null
   ) {
     throw createServiceError('Payment order is not payable.', 'PAYMENT_ORDER_NOT_PAYABLE', 409)
   }
@@ -163,6 +205,12 @@ function isCanonicalPaidAt(value, nowValue) {
 }
 
 function assertCompleteLocalPaidOrder(order, config, userId, nowProvider) {
+  let product
+  try {
+    product = savedProductForOrder(order, config)
+  } catch {
+    throw createServiceError('Local paid payment fact is incomplete.', 'PAYMENT_PAID_FACT_INCOMPLETE', 409)
+  }
   const rawNowValue = nowProvider === undefined ? Date.now() : nowProvider()
   const nowValue = rawNowValue instanceof Date ? rawNowValue.getTime() : rawNowValue
   if (typeof nowValue !== 'number' || !Number.isFinite(nowValue)) {
@@ -172,15 +220,14 @@ function assertCompleteLocalPaidOrder(order, config, userId, nowProvider) {
     !isPlainObject(order) ||
     order.userId !== userId ||
     order.paymentStatus !== 'paid' ||
-    order.internalSku !== VIRTUAL_PAYMENT_PRODUCT.internalSku ||
-    order.productId !== config.productId ||
-    order.productName !== VIRTUAL_PAYMENT_PRODUCT.displayName ||
-    order.quantity !== VIRTUAL_PAYMENT_PRODUCT.quantity ||
-    order.unitPriceFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen ||
-    order.orderAmountFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen * VIRTUAL_PAYMENT_PRODUCT.quantity ||
+    order.internalSku !== product.internalSku ||
+    order.productName !== product.displayName ||
+    order.quantity !== product.quantity ||
+    order.unitPriceFen !== product.priceFen ||
+    order.orderAmountFen !== product.priceFen * product.quantity ||
     order.paidAmountFen !== order.orderAmountFen ||
-    order.paidAmountFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen ||
-    order.currency !== VIRTUAL_PAYMENT_PRODUCT.currency ||
+    order.paidAmountFen !== product.priceFen ||
+    order.currency !== product.currency ||
     order.environment !== 'sandbox' ||
     order.wechatEnv !== 1 ||
     order.paymentChannel !== PAYMENT_CHANNEL ||
@@ -308,8 +355,13 @@ export function createVirtualPaymentService(options = {}) {
     } catch (error) {
       throw mapDependencyError(error)
     }
-    if (order) {
-      assertOrderMatchesConfig(order, config, userId, clientRequestId)
+    let orderProduct
+    let orderProductId
+    const resumedOrder = Boolean(order)
+    if (resumedOrder) {
+      orderProduct = savedProductForOrder(order, config)
+      orderProductId = order.productId
+      assertOrderMatchesProduct(order, orderProductId, orderProduct, userId, clientRequestId, platform)
       assertPayable(order)
     }
 
@@ -328,13 +380,13 @@ export function createVirtualPaymentService(options = {}) {
         const creation = await store.createOrder({
           userId,
           clientRequestId,
-          internalSku: VIRTUAL_PAYMENT_PRODUCT.internalSku,
+          internalSku: config.product.internalSku,
           productId: config.productId,
-          productName: VIRTUAL_PAYMENT_PRODUCT.displayName,
-          quantity: VIRTUAL_PAYMENT_PRODUCT.quantity,
-          unitPriceFen: VIRTUAL_PAYMENT_PRODUCT.priceFen,
-          orderAmountFen: VIRTUAL_PAYMENT_PRODUCT.priceFen * VIRTUAL_PAYMENT_PRODUCT.quantity,
-          currency: VIRTUAL_PAYMENT_PRODUCT.currency,
+          productName: config.product.displayName,
+          quantity: config.product.quantity,
+          unitPriceFen: config.product.priceFen,
+          orderAmountFen: config.product.priceFen * config.product.quantity,
+          currency: config.product.currency,
           environment: 'sandbox',
           wechatEnv: 1,
           paymentChannel: PAYMENT_CHANNEL,
@@ -344,8 +396,10 @@ export function createVirtualPaymentService(options = {}) {
       } catch (error) {
         throw mapDependencyError(error, 'PAYMENT_ORDER_CREATE_FAILED')
       }
-      assertOrderMatchesConfig(order, config, userId, clientRequestId)
+      assertOrderMatchesConfig(order, config, userId, clientRequestId, platform)
       assertPayable(order)
+      orderProduct = config.product
+      orderProductId = config.productId
     }
 
     let paymentParams
@@ -353,7 +407,8 @@ export function createVirtualPaymentService(options = {}) {
       paymentParams = signingService.createPaymentParameters({
         orderNo: order.orderNo,
         attach: order.orderNo,
-        paymentSession
+        paymentSession,
+        productContext: signingProductContext(orderProductId, orderProduct)
       })
     } catch {
       throw createServiceError('Payment signature generation failed.', 'PAYMENT_SIGNATURE_FAILED', 503)
@@ -365,7 +420,7 @@ export function createVirtualPaymentService(options = {}) {
     } catch (error) {
       throw mapDependencyError(error)
     }
-    assertOrderMatchesConfig(pendingOrder, config, userId, clientRequestId)
+    assertOrderMatchesProduct(pendingOrder, orderProductId, orderProduct, userId, clientRequestId, platform)
     assertPayable(pendingOrder)
 
     return Object.freeze({
@@ -386,6 +441,8 @@ export function createVirtualPaymentService(options = {}) {
       throw mapDependencyError(error)
     }
     if (!order) throw createServiceError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+    const product = savedProductForOrder(order, config)
+    assertOrderMatchesProduct(order, order.productId, product, userId)
     return safeOrderSummary(order)
   }
 
@@ -445,7 +502,8 @@ export function createVirtualPaymentService(options = {}) {
       }
       return safeOrderSummary(order)
     }
-    assertOrderMatchesConfig(order, config, userId)
+    const orderProduct = savedProductForOrder(order, config)
+    assertOrderMatchesProduct(order, order.productId, orderProduct, userId)
     if (
       order.entitlementStatus !== 'not_ready' ||
       order.deliveryStatus !== 'not_ready' ||
@@ -500,7 +558,8 @@ export function createVirtualPaymentService(options = {}) {
     let reconciled
     try {
       reconciled = await store.reconcileVerifiedWechatQuery(userId, order.orderNo, fact, {
-        expectedProductId: config.productId
+        expectedProductId: order.productId,
+        expectedPriceFen: orderProduct.priceFen
       })
     } catch (error) {
       throw mapDependencyError(error)
@@ -534,6 +593,7 @@ export function createVirtualPaymentService(options = {}) {
       throw mapDependencyError(error)
     }
     if (!order) throw createServiceError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+    const orderProduct = savedProductForOrder(order, config)
     assertPaidOrderForEntitlement(order, config, userId, options.now)
     let hasTrustedEvidence
     try {
@@ -552,7 +612,8 @@ export function createVirtualPaymentService(options = {}) {
         throw new Error('Invalid payment clock.')
       }
       result = await store.grantTrustedPaidOrderEntitlement(userId, input.orderNo, {
-        expectedProductId: config.productId,
+        expectedProductId: order.productId,
+        expectedPriceFen: orderProduct.priceFen,
         now: nowValue
       })
     } catch (error) {
@@ -597,11 +658,12 @@ export function createVirtualPaymentService(options = {}) {
     return date
   }
 
-  async function executeDeliveryNotify(userId, orderNo, attempt) {
+  async function executeDeliveryNotify(userId, orderNo, attempt, productContext) {
     const startedAt = deliveryNow()
     try {
       await store.markDeliveryDispatching(userId, orderNo, attempt.operationId, {
-        expectedProductId: config.productId,
+        expectedProductId: productContext.productId,
+        expectedPriceFen: productContext.product.priceFen,
         now: startedAt
       })
     } catch (error) {
@@ -661,17 +723,28 @@ export function createVirtualPaymentService(options = {}) {
     ) {
       throw createServiceError('Payment service is unavailable.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
     }
+    let ownedOrder
+    try {
+      ownedOrder = await store.findByUserAndOrderNo(userId, input.orderNo)
+    } catch (error) {
+      throw mapDependencyError(error)
+    }
+    if (!ownedOrder) throw createServiceError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+    const ownedProduct = savedProductForOrder(ownedOrder, config)
+    assertOrderMatchesProduct(ownedOrder, ownedOrder.productId, ownedProduct, userId)
+    const productContext = Object.freeze({ productId: ownedOrder.productId, product: ownedProduct })
     let work
     try {
       work = await store.claimDeliveryWork(userId, input.orderNo, {
-        expectedProductId: config.productId,
+        expectedProductId: productContext.productId,
+        expectedPriceFen: productContext.product.priceFen,
         now: deliveryNow()
       })
     } catch (error) {
       throw mapDependencyError(error)
     }
     if (work.action === 'notify') {
-      return executeDeliveryNotify(userId, input.orderNo, work.attempt)
+      return executeDeliveryNotify(userId, input.orderNo, work.attempt, productContext)
     }
     if (work.action === 'delivered') return deliveryResponse(input.orderNo, 'delivered', { idempotent: true })
     if (work.action === 'manual_review') return deliveryResponse(input.orderNo, 'manual_review', { idempotent: true })
@@ -715,14 +788,15 @@ export function createVirtualPaymentService(options = {}) {
     let outcome
     try {
       outcome = await store.applyDeliveryQueryFact(userId, input.orderNo, fact, {
-        expectedProductId: config.productId,
+        expectedProductId: productContext.productId,
+        expectedPriceFen: productContext.product.priceFen,
         now: deliveryNow()
       })
     } catch (error) {
       throw mapDependencyError(error)
     }
     if (outcome.action === 'notify') {
-      return executeDeliveryNotify(userId, input.orderNo, outcome.attempt)
+      return executeDeliveryNotify(userId, input.orderNo, outcome.attempt, productContext)
     }
     return deliveryResponse(input.orderNo, outcome.deliveryStatus, { idempotent: outcome.idempotent })
   }

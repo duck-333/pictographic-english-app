@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
 
+import { virtualPaymentProductForPrice } from './virtual-payment-config.mjs'
+
 const ORDER_NUMBER_PATTERN = /^VP[A-F0-9]{30}$/
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
 const MAX_PROVIDER_TRANSACTION_ID_LENGTH = 128
@@ -106,6 +108,7 @@ function requireNullableInteger(value) {
 }
 
 export function createWechatQueryCanonicalFact(input) {
+  const product = virtualPaymentProductForPrice(input && input.orderAmountFen)
   if (
     !isPlainObject(input) ||
     Object.keys(input).length !== CANONICAL_FACT_KEYS.length ||
@@ -118,7 +121,7 @@ export function createWechatQueryCanonicalFact(input) {
     typeof input.orderType !== 'number' ||
     !Number.isSafeInteger(input.orderType) ||
     input.orderType !== 0 ||
-    input.orderAmountFen !== 3000
+    !product
   ) {
     throw reconciliationError('Wechat payment query fact is invalid.')
   }
@@ -138,11 +141,11 @@ export function createWechatQueryCanonicalFact(input) {
   let paidAmountFen = null
   let paidAtSeconds = null
   if (rule.localStatus === 'paid') {
-    if (input.paidAmountFen !== 3000) {
+    if (input.paidAmountFen !== product.priceFen) {
       throw reconciliationError('Wechat payment query fact is invalid.')
     }
     paidAtSeconds = requireInteger(input.paidAtSeconds, { minimum: 1 })
-    paidAmountFen = 3000
+    paidAmountFen = product.priceFen
   } else if (
     providerTransactionId !== null ||
     input.paidAmountFen !== null ||
@@ -161,7 +164,7 @@ export function createWechatQueryCanonicalFact(input) {
     meaning: rule.meaning,
     targetPaymentStatus: rule.localStatus,
     orderType: input.orderType,
-    orderAmountFen: 3000,
+    orderAmountFen: product.priceFen,
     paidAmountFen,
     paidAtSeconds
   })
@@ -174,16 +177,17 @@ export function createWechatQueryCanonicalFact(input) {
 }
 
 function assertOrderSnapshot(order) {
+  const product = virtualPaymentProductForPrice(order && order.unitPriceFen)
   if (
     !isPlainObject(order) ||
     typeof order.orderNo !== 'string' ||
     !ORDER_NUMBER_PATTERN.test(order.orderNo) ||
-    order.internalSku !== 'membership_30d' ||
-    order.productName !== '30天学习会员' ||
-    order.quantity !== 1 ||
-    order.unitPriceFen !== 3000 ||
-    order.orderAmountFen !== 3000 ||
-    order.currency !== 'CNY' ||
+    !product ||
+    order.internalSku !== product.internalSku ||
+    order.productName !== product.displayName ||
+    order.quantity !== product.quantity ||
+    order.orderAmountFen !== product.priceFen * product.quantity ||
+    order.currency !== product.currency ||
     order.environment !== 'sandbox' ||
     order.wechatEnv !== 1 ||
     order.paymentChannel !== 'wechat_virtual_payment'
@@ -216,7 +220,7 @@ export function normalizeVerifiedWechatQueryFact(input, order, options = {}) {
     throw reconciliationError('Wechat payment query result does not match the order.')
   }
   const providerOrderId = requireProviderId(input.wechatOrderId)
-  if (input.orderType !== 0 || input.orderFeeFen !== 3000) {
+  if (input.orderType !== 0 || input.orderFeeFen !== order.orderAmountFen) {
     throw reconciliationError('Wechat payment query result does not match the order.')
   }
   requireNullableInteger(input.providedAtSeconds)
@@ -232,7 +236,7 @@ export function normalizeVerifiedWechatQueryFact(input, order, options = {}) {
   let paidAt = null
   let paidAtSeconds = null
   if (rule.localStatus === 'paid') {
-    if (input.paidFeeFen !== 3000) {
+    if (input.paidFeeFen !== order.orderAmountFen) {
       throw reconciliationError('Wechat payment query result does not match the order.')
     }
     const nowValue = options.now === undefined ? Date.now() : options.now()
@@ -241,7 +245,7 @@ export function normalizeVerifiedWechatQueryFact(input, order, options = {}) {
     }
     paidAtSeconds = requireInteger(input.paidAtSeconds, { minimum: 1 })
     paidAt = normalizePaidTime(paidAtSeconds, Math.floor(nowValue / 1000))
-    paidAmountFen = 3000
+    paidAmountFen = order.orderAmountFen
   } else if (
     ![null, 0].includes(input.paidFeeFen) ||
     ![null, 0].includes(input.paidAtSeconds)
@@ -260,7 +264,7 @@ export function normalizeVerifiedWechatQueryFact(input, order, options = {}) {
     meaning: rule.meaning,
     targetPaymentStatus: rule.localStatus,
     orderType: input.orderType,
-    orderAmountFen: 3000,
+    orderAmountFen: order.orderAmountFen,
     paidAmountFen,
     paidAtSeconds
   })
@@ -275,7 +279,7 @@ export function normalizeVerifiedWechatQueryFact(input, order, options = {}) {
     meaning: rule.meaning,
     targetPaymentStatus: rule.localStatus,
     orderType: input.orderType,
-    orderAmountFen: 3000,
+    orderAmountFen: order.orderAmountFen,
     providerOrderId,
     providerTransactionId,
     paidAmountFen,

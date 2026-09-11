@@ -93,7 +93,13 @@ const pool = {
         order_no: params[0],
         user_id: params[1],
         client_request_id: params[2],
+        internal_sku: params[3],
         product_id: params[4],
+        product_name: params[5],
+        quantity: params[6],
+        unit_price_fen: params[7],
+        order_amount_fen: params[8],
+        currency: params[9],
         client_platform: params[13]
       })
       return [{ affectedRows: 1 }]
@@ -136,6 +142,15 @@ const pending = await store.markOrderPending('42', ORDER_NO)
 assert.equal(pending.paymentStatus, 'pending')
 assert.match(statements.find(({ sql }) => sql.startsWith('UPDATE')).sql, /payment_status = 'initializing'/)
 assert.equal((await store.findByUserAndOrderNo('43', ORDER_NO)), null, 'ownership lookup must not reveal another user order')
+
+const sandboxTestCreated = await store.createOrder(createInput({
+  clientRequestId: 'request-test-1234',
+  productId: 'sandbox-test-product',
+  unitPriceFen: 100,
+  orderAmountFen: 100
+}))
+assert.equal(sandboxTestCreated.order.productId, 'sandbox-test-product')
+assert.equal(sandboxTestCreated.order.unitPriceFen, 100)
 
 let duplicateSelects = 0
 const idempotentStore = createVirtualPaymentStore({
@@ -251,11 +266,14 @@ for (const key of supportedDuplicateKeys.userRequest) {
 }
 
 for (const override of [
-  { unitPriceFen: 1 },
+  { unitPriceFen: 200, orderAmountFen: 200 },
   { quantity: 2 },
   { environment: 'production' },
   { wechatEnv: 0 },
   { clientPlatform: 'invalid' },
+  { productId: 'https://invalid.example.test/product' },
+  { productId: 'bad\nproduct' },
+  { productId: 'x'.repeat(129) },
   { loginCode: 'must-not-be-stored' }
 ]) {
   await assert.rejects(() => store.createOrder(createInput(override)), (error) => error.code === 'PAYMENT_REQUEST_INVALID')

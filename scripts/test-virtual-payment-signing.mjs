@@ -34,6 +34,21 @@ function createSession() {
   }, SESSION_KEY)
 }
 
+function productContext(overrides = {}) {
+  return {
+    productId: 'retired.membership-30d-test',
+    internalSku: 'membership_30d',
+    mode: 'short_series_goods',
+    displayName: '30天学习会员',
+    priceFen: 100,
+    quantity: 1,
+    durationSeconds: 2592000,
+    currency: 'CNY',
+    membershipSourceType: 'wechat_order',
+    ...overrides
+  }
+}
+
 function expectCode(run, code) {
   assert.throws(run, (error) => {
     assert.equal(error.code, code)
@@ -89,6 +104,69 @@ const repeated = service.createPaymentParameters({
   paymentSession: createSession()
 })
 assert.deepEqual(repeated, result)
+const explicitStandard = service.createPaymentParameters({
+  orderNo: ORDER_NO,
+  attach: ATTACH,
+  paymentSession: createSession(),
+  productContext: productContext({
+    productId: 'membership.product-30d',
+    priceFen: 3000
+  })
+})
+assert.deepEqual(explicitStandard, result)
+
+const sandboxTestService = createVirtualPaymentSigningService({ env: enabledEnv({
+  VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+  WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'membership.product-30d-test'
+}) })
+const sandboxTestResult = sandboxTestService.createPaymentParameters({
+  orderNo: ORDER_NO,
+  attach: ATTACH,
+  paymentSession: createSession()
+})
+assert.equal(JSON.parse(sandboxTestResult.signData).productId, 'membership.product-30d-test')
+assert.equal(JSON.parse(sandboxTestResult.signData).goodsPrice, 100)
+assert.equal(sandboxTestResult.mode, result.mode)
+
+for (const historicalService of [
+  service,
+  createVirtualPaymentSigningService({ env: enabledEnv({
+    VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'rotated.membership-30d-test'
+  }) })
+]) {
+  const historicalResult = historicalService.createPaymentParameters({
+    orderNo: ORDER_NO,
+    attach: ATTACH,
+    paymentSession: createSession(),
+    productContext: productContext()
+  })
+  assert.equal(JSON.parse(historicalResult.signData).productId, 'retired.membership-30d-test')
+  assert.equal(JSON.parse(historicalResult.signData).goodsPrice, 100)
+}
+
+for (const invalidContext of [
+  null,
+  {},
+  productContext({ productId: 'membership.product-30d' }),
+  productContext({ productId: 'https://invalid.example.test/product' }),
+  productContext({ priceFen: 3000 }),
+  productContext({ internalSku: 'other' }),
+  productContext({ mode: 'other' }),
+  productContext({ displayName: '' }),
+  productContext({ quantity: 2 }),
+  productContext({ durationSeconds: 1 }),
+  productContext({ currency: 'USD' }),
+  productContext({ membershipSourceType: 'other' }),
+  { ...productContext(), extra: true }
+]) {
+  expectCode(() => service.createPaymentParameters({
+    orderNo: ORDER_NO,
+    attach: ATTACH,
+    paymentSession: createSession(),
+    productContext: invalidContext
+  }), 'VIRTUAL_PAYMENT_PRODUCT_INVALID')
+}
 
 const mutableInput = {
   orderNo: ORDER_NO,
