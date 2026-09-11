@@ -112,3 +112,9 @@
 - 在不修改或停用既有30元商品的前提下，为独立sandbox新增可显式启停的1元测试商品；两者productId独立，固定CNY、数量1和30天会员权益。
 - 服务端必须权威选择并校验商品，客户端不提交金额；小程序仅在development连接指定sandbox域名且测试开关开启时展示1元。
 - 停测通过关闭开关和停用微信后台测试道具完成，历史订单及全部审计证据保留。本阶段只开发和自动测试，不提交、推送、部署或创建真实支付订单。
+
+### 2026-09-11 旧后台子域名退役
+
+- 从 `bc4216b1c41c279065cdb9884e532ebc38eadfae` 的干净 `master` 建立独立域名分支，退役 `admin.baxiaota.com`；正式后台继续使用 `https://baxiaota.com/admin/`，正式 API 继续使用 `https://baxiaota.com/api/...`。
+- 域名任务不得部署本次已合入但尚未部署的支付双商品代码，不运行 migration，不修改 sandbox 支付配置、商品或订单，也不发起新的 ¥1/¥30 支付。
+- 退役过程中必须保留 `baxiaota.com`、`sandbox-api.baxiaota.com`、主域名 DNS、沙箱 DNS 和主域名证书；任何 DNS、Nginx 或证书清理均只针对已明确核验的旧 admin 资源。

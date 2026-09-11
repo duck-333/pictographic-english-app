@@ -846,3 +846,28 @@ IDENTITY_STORE_ERROR
 - 服务端新增配置名`VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED`和`WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID`。开关默认关闭；开启时测试productId必填且不得与30元productId相同。生产NODE_ENV下原有sandbox禁用门禁不变。
 - 小程序仅在development、API基址精确为`https://sandbox-api.baxiaota.com`且客户端测试开关为true时显示¥1.00并接受100分支付参数；任一条件不成立即使用原¥30.00展示和3000分校验。创建请求仍只有sku，不含金额。
 - 测试结束后优先关闭服务端和客户端测试开关并重新编译development包；历史100分订单的查询、对账、发放与发货只按订单已保存快照恢复，不依赖测试productId仍在当前配置中。微信后台可停用测试道具；不得删除订单、grant、权益流水、delivery attempt、query或退款证据。
+
+## 2026-09-11：`admin.baxiaota.com` 退役记录
+
+- 域名工作从 `master`、`origin/master` 和 HEAD 共同提交 `bc4216b1c41c279065cdb9884e532ebc38eadfae` 的干净状态创建 `codex/retire-admin-subdomain`；支付双商品代码已合入该基线但未部署，域名任务未部署支付代码、未运行 migration、未修改 sandbox 支付配置或订单、未创建新支付。
+- 本地全仓在排除 `.git`、`node_modules`、`unpackage`、`dist`、build、缓存和临时目录后，对 `admin.baxiaota.com` 大小写不敏感搜索为 0；补查 ignored/untracked 内容仍为 0。生产 API 发布目录、`/var/www/pictographic-admin` 和 PM2 id 7 的脱敏环境检查也均为 0。
+- 小程序 production API 固定为 `https://baxiaota.com`；登录、词条、收藏、最近学习、权益、购书福利和虚拟支付客户端共用该基址。后台 production 使用同源 `/api/...`，H5 base 为 `/admin/`。服务端微信登录及虚拟支付只主动访问微信官方 API，未配置旧域名回调。
+- 退役前 Nginx 的 admin HTTP/HTTPS server 块均在 server 层固定 302 到 `https://baxiaota.com/admin/`，无 location、root、alias 或 proxy_pass；正式 `/admin/` 由 `/var/www/pictographic-admin/` 提供，正式 `/api/` 实际反代 `127.0.0.1:3002`。
+- 两周共享访问日志虽不记录 Host，但固定 154 字节 302 与 admin Nginx 响应一致；脱敏分类未发现 MicroMessenger、WeChat DevTools、servicewechat 来源，也未发现 words、user、virtual-payment 或 admin-api 业务路由。大量 `/other` 与异常 POST 视为扫描流量，不能单独作为业务依赖。
+- 微信平台原 request 合法域名包含 admin、主域名和 sandbox；2026-09-11 已只移除 `https://admin.baxiaota.com`，保留另外两项。uploadFile/downloadFile 只使用主域名，socket/UDP/TCP/业务域名为空，消息推送未启用。删除后真机登录、重新登录和会员权益读取正常；`study` 无结果经公开只读 GET 证实为 sandbox `count=0`，不是域名失败。
+- 微信虚拟支付基础配置没有回调 URL，消息推送未配置；腾讯云 VOD 回调 URL 未设置，仅有腾讯默认播放域名，Referer 与 Key 防盗链均关闭且无规则。DNSPod 中 admin 与主域名原指向同一 IP；SSL 控制台两张证书均未托管且自动续费关闭。
+- admin 证书只覆盖 `admin.baxiaota.com`，北京时间 2026-09-17 07:59:59 到期；主证书只覆盖 `baxiaota.com`、`www.baxiaota.com`，北京时间 2026-09-21 07:59:59 到期。主证书不覆盖 admin。Certbot 只管理 sandbox 证书，服务器 cron/systemd 未发现 admin 续签配置。
+- 2026-09-11 已删除 DNSPod 中唯一的 `admin` A 记录；1.1.1.1、8.8.8.8、223.5.5.5 均返回名称不存在，主域名与 sandbox 仍解析到原服务器。`_dnsauth.admin` 暂留，`@`、`_dnsauth`、`sandbox-api` 未修改。
+- 原启用项 `/etc/nginx/sites-enabled/pictographic-admin` 已确认是指向 `/etc/nginx/sites-available/pictographic-admin` 的软链接。取得明确授权后仅 unlink 该软链接；`nginx -t` syntax/test 成功后执行平滑 reload。随后 `systemctl is-active nginx` 为 active，`nginx -T` 返回 `NO_ACTIVE_ADMIN_VHOST`。
+- 重载后公网只读回归：`https://baxiaota.com/`、`https://baxiaota.com/admin/`、`https://baxiaota.com/api/health`、`https://sandbox-api.baxiaota.com/api/health` 均为 HTTP 200，TLS verify result 0；admin 公共 DNS 仍为不存在。
+- 当前技术结论：旧 admin 子域名的业务流量入口和 Nginx vhost 已退役。保留 sites-available 原配置与旧证书作为短期回退材料；回退窗口结束后再单独授权清理 `_dnsauth.admin`、原配置和旧证书。主域名证书必须独立及时续签。
+
+### 2026-09-11：主域名免费证书更换
+
+- 腾讯云重新签发 90 天免费证书，Subject 为 `CN=baxiaota.com`，SAN 为 `baxiaota.com`、`www.baxiaota.com`，签发者为 `TrustAsia DV TLS RSA CA 2024`，北京时间有效期为 2026-09-11 12:00:00 至 2026-12-10 11:59:59。
+- Windows 下载包中的 `baxiaota.com_bundle.crt` 已先通过 .NET X509 只读检查；未读取或输出 `baxiaota.com.key` 内容。因公网 22 端口从本机连接超时，改用腾讯云 OrcaTerm 文件管理器上传至权限为 700 的 `/home/ubuntu/ssl-staging-baxiaota-20260911`。
+- 上传后的公钥证书再次由 OpenSSL 只读确认 Subject、Issuer、有效期和 SAN；暂存私钥权限设为 600，证书权限设为 644。部署前将原线上证书和私钥逐文件备份到权限为 700 的 `/etc/nginx/ssl/baxiaota.com/backup-20260911-before-renewal`，没有输出私钥内容。
+- 使用 `install` 将新证书以 root:root/644、新私钥以 root:root/600 精确替换原 Nginx 引用文件；`nginx -t` 成功后才平滑 reload，`systemctl is-active nginx` 返回 active。
+- 公网实际提供的证书已确认是上述新证书；`https://baxiaota.com/`、`https://baxiaota.com/admin/`、`https://baxiaota.com/api/health` 均返回 HTTP 200 且 TLS verify result 为 0。
+- 该免费证书不具备本地 Nginx 自动续期能力，必须在 2026-12-10 到期前再次人工申请、下载、备份、替换和验证。旧 `admin.baxiaota.com` 证书无需续期；主证书仍不覆盖已退役的 admin 子域名。
+- 当前保留新证书上传暂存副本、旧主证书回滚备份、旧 admin sites-available 配置和旧 admin 证书，均待各自回退窗口结束后另行取得明确授权再清理；本次未部署支付代码、未运行 migration、未修改 sandbox 支付配置或订单。
