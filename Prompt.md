@@ -118,3 +118,12 @@
 - 从 `bc4216b1c41c279065cdb9884e532ebc38eadfae` 的干净 `master` 建立独立域名分支，退役 `admin.baxiaota.com`；正式后台继续使用 `https://baxiaota.com/admin/`，正式 API 继续使用 `https://baxiaota.com/api/...`。
 - 域名任务不得部署本次已合入但尚未部署的支付双商品代码，不运行 migration，不修改 sandbox 支付配置、商品或订单，也不发起新的 ¥1/¥30 支付。
 - 退役过程中必须保留 `baxiaota.com`、`sandbox-api.baxiaota.com`、主域名 DNS、沙箱 DNS 和主域名证书；任何 DNS、Nginx 或证书清理均只针对已明确核验的旧 admin 资源。
+
+### 2026-09-14：虚拟支付发货消息推送接收链路
+
+- 新增独立于用户 JWT 的 `GET/POST /api/wechat/virtual-payment/message`，本批只允许显式启用的 development+sandbox+Env=1+明文 JSON。
+- GET 严格执行微信 Token SHA-1 URL 校验；POST 必须先验签，再以独立字节上限读取 JSON，并严格校验 `xpay_goods_deliver_notify`、身份、订单和商品事实。
+- `GoodsInfo` 只依赖已确认的 `ProductId`、`Quantity`、`Attach` 和可选嵌套 `TeamInfo`；`Attach` 必须是非空安全字符串，并在事务中严格等于锁定订单的 `orderNo`，同时进入 canonical fact/hash。`TeamInfo` 的 ActivityId/TeamId 使用非空、128字符上限和控制字符门禁，TeamType/TeamAction 必须为安全整数，未知扩展字段忽略；不把 `OrigPrice`、`ActualPrice` 假定为官方推送字段。可选 `WeChatPayInfo` 的 `MchOrderNo`、`TransactionId`、`PaidTime` 必须保留为可重建证据。
+- 复用现有事件表和订单号会员幂等键，在一个数据库事务内完成事件去重、支付恢复、会员发放和 delivered 收口；成功推送不再调用 `notify_provide_goods`。
+- 消息推送启用时，用户 `/delivery` 先保留固定 60 秒消息主路径窗口；到期后才允许既有 `notify_provide_goods` 作为兜底。任一活动发货 attempt 已存在时，消息回调必须失败且不得改写该 attempt。
+- 不新增迁移或依赖，不写入真实 Token、OpenID、订单号或原始消息；AES 安全模式和生产启用仍是上线前限制。

@@ -738,6 +738,7 @@ export function createVirtualPaymentService(options = {}) {
       work = await store.claimDeliveryWork(userId, input.orderNo, {
         expectedProductId: productContext.productId,
         expectedPriceFen: productContext.product.priceFen,
+        messagePushEnabled: options.messagePushEnabled === true,
         now: deliveryNow()
       })
     } catch (error) {

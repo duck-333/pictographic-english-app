@@ -306,3 +306,12 @@
 - 保留 `/etc/nginx/sites-available/pictographic-admin` 和旧证书文件，直到回退窗口结束；之后再分别取得授权清理。
 - 主域名免费证书已独立重新申请并部署：覆盖 `baxiaota.com`、`www.baxiaota.com`，北京时间 2026-12-10 11:59:59 到期；公网证书、首页、`/admin/` 和 `/api/health` 已验证正常。该免费证书不自动续期，后续必须在到期前再次人工申请并部署。
 - 新旧主域名证书的回滚备份和上传暂存副本目前保留；确认回退窗口结束后，再分别取得授权清理，不与旧 admin 证书材料混合操作。
+
+## 2026-09-14：`xpay_goods_deliver_notify` 开发与验收
+
+- 路由层：公开入口与 `/api/user/virtual-payment/*` 明确隔离；严格配置、查询参数、恒定时间签名、Content-Type、UTF-8 和 16 KiB 原始正文门禁，所有响应 `no-store`。
+- 事实层：独立规范化 `GoodsInfo` 和可选 `WeChatPayInfo`；`Attach` 必须等于锁定订单号并进入 canonical fact/hash，可选 `TeamInfo` 的四个已知字段按官方类型验证。事件键只由事件类型和已验证订单号语义生成，摘要由可从订单与事件列重建的可信事实生成，不混入 nonce 或原始正文。
+- Store 层：entitlement、message callback、delivery claim/recovery 及共享 helper 全部统一按订单行 → 会员调度/会员记录 → delivery attempt/query → payment event 的顺序加锁；活动 attempt 直接冲突回滚。无活动 attempt 时，同事务校验 Attach 和重复事实、插入或递增事件、补齐 paid、按 orderNo 发放一次会员并写 delivered，提交前不返回成功。
+- 主备仲裁：消息功能有效启用时，`/delivery` 首次只写 `pending + next_retry_at=now+60s`，窗口内不建 attempt、不调用微信；到期后才创建既有主动发货 attempt。消息先完成则兜底只读 delivered，兜底先取得 attempt 则消息失败。
+- 测试：validation、Store transaction、route 三套离线测试覆盖 Attach/TeamInfo、官方最小/嵌套消息、扩展字段、MchOrderNo、重复/冲突/并发、活动 attempt、OPTIONS、正文中断与敏感信息；隔离 MySQL 8.0.46 脚本对 settled rejection 逐层检查数据库错误和显式业务码，使用两个真实连接验证 entitlement/message、message/到期 fallback 及同用户1元+30元两订单真并发，验证连续60天会员区间、生产 Service 形成 uncertain、四种活动 attempt 不覆盖以及会员写入后注入失败的完整回滚，并断言相关表均为 InnoDB、无死锁或锁等待超时。
+- 限制：不运行生产迁移、不访问服务器或微信真实接口；真实 MySQL 门禁只允许在无共享卷、随机测试库的本地临时容器中执行并清理。生产启用及 AES 安全模式必须后续单独实现和复审。
