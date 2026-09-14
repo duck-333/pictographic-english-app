@@ -2,6 +2,7 @@ import { requireUserAuth } from './auth.mjs'
 import { getVirtualPaymentConfig } from './virtual-payment-config.mjs'
 import { createVirtualPaymentClient } from './virtual-payment-client.mjs'
 import { createVirtualPaymentService } from './virtual-payment-service.mjs'
+import { getVirtualPaymentMessageConfig } from './virtual-payment-message.mjs'
 import { createVirtualPaymentSessionService } from './virtual-payment-session.mjs'
 import { createVirtualPaymentSigningService } from './virtual-payment-signing.mjs'
 import { createVirtualPaymentStore } from './virtual-payment-store.mjs'
@@ -172,6 +173,12 @@ export function createVirtualPaymentRoutes(options = {}) {
       throw disabled
     }
     try {
+      let messagePushEnabled = false
+      const runtimeEnv = options.env || process.env
+      if (runtimeEnv.VIRTUAL_PAYMENT_WECHAT_MESSAGE_ENABLED === 'true') {
+        getVirtualPaymentMessageConfig(options)
+        messagePushEnabled = true
+      }
       const store = options.virtualPaymentStore || createVirtualPaymentStore(options)
       const paymentSessionService = options.virtualPaymentSessionService || createVirtualPaymentSessionService({
         wechatLoginClient: options.wechatLoginClient,
@@ -186,6 +193,7 @@ export function createVirtualPaymentRoutes(options = {}) {
         service: createVirtualPaymentService({
           ...options,
           store,
+          messagePushEnabled,
           paymentSessionService,
           signingService,
           virtualPaymentClient

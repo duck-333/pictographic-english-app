@@ -50,16 +50,42 @@ function baseStore(overrides = {}) {
   }
 }
 
-function serviceWith({ store, client, identityStore } = {}) {
+function serviceWith({ store, client, identityStore, messagePushEnabled = false } = {}) {
   return createVirtualPaymentService({
     env,
     now: () => new Date(NOW),
     store,
+    messagePushEnabled,
     virtualPaymentClient: client,
     identityStore: identityStore || { async findWechatOpenidByUserIdForPayment() { return 'openid-42' } },
     paymentSessionService: { async exchangeAndVerifyPaymentSession() { throw new Error('not used') } },
     signingService: { createPaymentParameters() { throw new Error('not used') } }
   })
+}
+
+{
+  let claimContext = null
+  let notifyCalls = 0
+  const store = baseStore({
+    async claimDeliveryWork(_userId, _orderNo, context) {
+      claimContext = context
+      return { action: 'wait', order: { ...order, deliveryStatus: 'pending' } }
+    },
+    async markDeliveryDispatching() { throw new Error('must not run') },
+    async finishDeliveryNotify() { throw new Error('must not run') },
+    async applyDeliveryQueryFact() { throw new Error('must not run') }
+  })
+  const service = serviceWith({
+    store, messagePushEnabled: true,
+    client: {
+      async notifyProvideGoods() { notifyCalls += 1 },
+      async queryOrder() { throw new Error('must not run') }
+    }
+  })
+  const result = await service.deliverOwnedOrder({ authenticatedUserId: '42', orderNo: ORDER_NO })
+  assert.equal(claimContext.messagePushEnabled, true)
+  assert.equal(result.deliveryStatus, 'pending')
+  assert.equal(notifyCalls, 0)
 }
 
 function queryWork(operationId) {

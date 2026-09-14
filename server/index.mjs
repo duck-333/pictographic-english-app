@@ -10,6 +10,7 @@ import { createUserFavoritesStore } from './user-favorites-store.mjs'
 import { createUserRecentWordsStore } from './user-recent-words-store.mjs'
 import { createUserStore } from './user-store.mjs'
 import { createVirtualPaymentRoutes } from './virtual-payment-routes.mjs'
+import { createVirtualPaymentMessageRoutes } from './virtual-payment-message-routes.mjs'
 import { createWechatLoginClient } from './wechat-login.mjs'
 import { toBasicWord, toFullWord } from './word-access-policy.mjs'
 import { createWordStore } from './word-store.mjs'
@@ -1040,6 +1041,11 @@ export function createApiHandler(options = {}) {
     wechatLoginClient,
     userEntitlementStore
   })
+  const virtualPaymentMessageRoutes = createVirtualPaymentMessageRoutes({
+    ...options,
+    identityStore,
+    userEntitlementStore
+  })
   const now = options.now || (() => new Date())
   const adminAuthOptions = {
     nodeEnv: options.nodeEnv,
@@ -1053,13 +1059,16 @@ export function createApiHandler(options = {}) {
   }
 
   return async function handleApiRequest(req, res) {
+    const requestUrl = new URL(req.url || '/', 'http://127.0.0.1')
+    const pathname = normalizePathname(requestUrl.pathname)
+
+    // The public WeChat callback has its own method policy and must not inherit
+    // the JWT API's generic CORS preflight success response.
+    if (await virtualPaymentMessageRoutes.handle(req, res, pathname)) return
     if (req.method === 'OPTIONS') {
       sendOptions(res)
       return
     }
-
-    const requestUrl = new URL(req.url || '/', 'http://127.0.0.1')
-    const pathname = normalizePathname(requestUrl.pathname)
 
     try {
       if (req.method === 'GET' && pathname === '/api/health') {

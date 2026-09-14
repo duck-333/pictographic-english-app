@@ -9,6 +9,7 @@ import {
   transitionPaymentStatus
 } from './virtual-payment-state.mjs'
 import { createWechatQueryCanonicalFact } from './virtual-payment-reconciliation.mjs'
+import { createWechatGoodsDeliveryCanonicalFact } from './virtual-payment-message.mjs'
 import { isVirtualPaymentProductId, virtualPaymentProductForPrice } from './virtual-payment-config.mjs'
 
 const DEFAULT_DB_HOST = '127.0.0.1'
@@ -36,6 +37,7 @@ const ALLOWED_WECHAT_QUERY_EVENT_HISTORY = new Map([
   ['wechat_query_status_4_paid', Object.freeze({ status: 4, meaning: 'delivered', target: 'paid', paid: true })]
 ])
 const MAX_WECHAT_QUERY_EVENT_HISTORY = ALLOWED_WECHAT_QUERY_EVENT_HISTORY.size
+const WECHAT_GOODS_DELIVERY_EVENT_TYPE = 'xpay_goods_deliver_notify'
 const MAX_PAYMENT_EVENT_HISTORY_SCAN = 64
 const EXPECTED_DUPLICATE_CONSTRAINTS = new Set([
   'uk_virtual_payment_orders_order_no',
@@ -60,6 +62,7 @@ const DELIVERY_ATTEMPT_STATUSES = new Set([
 const DELIVERY_RESULT_KINDS = new Set(['not_started', 'success', 'explicit_failure', 'uncertain'])
 const DELIVERY_LEASE_MS = 30_000
 const DELIVERY_BACKOFF_MS = 60_000
+const DELIVERY_MESSAGE_PRIMARY_WINDOW_MS = 60_000
 const DELIVERY_CONFIRM_WINDOW_MS = 15 * 60_000
 const DELIVERY_MAX_NOTIFY_ATTEMPTS = 3
 const DELIVERY_MAX_CONFIRM_QUERIES = 3
@@ -517,6 +520,39 @@ function normalizeDeliveryQueryFact(value) {
   })
 }
 
+function normalizeGoodsDeliveryNotificationFact(value) {
+  const keys = [
+    'source', 'eventType', 'eventKey', 'payloadHash', 'userId', 'orderNo',
+    'productId', 'internalSku', 'quantity', 'attach', 'unitPriceFen', 'orderAmountFen',
+    'providerMerchantOrderNo', 'providerTransactionId', 'paidAtSeconds', 'paidAt'
+  ]
+  if (
+    !value || typeof value !== 'object' || Array.isArray(value) ||
+    Object.keys(value).length !== keys.length || keys.some((key) => !Object.hasOwn(value, key)) ||
+    value.source !== 'wechat_goods_delivery_message' || value.eventType !== WECHAT_GOODS_DELIVERY_EVENT_TYPE ||
+    !Buffer.isBuffer(value.payloadHash) || value.payloadHash.length !== 32 ||
+    !(value.paidAt instanceof Date) || !Number.isFinite(value.paidAt.getTime()) ||
+    value.paidAt.getTime() !== value.paidAtSeconds * 1000
+  ) throw createStoreError('Payment message fact is invalid.', 'PAYMENT_MESSAGE_INVALID', 400)
+  let canonical
+  try {
+    canonical = createWechatGoodsDeliveryCanonicalFact({
+      source: value.source, environment: 'sandbox', wechatEnv: 1,
+      userId: value.userId, orderNo: value.orderNo, productId: value.productId,
+      internalSku: value.internalSku, quantity: value.quantity, attach: value.attach,
+      unitPriceFen: value.unitPriceFen, orderAmountFen: value.orderAmountFen,
+      providerMerchantOrderNo: value.providerMerchantOrderNo,
+      providerTransactionId: value.providerTransactionId, paidAtSeconds: value.paidAtSeconds
+    })
+  } catch {
+    throw createStoreError('Payment message fact is invalid.', 'PAYMENT_MESSAGE_INVALID', 400)
+  }
+  if (!crypto.timingSafeEqual(value.payloadHash, canonical.payloadHash) || value.eventKey !== canonical.eventKey) {
+    throw createStoreError('Payment message fact is invalid.', 'PAYMENT_MESSAGE_INVALID', 400)
+  }
+  return Object.freeze({ ...value, payloadHash: Buffer.from(canonical.payloadHash), paidAt: new Date(value.paidAt.getTime()) })
+}
+
 function assertAffectedRows(result, expected = 1) {
   const affectedRows = result && result[0] && result[0].affectedRows
   if (affectedRows !== expected) {
@@ -532,6 +568,42 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
   const eventRule = ALLOWED_WECHAT_QUERY_EVENT_HISTORY.get(eventType)
   const eventKey = requireString(row.event_key, 191)
   const orderNo = normalizeOrderNo(row.order_no)
+  if (eventType === WECHAT_GOODS_DELIVERY_EVENT_TYPE) {
+    const providerTransactionId = requireProviderTransactionReference(row.provider_transaction_id)
+    const paidAt = normalizeRequiredDate(row.paid_at)
+    const paidAtSeconds = Date.parse(paidAt) / 1000
+    let canonical
+    try {
+      canonical = createWechatGoodsDeliveryCanonicalFact({
+        source: 'wechat_goods_delivery_message', environment: 'sandbox',
+        wechatEnv: requireUnsignedInteger(row.wechat_env, { expected: 1, maximum: 255 }),
+        userId: normalizeBigIntId(row.linked_user_id), orderNo,
+        productId: requireProductId(row.linked_product_id),
+        internalSku: requireExactString(row.linked_internal_sku, 'membership_30d'),
+        quantity: requireUnsignedInteger(row.linked_quantity, { expected: 1 }),
+        attach: orderNo,
+        unitPriceFen: requireUnsignedInteger(row.linked_unit_price_fen),
+        orderAmountFen: requireUnsignedInteger(row.order_amount_fen),
+        providerMerchantOrderNo: row.provider_order_id === null
+          ? null
+          : requireProviderTransactionReference(row.provider_order_id),
+        providerTransactionId, paidAtSeconds
+      })
+    } catch {
+      throw createStoreError('Payment event data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
+    }
+    if (
+      normalizeBigIntId(row.order_id) !== normalizeBigIntId(row.linked_order_id) ||
+      orderNo !== row.linked_order_no ||
+      providerTransactionId !== row.linked_provider_transaction_id ||
+      row.environment !== 'sandbox' || row.processing_status !== 'processed' || row.last_error_code !== null ||
+      !Buffer.isBuffer(row.payload_hash) || row.payload_hash.length !== 32 ||
+      !crypto.timingSafeEqual(row.payload_hash, canonical.payloadHash) || eventKey !== canonical.eventKey ||
+      requireUnsignedInteger(row.received_count) < 1 || requireUnsignedInteger(row.attempt_count) < 1
+    ) throw createStoreError('Payment event data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
+    normalizeRequiredDate(row.processed_at)
+    return true
+  }
   const providerOrderId = requireString(row.provider_order_id, 128)
   const providerTransactionId = requireProviderTransactionReference(row.provider_transaction_id, {
     nullable: eventRule ? !eventRule.paid : true
@@ -1058,7 +1130,7 @@ export function createVirtualPaymentStore(options = {}) {
 
   async function findTrustedWechatQueryPaidEvidenceWithExecutor(executor, userId, orderNo, options = {}) {
     const deliveryQuerySelect = options.includeDeliveryHistory === true
-      ? `, o.user_id AS linked_user_id, dq.user_id AS delivery_query_user_id,
+      ? `, dq.user_id AS delivery_query_user_id,
               dq.observed_environment AS delivery_query_environment,
               dq.request_env AS delivery_query_env, dq.response_env_type AS delivery_query_env_type,
               dq.observed_currency AS delivery_query_currency, dq.observed_order_no AS delivery_query_order_no,
@@ -1085,6 +1157,9 @@ export function createVirtualPaymentStore(options = {}) {
               e.processing_status, e.received_count, e.processed_at,
               e.attempt_count, e.last_error_code,
               o.id AS linked_order_id, o.order_no AS linked_order_no,
+              o.user_id AS linked_user_id, o.product_id AS linked_product_id,
+              o.internal_sku AS linked_internal_sku, o.quantity AS linked_quantity,
+              o.unit_price_fen AS linked_unit_price_fen,
               o.provider_order_id AS linked_provider_order_id,
               o.provider_transaction_id AS linked_provider_transaction_id,
               o.order_amount_fen, o.paid_amount_fen, o.paid_at,
@@ -1161,17 +1236,17 @@ export function createVirtualPaymentStore(options = {}) {
     }
     const keys = membershipGrantKeys(orderNo)
     return runTransaction(async (connection) => {
-      try {
-        await entitlementStore.lockMembershipScheduleInTransaction(connection, userId)
-      } catch {
-        throw createStoreError('Membership schedule is unavailable.', 'PAYMENT_MEMBERSHIP_SCHEDULE_UNAVAILABLE', 503)
-      }
       const lockedOrder = normalizeSingleOrder(await connection.execute(
         `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE}
          WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
         [userId, orderNo]
       ))
       if (!lockedOrder) throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+      try {
+        await entitlementStore.lockMembershipScheduleInTransaction(connection, userId)
+      } catch {
+        throw createStoreError('Membership schedule is unavailable.', 'PAYMENT_MEMBERSHIP_SCHEDULE_UNAVAILABLE', 503)
+      }
       assertTrustedPaidOrderForEntitlement(lockedOrder, expectedProductId, expectedPriceFen, userId)
       const hasEvidence = await findTrustedWechatQueryPaidEvidenceWithExecutor(
         (sql, values) => connection.execute(sql, values),
@@ -1264,7 +1339,7 @@ export function createVirtualPaymentStore(options = {}) {
     }, { isolationLevel: 'READ COMMITTED' })
   }
 
-  function assertTrustedGrantedOrderForDelivery(order, expectedProductId, expectedPriceFen, userId) {
+  function assertTrustedGrantedOrderForDeliveryBase(order, expectedProductId, expectedPriceFen, userId, requireProviderOrderId) {
     const product = virtualPaymentProductForPrice(expectedPriceFen)
     if (
       order.userId !== userId || order.paymentStatus !== 'paid' ||
@@ -1273,7 +1348,7 @@ export function createVirtualPaymentStore(options = {}) {
       order.unitPriceFen !== product.priceFen || order.orderAmountFen !== product.priceFen || order.paidAmountFen !== product.priceFen ||
       order.currency !== product.currency || order.environment !== 'sandbox' || order.wechatEnv !== 1 ||
       order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
-      order.providerOrderId === null || order.providerTransactionId === null || order.paidAt === null ||
+      (requireProviderOrderId && order.providerOrderId === null) || order.providerTransactionId === null || order.paidAt === null ||
       order.entitlementStatus !== 'granted' || order.membershipGrantId === null ||
       order.entitlementTransactionId === null || order.entitlementGrantedAt === null ||
       !['not_ready', 'pending', 'confirming', 'delivered', 'retryable_failed', 'manual_review'].includes(order.deliveryStatus) ||
@@ -1283,17 +1358,18 @@ export function createVirtualPaymentStore(options = {}) {
     }
   }
 
-  async function verifyDeliveryPrerequisites(connection, order, expectedProductId, expectedPriceFen, userId) {
+  function assertTrustedGrantedOrderForDelivery(order, expectedProductId, expectedPriceFen, userId) {
+    assertTrustedGrantedOrderForDeliveryBase(order, expectedProductId, expectedPriceFen, userId, true)
+  }
+
+  async function verifyDeliveryPrerequisites(connection, order, expectedProductId, expectedPriceFen, userId, options = {}) {
     try { await assertDeliverySchema(connection) } catch {
       throw createStoreError('Payment delivery schema mismatch; controlled recovery required.', 'PAYMENT_DELIVERY_SCHEMA_MISMATCH', 503)
     }
-    assertTrustedGrantedOrderForDelivery(order, expectedProductId, expectedPriceFen, userId)
-    const hasEvidence = await findTrustedWechatQueryPaidEvidenceWithExecutor(
-      (sql, values) => connection.execute(sql, values), userId, order.orderNo,
-      { includeDeliveryHistory: true }
-    )
-    if (hasEvidence !== true) {
-      throw createStoreError('Paid payment fact is incomplete.', 'PAYMENT_PAID_FACT_INCOMPLETE', 409)
+    if (options.verifiedMessageDelivered === true) {
+      assertTrustedGrantedOrderForDeliveryBase(order, expectedProductId, expectedPriceFen, userId, false)
+    } else {
+      assertTrustedGrantedOrderForDelivery(order, expectedProductId, expectedPriceFen, userId)
     }
     if (!entitlementStore || typeof entitlementStore.verifyMembershipGrantInTransaction !== 'function') {
       throw createStoreError('Payment entitlement service is unavailable.')
@@ -1310,7 +1386,17 @@ export function createVirtualPaymentStore(options = {}) {
     }
   }
 
-  function assertDeliveryAttemptHistory(order, userId, attempts, queries) {
+  async function verifyDeliveryPaidEvidence(connection, order, userId) {
+    const hasEvidence = await findTrustedWechatQueryPaidEvidenceWithExecutor(
+      (sql, values) => connection.execute(sql, values), userId, order.orderNo,
+      { includeDeliveryHistory: true }
+    )
+    if (hasEvidence !== true) {
+      throw createStoreError('Paid payment fact is incomplete.', 'PAYMENT_PAID_FACT_INCOMPLETE', 409)
+    }
+  }
+
+  function assertDeliveryAttemptHistory(order, userId, attempts, queries, options = {}) {
     const attemptIds = new Set()
     const operationIds = new Set()
     const leaseOwners = new Set()
@@ -1485,7 +1571,7 @@ export function createVirtualPaymentStore(options = {}) {
       }
     }
     const successes = attempts.filter((attempt) => attempt.status === 'succeeded')
-    if ((order.deliveryStatus === 'delivered' && successes.length !== 1) ||
+    if ((order.deliveryStatus === 'delivered' && successes.length !== 1 && !(options.messageDelivered && successes.length === 0)) ||
         (order.deliveryStatus !== 'delivered' && successes.length !== 0)) {
       throw createStoreError('Payment success history is invalid.', 'PAYMENT_DELIVERY_CONFLICT', 409)
     }
@@ -1523,7 +1609,29 @@ export function createVirtualPaymentStore(options = {}) {
        WHERE q.order_id = ? ORDER BY q.attempt_id ASC, q.query_sequence ASC FOR UPDATE`,
       [order.id]
     ))
-    assertDeliveryAttemptHistory(order, userId, attempts, queries)
+    let messageDelivered = false
+    if (order.deliveryStatus === 'delivered' && attempts.filter((attempt) => attempt.status === 'succeeded').length === 0) {
+      const messageRows = getRows(await connection.execute(
+        `SELECT e.event_key, e.event_type, e.order_id, e.order_no,
+                e.provider_order_id, e.provider_transaction_id, e.payload_hash,
+                e.processing_status, e.received_count, e.processed_at,
+                e.attempt_count, e.last_error_code,
+                o.id AS linked_order_id, o.order_no AS linked_order_no,
+                o.user_id AS linked_user_id, o.product_id AS linked_product_id,
+                o.internal_sku AS linked_internal_sku, o.quantity AS linked_quantity,
+                o.unit_price_fen AS linked_unit_price_fen,
+                o.provider_order_id AS linked_provider_order_id,
+                o.provider_transaction_id AS linked_provider_transaction_id,
+                o.order_amount_fen, o.paid_amount_fen, o.paid_at,
+                o.environment, o.wechat_env
+         FROM ${EVENTS_TABLE} e INNER JOIN ${ORDERS_TABLE} o ON o.id = e.order_id
+         WHERE e.order_id = ? AND e.event_type = ? LIMIT 2 FOR UPDATE`,
+        [order.id, WECHAT_GOODS_DELIVERY_EVENT_TYPE]
+      ))
+      if (messageRows.length > 1) throw createStoreError('Payment event data is ambiguous.', 'PAYMENT_ORDER_CONFLICT', 409)
+      messageDelivered = messageRows.length === 1 && normalizeTrustedWechatQueryPaidEvidenceRow(messageRows[0]) === true
+    }
+    assertDeliveryAttemptHistory(order, userId, attempts, queries, { messageDelivered })
     const active = attempts.filter((attempt) => DELIVERY_ACTIVE_STATUSES.has(attempt.status))
     if (active.length > 1) {
       throw createStoreError('Payment delivery attempts are ambiguous.', 'PAYMENT_DELIVERY_CONFLICT', 409)
@@ -1535,7 +1643,8 @@ export function createVirtualPaymentStore(options = {}) {
     return {
       attempts, queries, active: active[0] || null,
       activeQuery: activeQueries[0] || null,
-      latest: attempts[attempts.length - 1] || null
+      latest: attempts[attempts.length - 1] || null,
+      messageDelivered
     }
   }
 
@@ -1597,6 +1706,10 @@ export function createVirtualPaymentStore(options = {}) {
     const orderNo = normalizeOrderNo(orderNoValue)
     const expectedProductId = requireProductId(contextValue.expectedProductId)
     const expectedPriceFen = contextValue.expectedPriceFen === undefined ? 3000 : contextValue.expectedPriceFen
+    if (contextValue.messagePushEnabled !== undefined && typeof contextValue.messagePushEnabled !== 'boolean') {
+      throw createStoreError('Payment delivery context is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
+    }
+    const messagePushEnabled = contextValue.messagePushEnabled === true
     const currentTime = deliveryTimestamp(contextValue.now)
     return runTransaction(async (connection) => {
       const order = normalizeSingleOrder(await connection.execute(
@@ -1605,11 +1718,24 @@ export function createVirtualPaymentStore(options = {}) {
         [userId, orderNo]
       ))
       if (!order) throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+      if (order.deliveryStatus === 'delivered' && order.providerOrderId === null) {
+        await verifyDeliveryPrerequisites(
+          connection, order, expectedProductId, expectedPriceFen, userId,
+          { verifiedMessageDelivered: true }
+        )
+        const messageAttemptState = await listDeliveryAttemptsForUpdate(connection, order, userId)
+        if (!messageAttemptState.messageDelivered) {
+          throw createStoreError('Payment delivery completion is incomplete.', 'PAYMENT_DELIVERY_CONFLICT', 409)
+        }
+        await verifyDeliveryPaidEvidence(connection, order, userId)
+        return Object.freeze({ order, action: 'delivered', attempt: null, idempotent: true })
+      }
       await verifyDeliveryPrerequisites(connection, order, expectedProductId, expectedPriceFen, userId)
       const attemptState = await listDeliveryAttemptsForUpdate(connection, order, userId)
+      await verifyDeliveryPaidEvidence(connection, order, userId)
 
       if (order.deliveryStatus === 'delivered') {
-        if (!attemptState.latest || attemptState.latest.status !== 'succeeded') {
+        if ((!attemptState.latest || attemptState.latest.status !== 'succeeded') && !attemptState.messageDelivered) {
           throw createStoreError('Payment delivery completion is incomplete.', 'PAYMENT_DELIVERY_CONFLICT', 409)
         }
         return Object.freeze({ order, action: 'delivered', attempt: null, idempotent: true })
@@ -1620,6 +1746,21 @@ export function createVirtualPaymentStore(options = {}) {
       if (order.deliveryStatus === 'not_ready') {
         if (attemptState.attempts.length !== 0) {
           throw createStoreError('Payment delivery attempts conflict with order state.', 'PAYMENT_DELIVERY_CONFLICT', 409)
+        }
+        if (messagePushEnabled) {
+          const nextRetryAt = new Date(currentTime.getTime() + DELIVERY_MESSAGE_PRIMARY_WINDOW_MS)
+          assertAffectedRows(await connection.execute(
+            `UPDATE ${ORDERS_TABLE}
+             SET delivery_status = 'pending', next_retry_at = ?, last_error_code = NULL, version = version + 1
+             WHERE id = ? AND user_id = ? AND order_no = ? AND version = ?
+               AND payment_status = 'paid' AND entitlement_status = 'granted'
+               AND delivery_status = 'not_ready' AND delivered_at IS NULL`,
+            [nextRetryAt, order.id, userId, orderNo, order.version]
+          ))
+          return Object.freeze({
+            order: { ...order, deliveryStatus: 'pending', nextRetryAt: nextRetryAt.toISOString(), version: order.version + 1 },
+            action: 'wait', attempt: null, idempotent: false
+          })
         }
         const attempt = await insertDeliveryAttempt(connection, order, attemptState.attempts, currentTime)
         assertAffectedRows(await connection.execute(
@@ -1635,7 +1776,28 @@ export function createVirtualPaymentStore(options = {}) {
 
       if (order.deliveryStatus === 'pending') {
         const active = attemptState.active
-        if (!active) throw createStoreError('Payment delivery attempt is missing.', 'PAYMENT_DELIVERY_CONFLICT', 409)
+        if (!active) {
+          if (
+            attemptState.attempts.length !== 0 || !order.nextRetryAt ||
+            !Number.isFinite(Date.parse(order.nextRetryAt))
+          ) throw createStoreError('Payment delivery attempt is missing.', 'PAYMENT_DELIVERY_CONFLICT', 409)
+          if (messagePushEnabled && Date.parse(order.nextRetryAt) > currentTime.getTime()) {
+            return Object.freeze({ order, action: 'wait', attempt: null, idempotent: true })
+          }
+          const attempt = await insertDeliveryAttempt(connection, order, attemptState.attempts, currentTime)
+          assertAffectedRows(await connection.execute(
+            `UPDATE ${ORDERS_TABLE}
+             SET next_retry_at = NULL, last_error_code = NULL, version = version + 1
+             WHERE id = ? AND user_id = ? AND order_no = ? AND version = ?
+               AND payment_status = 'paid' AND entitlement_status = 'granted'
+               AND delivery_status = 'pending' AND delivered_at IS NULL AND next_retry_at = ?`,
+            [order.id, userId, orderNo, order.version, new Date(order.nextRetryAt)]
+          ))
+          return Object.freeze({
+            order: { ...order, nextRetryAt: null, version: order.version + 1 },
+            action: 'notify', attempt, idempotent: false
+          })
+        }
         if (active.status === 'claimed' && active.requestStartedAt === null) {
           if (Date.parse(active.leaseExpiresAt) <= currentTime.getTime()) {
             const leaseOwner = deliveryOperationId()
@@ -1751,6 +1913,7 @@ export function createVirtualPaymentStore(options = {}) {
       if (!order) throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
       await verifyDeliveryPrerequisites(connection, order, expectedProductId, expectedPriceFen, userId)
       const attemptState = await listDeliveryAttemptsForUpdate(connection, order, userId)
+      await verifyDeliveryPaidEvidence(connection, order, userId)
       const attempt = attemptState.attempts.find((item) => item.operationId === operationId)
       if (
         !attempt || attempt !== attemptState.active || attempt.status !== 'claimed' ||
@@ -1786,7 +1949,9 @@ export function createVirtualPaymentStore(options = {}) {
         [userId, orderNo]
       ))
       if (!order) throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+      await verifyDeliveryPrerequisites(connection, order, order.productId, order.unitPriceFen, userId)
       const attemptState = await listDeliveryAttemptsForUpdate(connection, order, userId)
+      await verifyDeliveryPaidEvidence(connection, order, userId)
       const attempt = attemptState.attempts.find((item) => item.operationId === operationId)
       if (!attempt || attempt !== attemptState.active || attempt.status !== 'dispatching' || order.deliveryStatus !== 'pending') {
         throw createStoreError('Payment delivery result is stale.', 'PAYMENT_DELIVERY_STALE_RESULT', 409)
@@ -1863,7 +2028,9 @@ export function createVirtualPaymentStore(options = {}) {
         [userId, orderNo]
       ))
       if (!order) throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+      await verifyDeliveryPrerequisites(connection, order, expectedProductId, expectedPriceFen, userId)
       const attemptState = await listDeliveryAttemptsForUpdate(connection, order, userId)
+      await verifyDeliveryPaidEvidence(connection, order, userId)
       const query = attemptState.queries.find((item) => item.operationId === fact.queryOperationId)
       if (
         !query || query !== attemptState.activeQuery || query.status !== 'claimed' ||
@@ -1874,7 +2041,6 @@ export function createVirtualPaymentStore(options = {}) {
       ) {
         return Object.freeze({ deliveryStatus: order.deliveryStatus, action: 'stale', attempt: null, idempotent: true })
       }
-      await verifyDeliveryPrerequisites(connection, order, expectedProductId, expectedPriceFen, userId)
       const targetAttempt = attemptState.attempts.find((attempt) => attempt.id === query.attemptId)
       if (
         !targetAttempt || !['confirming', 'uncertain', 'explicit_failed'].includes(targetAttempt.status) ||
@@ -2013,6 +2179,197 @@ export function createVirtualPaymentStore(options = {}) {
         [currentTime, order.id, order.version]
       ))
       return Object.freeze({ deliveryStatus: 'manual_review', action: 'manual_review', attempt: null, idempotent: false })
+    }, { isolationLevel: 'READ COMMITTED' })
+  }
+
+  async function applyGoodsDeliveryNotification(userIdValue, orderNoValue, factValue, contextValue = {}) {
+    const userId = normalizeUserId(userIdValue)
+    const orderNo = normalizeOrderNo(orderNoValue)
+    const fact = normalizeGoodsDeliveryNotificationFact(factValue)
+    const currentTime = deliveryTimestamp(contextValue.now)
+    if (fact.userId !== userId || fact.orderNo !== orderNo) {
+      throw createStoreError('Payment message fact is invalid.', 'PAYMENT_MESSAGE_INVALID', 400)
+    }
+    const product = virtualPaymentProductForPrice(fact.unitPriceFen)
+    if (!product || fact.orderAmountFen !== product.priceFen * product.quantity) {
+      throw createStoreError('Payment message fact is invalid.', 'PAYMENT_MESSAGE_INVALID', 400)
+    }
+    if (
+      !entitlementStore || typeof entitlementStore.lockMembershipScheduleInTransaction !== 'function' ||
+      typeof entitlementStore.grantMembershipDurationInTransaction !== 'function' ||
+      typeof entitlementStore.verifyMembershipGrantInTransaction !== 'function'
+    ) throw createStoreError('Payment message service is unavailable.')
+
+    return runTransaction(async (connection) => {
+      try { await assertDeliverySchema(connection) } catch {
+        throw createStoreError('Payment delivery schema mismatch; controlled recovery required.', 'PAYMENT_DELIVERY_SCHEMA_MISMATCH', 503)
+      }
+      let order = normalizeSingleOrder(await connection.execute(
+        `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE} WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
+        [userId, orderNo]
+      ))
+      if (!order) throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+      try { await entitlementStore.lockMembershipScheduleInTransaction(connection, userId) } catch {
+        throw createStoreError('Membership schedule is unavailable.', 'PAYMENT_MEMBERSHIP_SCHEDULE_UNAVAILABLE', 503)
+      }
+      if (
+        order.userId !== userId || order.productId !== fact.productId || order.internalSku !== product.internalSku ||
+        order.productName !== product.displayName || order.quantity !== fact.quantity || order.quantity !== product.quantity ||
+        fact.attach !== order.orderNo ||
+        order.unitPriceFen !== fact.unitPriceFen || order.orderAmountFen !== fact.orderAmountFen ||
+        order.currency !== product.currency || order.environment !== 'sandbox' || order.wechatEnv !== 1 ||
+        order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
+        (order.providerTransactionId !== null && order.providerTransactionId !== fact.providerTransactionId) ||
+        (order.paidAmountFen !== null && order.paidAmountFen !== fact.orderAmountFen) ||
+        (order.paidAt !== null && Date.parse(order.paidAt) !== fact.paidAt.getTime())
+      ) throw createStoreError('Payment message conflicts with the order.', 'PAYMENT_ORDER_CONFLICT', 409)
+
+      const attemptState = await listDeliveryAttemptsForUpdate(connection, order, userId)
+      if (attemptState.active) {
+        throw createStoreError('Payment delivery is already active.', 'PAYMENT_DELIVERY_CONFLICT', 409)
+      }
+
+      const eventRows = getRows(await connection.execute(
+        `SELECT id, event_type, order_id, order_no, provider_order_id,
+                provider_transaction_id, payload_hash, processing_status,
+                received_count, attempt_count, last_error_code
+         FROM ${EVENTS_TABLE} WHERE event_key = ? LIMIT 2 FOR UPDATE`,
+        [fact.eventKey]
+      ))
+      if (eventRows.length > 1) throw createStoreError('Payment event data is ambiguous.', 'PAYMENT_ORDER_CONFLICT', 409)
+      const existingEvent = eventRows[0] || null
+      if (existingEvent) {
+        if (
+          existingEvent.event_type !== fact.eventType || normalizeBigIntId(existingEvent.order_id) !== order.id ||
+          existingEvent.order_no !== order.orderNo ||
+          existingEvent.provider_order_id !== fact.providerMerchantOrderNo ||
+          existingEvent.provider_transaction_id !== fact.providerTransactionId ||
+          existingEvent.processing_status !== 'processed' || existingEvent.last_error_code !== null ||
+          !Buffer.isBuffer(existingEvent.payload_hash) || existingEvent.payload_hash.length !== 32 ||
+          !crypto.timingSafeEqual(existingEvent.payload_hash, fact.payloadHash) ||
+          requireUnsignedInteger(existingEvent.received_count) < 1 ||
+          requireUnsignedInteger(existingEvent.received_count) >= MAX_UNSIGNED_INT ||
+          requireUnsignedInteger(existingEvent.attempt_count) < 1 ||
+          order.paymentStatus !== 'paid' || order.entitlementStatus !== 'granted' ||
+          order.deliveryStatus !== 'delivered' || order.deliveredAt === null ||
+          order.providerTransactionId !== fact.providerTransactionId || order.paidAmountFen !== fact.orderAmountFen ||
+          order.paidAt === null || Date.parse(order.paidAt) !== fact.paidAt.getTime() ||
+          order.membershipGrantId === null || order.entitlementTransactionId === null || order.entitlementGrantedAt === null
+        ) throw createStoreError('Payment event conflicts with stored facts.', 'PAYMENT_ORDER_CONFLICT', 409)
+        try {
+          await entitlementStore.verifyMembershipGrantInTransaction(connection, {
+            userId, grantId: order.membershipGrantId, transactionId: order.entitlementTransactionId,
+            ...membershipGrantKeys(orderNo)
+          })
+        } catch { throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409) }
+        assertAffectedRows(await connection.execute(
+          `UPDATE ${EVENTS_TABLE} SET received_count = received_count + 1 WHERE id = ? AND event_key = ? AND processing_status = 'processed'`,
+          [normalizeBigIntId(existingEvent.id), fact.eventKey]
+        ))
+        return Object.freeze({ order, eventDuplicate: true, entitlementIdempotent: true })
+      }
+
+      if (
+        !['pending', 'confirming', 'paid'].includes(order.paymentStatus) ||
+        !['not_ready', 'granted'].includes(order.entitlementStatus) ||
+        !['not_ready', 'pending', 'confirming', 'retryable_failed', 'manual_review', 'delivered'].includes(order.deliveryStatus) ||
+        (order.deliveryStatus === 'delivered') !== (order.deliveredAt !== null) ||
+        (order.entitlementStatus === 'not_ready' && (
+          order.membershipGrantId !== null || order.entitlementTransactionId !== null || order.entitlementGrantedAt !== null
+        )) ||
+        (order.entitlementStatus === 'granted' && (
+          order.membershipGrantId === null || order.entitlementTransactionId === null || order.entitlementGrantedAt === null
+        ))
+      ) throw createStoreError('Payment message cannot be applied.', 'PAYMENT_ORDER_CONFLICT', 409)
+
+      if (order.paymentStatus !== 'paid' || order.providerTransactionId === null || order.paidAmountFen === null || order.paidAt === null) {
+        assertAffectedRows(await connection.execute(
+          `UPDATE ${ORDERS_TABLE}
+           SET payment_status = 'paid', provider_transaction_id = COALESCE(provider_transaction_id, ?),
+               paid_amount_fen = COALESCE(paid_amount_fen, ?), paid_at = COALESCE(paid_at, ?),
+               last_error_code = NULL, version = version + 1
+           WHERE id = ? AND user_id = ? AND order_no = ? AND version = ?
+             AND payment_status IN ('pending', 'confirming', 'paid')`,
+          [fact.providerTransactionId, fact.orderAmountFen, fact.paidAt, order.id, userId, orderNo, order.version]
+        ))
+        order = normalizeSingleOrder(await connection.execute(
+          `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE} WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
+          [userId, orderNo]
+        ))
+      }
+      if (
+        !order || order.paymentStatus !== 'paid' || order.providerTransactionId !== fact.providerTransactionId ||
+        order.paidAmountFen !== fact.orderAmountFen || Date.parse(order.paidAt) !== fact.paidAt.getTime()
+      ) throw createStoreError('Paid payment fact is incomplete.', 'PAYMENT_PAID_FACT_INCOMPLETE', 409)
+
+      let entitlementIdempotent = true
+      if (order.entitlementStatus === 'not_ready') {
+        let membership
+        try {
+          membership = await entitlementStore.grantMembershipDurationInTransaction(connection, {
+            userId, ...membershipGrantKeys(orderNo), operatorType: 'system',
+            operatorId: 'virtual-payment-entitlement',
+            reason: 'Verified WeChat virtual payment membership grant.', now: currentTime
+          })
+        } catch { throw createStoreError('Membership grant failed.', 'PAYMENT_MEMBERSHIP_GRANT_FAILED', 503) }
+        if (
+          !membership || membership.idempotent === true || !membership.grantId || !membership.transactionId ||
+          membership.sourceType !== MEMBERSHIP_SOURCE_TYPE || membership.sourceId !== orderNo ||
+          Date.parse(membership.effectiveEndAt) - Date.parse(membership.effectiveStartAt) !== MEMBERSHIP_GRANT_DURATION_SECONDS * 1000
+        ) throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
+        assertAffectedRows(await connection.execute(
+          `UPDATE ${ORDERS_TABLE}
+           SET entitlement_status = 'granted', membership_grant_id = ?, entitlement_transaction_id = ?,
+               entitlement_granted_at = ?, version = version + 1
+           WHERE id = ? AND user_id = ? AND order_no = ? AND version = ?
+             AND payment_status = 'paid' AND entitlement_status = 'not_ready'
+             AND membership_grant_id IS NULL AND entitlement_transaction_id IS NULL AND entitlement_granted_at IS NULL`,
+          [membership.grantId, membership.transactionId, currentTime, order.id, userId, orderNo, order.version]
+        ))
+        entitlementIdempotent = false
+        order = normalizeSingleOrder(await connection.execute(
+          `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE} WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
+          [userId, orderNo]
+        ))
+      }
+      if (!order || order.entitlementStatus !== 'granted') throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
+      try {
+        await entitlementStore.verifyMembershipGrantInTransaction(connection, {
+          userId, grantId: order.membershipGrantId, transactionId: order.entitlementTransactionId,
+          ...membershipGrantKeys(orderNo)
+        })
+      } catch { throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409) }
+
+      if (order.deliveryStatus !== 'delivered') {
+        assertAffectedRows(await connection.execute(
+          `UPDATE ${ORDERS_TABLE}
+           SET delivery_status = 'delivered', delivered_at = ?, next_retry_at = NULL,
+               last_error_code = NULL, version = version + 1
+           WHERE id = ? AND user_id = ? AND order_no = ? AND version = ?
+             AND payment_status = 'paid' AND entitlement_status = 'granted'
+             AND delivery_status IN ('not_ready', 'pending', 'confirming', 'retryable_failed', 'manual_review')
+             AND delivered_at IS NULL`,
+          [currentTime, order.id, userId, orderNo, order.version]
+        ))
+      }
+      assertAffectedRows(await connection.execute(
+        `INSERT INTO ${EVENTS_TABLE} (
+           event_key, event_type, order_id, order_no, provider_order_id,
+           provider_transaction_id, payload_hash, processing_status,
+           received_count, processed_at, attempt_count, last_error_code
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'processed', 1, ?, 1, NULL)`,
+        [fact.eventKey, fact.eventType, order.id, order.orderNo, fact.providerMerchantOrderNo,
+          fact.providerTransactionId, fact.payloadHash, currentTime]
+      ))
+      const completed = normalizeSingleOrder(await connection.execute(
+        `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE} WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
+        [userId, orderNo]
+      ))
+      if (!completed || completed.paymentStatus !== 'paid' || completed.entitlementStatus !== 'granted' ||
+          completed.deliveryStatus !== 'delivered' || completed.deliveredAt === null) {
+        throw createStoreError('Payment message was not completed.')
+      }
+      return Object.freeze({ order: completed, eventDuplicate: false, entitlementIdempotent })
     }, { isolationLevel: 'READ COMMITTED' })
   }
 
@@ -2304,6 +2661,7 @@ export function createVirtualPaymentStore(options = {}) {
     claimDeliveryWork,
     markDeliveryDispatching,
     finishDeliveryNotify,
-    applyDeliveryQueryFact
+    applyDeliveryQueryFact,
+    applyGoodsDeliveryNotification
   })
 }
