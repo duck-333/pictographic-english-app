@@ -16,6 +16,8 @@ const TIMESTAMP = String(Math.floor(NOW.getTime() / 1000))
 const NONCE = 'nonce-1'
 const ORIGINAL_ID = 'gh_original_safe'
 const OPENID = 'openid-safe-42'
+const APP_ID = 'wx1234567890abcdef'
+const ENCODING_AES_KEY = Buffer.alloc(32, 7).toString('base64').slice(0, -1)
 
 function signature(timestamp = TIMESTAMP, nonce = NONCE) {
   return crypto.createHash('sha1').update([TOKEN, timestamp, nonce].sort().join('')).digest('hex')
@@ -28,12 +30,24 @@ function env(overrides = {}) {
     WECHAT_VIRTUAL_PAYMENT_MESSAGE_TOKEN: TOKEN,
     WECHAT_VIRTUAL_PAYMENT_MESSAGE_ORIGINAL_ID: ORIGINAL_ID,
     WECHAT_VIRTUAL_PAYMENT_MESSAGE_FORMAT: 'json',
+    WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'plaintext',
     ...overrides
   }
 }
 
 const config = getVirtualPaymentMessageConfig({ env: env() })
 assert.equal(config.token, TOKEN)
+assert.equal(config.mode, 'plaintext')
+assert.equal(config.aesKey, null)
+assert.equal(config.appId, null)
+const aesConfig = getVirtualPaymentMessageConfig({ env: env({
+  WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'aes',
+  WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY: ENCODING_AES_KEY,
+  WECHAT_MINIAPP_APPID: APP_ID
+}) })
+assert.equal(aesConfig.mode, 'aes')
+assert.equal(aesConfig.aesKey.length, 32)
+assert.equal(aesConfig.appId, APP_ID)
 for (const changed of [
   { VIRTUAL_PAYMENT_WECHAT_MESSAGE_ENABLED: undefined },
   { NODE_ENV: 'production' }, { NODE_ENV: 'Development' },
@@ -41,7 +55,13 @@ for (const changed of [
   { WECHAT_VIRTUAL_PAYMENT_MESSAGE_TOKEN: '' },
   { WECHAT_VIRTUAL_PAYMENT_MESSAGE_TOKEN: 'bad token' },
   { WECHAT_VIRTUAL_PAYMENT_MESSAGE_ORIGINAL_ID: '' },
-  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_FORMAT: 'xml' }
+  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_FORMAT: 'xml' },
+  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: undefined },
+  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'auto' },
+  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'aes', WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY: undefined, WECHAT_MINIAPP_APPID: APP_ID },
+  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'aes', WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY: 'x'.repeat(43), WECHAT_MINIAPP_APPID: APP_ID },
+  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'aes', WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY: ENCODING_AES_KEY, WECHAT_MINIAPP_APPID: undefined },
+  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'aes', WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY: ENCODING_AES_KEY, WECHAT_MINIAPP_APPID: 'invalid' }
 ]) assert.throws(() => getVirtualPaymentMessageConfig({ env: env(changed) }))
 
 const getUrl = new URL(`http://local.invalid/path?signature=${signature()}&timestamp=${TIMESTAMP}&nonce=${NONCE}&echostr=echo-safe`)

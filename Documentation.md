@@ -895,3 +895,13 @@ IDENTITY_STORE_ERROR
 - 双商品共存：¥30 标准商品与 ¥1 沙箱测试商品未发生跨订单冲突，会员权益按订单幂等累加。本轮未关闭或修改 ¥30 标准商品规则；¥1 商品继续受 development+sandbox 配置限制，现有历史订单未删除或人工篡改。
 - 回滚与清理：保留受限回滚材料 `/srv/pictographic-sandbox/releases/bc4216b1c41c279065cdb9884e532ebc38eadfae`、`/etc/systemd/system/pictographic-sandbox.service.before-61b24064`、`/etc/nginx/sites-available/pictographic-sandbox.before-vp-message-20260914`、`/etc/pictographic-sandbox/api.env.before-vp-message-20260914`，不在本文记录其内容。部署归档、服务器 `/tmp` 临时文件和本地临时归档均已删除；Windows 剪贴板中的消息 Token 已被覆盖。
 - 上线限制：当前仅完成 development + sandbox + `Env=1` + 明文 JSON；AES 安全模式尚未实现，不允许据此启用生产消息推送。本轮未修改生产 API、生产数据库、生产 Nginx、生产 systemd/PM2，未执行生产 migration，migration 与 lockfile 均未修改。生产启用必须作为独立批次开发、审查和部署。
+
+### 2026-09-15：虚拟支付发货消息 AES 传输适配（待独立复审）
+
+- 基线为 `49eb8729661cea2a6d16730d8a82f497e6aad8f2`，分支为 `feature/virtual-payment-message-aes`。新增独立 `virtual-payment-message-crypto.mjs`，只处理AES POST查询、SHA-1 `msg_signature`、AES-256-CBC解密、AppID校验、成功JSON加密和响应签名；未修改Store、订单、会员或发货状态机。
+- 配置新增 `WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE=plaintext|aes` 和 `WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY`。模式必须显式指定；plaintext不读取AES Key，aes要求43字符EncodingAESKey严格解码为32字节，并要求合法 `WECHAT_MINIAPP_APPID`。原Token、原始ID、JSON格式及 development+sandbox+Env=1 门禁保持不变，production继续fail closed。
+- AES POST只接受唯一的 `encrypt_type=aes`、`msg_signature`、timestamp、nonce，并兼容唯一的signature、openid；未知或重复参数拒绝。读取仍受16 KiB上限和严格UTF-8/JSON约束，验签后才解密；外层原始ID及可选query openid均与解密正文绑定。
+- 解密严格执行EncodingAESKey补`=`、AES-256-CBC、Key前16字节IV、关闭自动padding、微信32字节PKCS#7、16字节随机前缀、4字节大端消息长度和AppID尾部结构校验。解密正文必须是严格UTF-8普通JSON对象，随后复用原 `normalizeWechatGoodsDeliveryMessage()` 和同一Store事务。
+- AES成功响应加密原 `{"ErrCode":0,"ErrMsg":"success"}`，返回Encrypt、MsgSignature、TimeStamp、Nonce；plaintext成功响应保持不变。失败响应仍固定且不记录Token、Key、密文、解密正文、OpenID、完整订单号或交易号。
+- crypto、message、Store和route专项测试及 `check:server:delivery`、`check:miniapp` 均通过。本轮未连接数据库、服务器或微信接口，未执行真实支付、migration、部署或微信后台变更；AES尚未经过真实微信沙箱联调，不允许据此启用生产消息推送。
+- 独立复审修复：AES外层 `ToUserName` 改为必填字符串并严格匹配原始ID，缺失、null、数字、对象和不匹配均在身份/订单/Store调用前拒绝；PKCS#7移除前要求完整解密缓冲区为32字节整数倍，AES层合法但解密为48字节的报文被拒绝。因当前工作区未提供可可靠转录的官方PDF示例，测试改用一次性独立Node crypto编码器基于全假值生成并硬编码的密文和签名；路由成功请求不调用生产加密器，生产响应由测试端独立计算SHA-1、执行AES-256-CBC解密并校验padding、随机前缀、4字节长度、消息和AppID。

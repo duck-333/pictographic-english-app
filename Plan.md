@@ -315,3 +315,9 @@
 - 主备仲裁：消息功能有效启用时，`/delivery` 首次只写 `pending + next_retry_at=now+60s`，窗口内不建 attempt、不调用微信；到期后才创建既有主动发货 attempt。消息先完成则兜底只读 delivered，兜底先取得 attempt 则消息失败。
 - 测试：validation、Store transaction、route 三套离线测试覆盖 Attach/TeamInfo、官方最小/嵌套消息、扩展字段、MchOrderNo、重复/冲突/并发、活动 attempt、OPTIONS、正文中断与敏感信息；隔离 MySQL 8.0.46 脚本对 settled rejection 逐层检查数据库错误和显式业务码，使用两个真实连接验证 entitlement/message、message/到期 fallback 及同用户1元+30元两订单真并发，验证连续60天会员区间、生产 Service 形成 uncertain、四种活动 attempt 不覆盖以及会员写入后注入失败的完整回滚，并断言相关表均为 InnoDB、无死锁或锁等待超时。
 - 限制：不运行生产迁移、不访问服务器或微信真实接口；真实 MySQL 门禁只允许在无共享卷、随机测试库的本地临时容器中执行并清理。生产启用及 AES 安全模式必须后续单独实现和复审。
+
+## 2026-09-15：消息回调 AES 安全模式
+
+- 新增独立 crypto 传输模块，配置必须显式选择 plaintext 或 aes；aes要求合法43字符EncodingAESKey和小程序AppID，继续受 development+sandbox+Env=1 门禁约束。
+- 路由在AES模式完成外层查询/密文验签、解密和可选openid绑定后，复用现有身份、订单、消息规范化和Store流程；业务成功JSON按同一AppID封装规则加密返回。明文路径保持原响应。
+- 专项测试覆盖独立硬编码成功向量、签名、Base64、padding、32字节总长度、AppID、UTF-8/JSON、重复参数、必填外层ToUserName、路由Store单次调用及测试端独立成功响应验签/解密；不重做Store并发架构，不访问数据库或真实微信。

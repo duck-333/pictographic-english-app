@@ -15,9 +15,49 @@ const NOW = new Date('2026-09-14T08:00:00.000Z')
 const TIMESTAMP = String(Math.floor(NOW.getTime() / 1000))
 const NONCE = 'route-nonce'
 const PRODUCT_ID = 'sandbox-product'
+const APP_ID = 'wx1234567890abcdef'
+const AES_KEY = Buffer.alloc(32, 11)
+const ENCODING_AES_KEY = AES_KEY.toString('base64').slice(0, -1)
+// Frozen request vector generated once by a standalone Node crypto encoder using
+// only the fake route constants. No production crypto helper generated this value.
+const FIXED_AES_REQUEST_ENCRYPT = 'OdC6k3IP/f0T2H6e1ODj6xosyCjO/0n8om8Mw1tlC8s4SbV3OsWC/+vVXNmHYJf5+qJtZ1lzzFFHuUzsBMVzlQNq7+W/xfBN7nE8WaBZNW3MRlhr5cfSF2hQoq33J+3vi45Jy1VpY1JoBWHrW6Emgv1gkFfG0/DzSpupVVVWP0e2ZV01DzGlwzkGRr/qaU22z8lPN2ySpyRJFkgPqtZcwvMrTYwAnwBR57wEJNzG3CcjC0wkeB022pd8taP92BDvD5su5DFxOMzJWu8Ubqsd0bW0WL5oAWAH5JHwglbcP2OUSNVZbwkUDFmm3hHtR3IPT6hazslWrd1YukligobVT5GiXChIasiZT5oiPg0FPksR93mK+g/H5ZsYgo95if11SjSDam+HwO/AsXYD+cn7lcEA4cjDxBckfj1c9FcCNCJvLuajcplPrd8yNsHyf77v3Ma/02jLdg2Z+9wgaiqWRO3ap/HyTRsUJzFKkbHQubhlkhT2F4OMb6b1UhBR9GM53S3pmvIFgCfmDbC8AIw0+DBXEJ9VWMnQnX25j0amoaFJZO1oY0wRP2vtlnvvs02gkhGDWGrz4xQXblFTI5UWIevdsk7UFysNpCRosbShZjsbOMaXK4CjOMIw1uGnR05caM6C6AA/ARfJ/8Y5emoeBY+6ZMenH2gjrc6ZJh7l9LU='
+const FIXED_AES_REQUEST_SIGNATURE = '607f70b29f3e62f42e55a8d4b56ae06d2c695a30'
 
 function sign(timestamp = TIMESTAMP, nonce = NONCE) {
   return crypto.createHash('sha1').update([TOKEN, timestamp, nonce].sort().join('')).digest('hex')
+}
+
+function independentAesSignature(encrypted, timestamp, nonce) {
+  return crypto.createHash('sha1').update([TOKEN, String(timestamp), nonce, encrypted].sort().join('')).digest('hex')
+}
+
+function independentlyDecryptAesResponse(response) {
+  assert.equal(response.MsgSignature, independentAesSignature(response.Encrypt, response.TimeStamp, response.Nonce))
+  assert.match(response.Encrypt, /^[A-Za-z0-9+/]+={0,2}$/)
+  const ciphertext = Buffer.from(response.Encrypt, 'base64')
+  assert.equal(ciphertext.toString('base64'), response.Encrypt)
+  const decipher = crypto.createDecipheriv('aes-256-cbc', AES_KEY, AES_KEY.subarray(0, 16))
+  decipher.setAutoPadding(false)
+  const padded = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+  assert(padded.length > 0)
+  assert.equal(padded.length % 32, 0)
+  const paddingLength = padded[padded.length - 1]
+  assert(paddingLength >= 1 && paddingLength <= 32)
+  for (let index = padded.length - paddingLength; index < padded.length; index += 1) {
+    assert.equal(padded[index], paddingLength)
+  }
+  const packed = padded.subarray(0, padded.length - paddingLength)
+  const random = packed.subarray(0, 16)
+  assert.equal(random.length, 16)
+  assert.deepEqual(random, Buffer.alloc(16, 12))
+  const messageLength = packed.readUInt32BE(16)
+  const messageStart = 20
+  const messageEnd = messageStart + messageLength
+  assert(messageLength > 0 && messageEnd < packed.length)
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  const message = decoder.decode(packed.subarray(messageStart, messageEnd))
+  assert.equal(decoder.decode(packed.subarray(messageEnd)), APP_ID)
+  return { message, body: JSON.parse(message) }
 }
 
 function config(overrides = {}) {
@@ -31,6 +71,7 @@ function config(overrides = {}) {
     WECHAT_VIRTUAL_PAYMENT_MESSAGE_TOKEN: TOKEN,
     WECHAT_VIRTUAL_PAYMENT_MESSAGE_ORIGINAL_ID: ORIGINAL_ID,
     WECHAT_VIRTUAL_PAYMENT_MESSAGE_FORMAT: 'json',
+    WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'plaintext',
     ...overrides
   }
 }
@@ -55,10 +96,14 @@ function validBody(overrides = {}) {
 }
 
 async function start(overrides = {}) {
-  const state = { receivedCount: 0, grants: 0, notifyCalls: 0, applyCalls: 0 }
+  const state = {
+    receivedCount: 0, grants: 0, notifyCalls: 0,
+    identityCalls: 0, orderCalls: 0, applyCalls: 0
+  }
   let serialized = Promise.resolve()
   const virtualPaymentStore = overrides.virtualPaymentStore || {
     async findByUserAndOrderNo(userId, orderNo) {
+      state.orderCalls += 1
       return userId === '42' && orderNo === ORDER_NO ? order : null
     },
     async applyGoodsDeliveryNotification(userId, orderNo, fact) {
@@ -74,11 +119,15 @@ async function start(overrides = {}) {
     }
   }
   const identityStore = overrides.identityStore || {
-    async findWechatBindingForPayment(openid) { return openid === OPENID ? { userId: '42' } : null }
+    async findWechatBindingForPayment(openid) {
+      state.identityCalls += 1
+      return openid === OPENID ? { userId: '42' } : null
+    }
   }
   const handler = createApiHandler({
     env: overrides.env || config(), nodeEnv: overrides.nodeEnv,
     now: () => new Date(NOW), virtualPaymentStore, identityStore,
+    messageAesResponse: overrides.messageAesResponse,
     virtualPaymentClient: { async notifyProvideGoods() { state.notifyCalls += 1 } },
     store: { async getWordCount() { return 0 } }, userStore: {}, wechatLoginClient: {}
   })
@@ -205,6 +254,85 @@ try {
   assert.equal(sensitiveLogs.length, 0)
 } finally { await close(fixture) }
 
+const aesFixture = await start({
+  env: config({
+    WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'aes',
+    WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY: ENCODING_AES_KEY,
+    WECHAT_MINIAPP_APPID: APP_ID
+  }),
+  messageAesResponse: {
+    timestamp: TIMESTAMP,
+    nonce: 'response-nonce-safe',
+    randomBytes: Buffer.alloc(16, 12)
+  }
+})
+try {
+  const validQuery = `encrypt_type=aes&msg_signature=${FIXED_AES_REQUEST_SIGNATURE}&timestamp=${TIMESTAMP}&nonce=${NONCE}&signature=${'a'.repeat(40)}&openid=${OPENID}`
+  const accepted = await post(aesFixture, JSON.stringify({ ToUserName: ORIGINAL_ID, Encrypt: FIXED_AES_REQUEST_ENCRYPT }), {
+    query: validQuery
+  })
+  assert.equal(accepted.response.status, 200)
+  assert.equal(aesFixture.state.identityCalls, 1)
+  assert.equal(aesFixture.state.orderCalls, 1)
+  assert.equal(aesFixture.state.applyCalls, 1)
+  const encryptedResponse = JSON.parse(accepted.text)
+  const independentlyDecryptedResponse = independentlyDecryptAesResponse(encryptedResponse)
+  assert.equal(independentlyDecryptedResponse.message, JSON.stringify({ ErrCode: 0, ErrMsg: 'success' }))
+  assert.deepEqual(independentlyDecryptedResponse.body, { ErrCode: 0, ErrMsg: 'success' })
+
+  const beforeFailures = {
+    identityCalls: aesFixture.state.identityCalls,
+    orderCalls: aesFixture.state.orderCalls,
+    applyCalls: aesFixture.state.applyCalls
+  }
+  for (const [query, envelope, expectedStatus] of [
+    [`encrypt_type=aes&msg_signature=${'0'.repeat(40)}&timestamp=${TIMESTAMP}&nonce=${NONCE}`,
+      { ToUserName: ORIGINAL_ID, Encrypt: FIXED_AES_REQUEST_ENCRYPT }, 401],
+    [`${validQuery}&nonce=again`, { ToUserName: ORIGINAL_ID, Encrypt: FIXED_AES_REQUEST_ENCRYPT }, 400],
+    [`encrypt_type=aes&msg_signature=${FIXED_AES_REQUEST_SIGNATURE}&timestamp=${TIMESTAMP}&nonce=${NONCE}&openid=other-openid`,
+      { ToUserName: ORIGINAL_ID, Encrypt: FIXED_AES_REQUEST_ENCRYPT }, 400]
+  ]) {
+    const rejected = await post(aesFixture, JSON.stringify(envelope), { query })
+    assert.equal(rejected.response.status, expectedStatus)
+    assert.deepEqual({
+      identityCalls: aesFixture.state.identityCalls,
+      orderCalls: aesFixture.state.orderCalls,
+      applyCalls: aesFixture.state.applyCalls
+    }, beforeFailures)
+    assert.deepEqual(JSON.parse(rejected.text), { ErrCode: -1, ErrMsg: 'failed' })
+  }
+
+  for (const envelope of [
+    { Encrypt: FIXED_AES_REQUEST_ENCRYPT },
+    { ToUserName: null, Encrypt: FIXED_AES_REQUEST_ENCRYPT },
+    { ToUserName: 42, Encrypt: FIXED_AES_REQUEST_ENCRYPT },
+    { ToUserName: { invalid: true }, Encrypt: FIXED_AES_REQUEST_ENCRYPT },
+    { ToUserName: 'wrong-original-id', Encrypt: FIXED_AES_REQUEST_ENCRYPT }
+  ]) {
+    const rejected = await post(aesFixture, JSON.stringify(envelope), { query: validQuery })
+    assert.equal(rejected.response.status, 400)
+    assert.deepEqual({
+      identityCalls: aesFixture.state.identityCalls,
+      orderCalls: aesFixture.state.orderCalls,
+      applyCalls: aesFixture.state.applyCalls
+    }, beforeFailures)
+  }
+
+  const changedCiphertext = `${FIXED_AES_REQUEST_ENCRYPT.slice(0, -2)}${FIXED_AES_REQUEST_ENCRYPT.at(-2) === 'A' ? 'B' : 'A'}=`
+  const changed = await post(aesFixture, JSON.stringify({ ToUserName: ORIGINAL_ID, Encrypt: changedCiphertext }), { query: validQuery })
+  assert.equal(changed.response.status, 401)
+  assert.equal(aesFixture.state.applyCalls, beforeFailures.applyCalls)
+
+  const invalidBase64Signature = crypto.createHash('sha1')
+    .update([TOKEN, TIMESTAMP, NONCE, 'not-base64'].sort().join(''))
+    .digest('hex')
+  const invalidBase64 = await post(aesFixture, JSON.stringify({ ToUserName: ORIGINAL_ID, Encrypt: 'not-base64' }), {
+    query: `encrypt_type=aes&msg_signature=${invalidBase64Signature}&timestamp=${TIMESTAMP}&nonce=${NONCE}`
+  })
+  assert.equal(invalidBase64.response.status, 400)
+  assert.equal(aesFixture.state.applyCalls, beforeFailures.applyCalls)
+} finally { await close(aesFixture) }
+
 {
   let bodyListenerAdded = false
   const routes = createVirtualPaymentMessageRoutes({
@@ -235,7 +363,10 @@ for (const changed of [
   { VIRTUAL_PAYMENT_WECHAT_MESSAGE_ENABLED: undefined }, { NODE_ENV: 'production' },
   { VIRTUAL_PAYMENT_ENABLED: 'false' }, { VIRTUAL_PAYMENT_ENV: 'production' },
   { WECHAT_VIRTUAL_PAYMENT_MESSAGE_TOKEN: '' },
-  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_ORIGINAL_ID: '' }
+  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_ORIGINAL_ID: '' },
+  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: undefined },
+  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'aes', WECHAT_MINIAPP_APPID: APP_ID },
+  { WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'aes', WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY: ENCODING_AES_KEY }
 ]) {
   const disabled = await start({ env: config(changed) })
   try {

@@ -1,5 +1,11 @@
 import { getVirtualPaymentConfig } from './virtual-payment-config.mjs'
 import {
+  decryptWechatAesMessage,
+  encryptWechatAesMessage,
+  parseWechatAesPostQuery,
+  verifyWechatAesMessageSignature
+} from './virtual-payment-message-crypto.mjs'
+import {
   getVirtualPaymentMessageConfig,
   normalizeWechatGoodsDeliveryMessage,
   parseWechatMessageQuery,
@@ -109,6 +115,31 @@ export function createVirtualPaymentMessageRoutes(options = {}) {
     return runtime
   }
 
+  async function processBusinessMessage(body, current, now, queryOpenid = null) {
+    if (
+      typeof body.OpenId !== 'string' || !/^[^\s\u0000-\u001f\u007f]{1,128}$/u.test(body.OpenId) ||
+      typeof body.OutTradeNo !== 'string' || !/^VP[A-F0-9]{30}$/.test(body.OutTradeNo) ||
+      (queryOpenid !== null && queryOpenid !== body.OpenId)
+    ) throw new Error('message rejected')
+    const binding = await current.identityStore.findWechatBindingForPayment(body.OpenId)
+    if (!binding || typeof binding.userId !== 'string' || !current.paymentConfig.sandboxUserIds.includes(binding.userId)) {
+      throw new Error('message rejected')
+    }
+    const order = await current.store.findByUserAndOrderNo(binding.userId, body.OutTradeNo)
+    if (!order) throw new Error('message rejected')
+    const expectedProductId = order.unitPriceFen === 100
+      ? current.paymentConfig.sandboxTestProductId
+      : current.paymentConfig.standardProductId
+    if (!expectedProductId || order.productId !== expectedProductId) throw new Error('message rejected')
+    const fact = normalizeWechatGoodsDeliveryMessage(body, order, {
+      originalId: current.messageConfig.originalId,
+      openid: body.OpenId,
+      userId: binding.userId,
+      now
+    })
+    await current.store.applyGoodsDeliveryNotification(binding.userId, order.orderNo, fact, { now })
+  }
+
   async function handle(req, res, pathname) {
     if (pathname !== MESSAGE_PATH) return false
     if (!['GET', 'POST'].includes(req.method)) {
@@ -118,37 +149,48 @@ export function createVirtualPaymentMessageRoutes(options = {}) {
     try {
       const current = getRuntime()
       const requestUrl = new URL(req.url || '/', 'http://local.invalid')
-      const query = parseWechatMessageQuery(requestUrl, { method: req.method })
-      verifyWechatMessageSignature(query, current.messageConfig.token)
       if (req.method === 'GET') {
+        const query = parseWechatMessageQuery(requestUrl, { method: 'GET' })
+        verifyWechatMessageSignature(query, current.messageConfig.token)
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', Pragma: 'no-cache' })
         res.end(query.echostr)
         return true
       }
-      const body = await readRawJsonBody(req)
+      const now = options.now ? options.now() : new Date()
+      if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new Error('message rejected')
+      if (current.messageConfig.mode === 'plaintext') {
+        const query = parseWechatMessageQuery(requestUrl, { method: 'POST' })
+        verifyWechatMessageSignature(query, current.messageConfig.token)
+        const body = await readRawJsonBody(req)
+        await processBusinessMessage(body, current, now)
+        sendJson(res, 200, { ErrCode: 0, ErrMsg: 'success' })
+        return true
+      }
+      const query = parseWechatAesPostQuery(requestUrl)
+      const envelope = await readRawJsonBody(req)
+      if (typeof envelope.Encrypt !== 'string' || envelope.Encrypt.length === 0) throw new Error('message rejected')
+      verifyWechatAesMessageSignature(query, current.messageConfig.token, envelope.Encrypt)
       if (
-        typeof body.OpenId !== 'string' || !/^[^\s\u0000-\u001f\u007f]{1,128}$/u.test(body.OpenId) ||
-        typeof body.OutTradeNo !== 'string' || !/^VP[A-F0-9]{30}$/.test(body.OutTradeNo)
-      ) throw new Error('message rejected')
-      const binding = await current.identityStore.findWechatBindingForPayment(body.OpenId)
-      if (!binding || typeof binding.userId !== 'string' || !current.paymentConfig.sandboxUserIds.includes(binding.userId)) {
+        !Object.hasOwn(envelope, 'ToUserName') || typeof envelope.ToUserName !== 'string' ||
+        envelope.ToUserName !== current.messageConfig.originalId
+      ) {
         throw new Error('message rejected')
       }
-      const order = await current.store.findByUserAndOrderNo(binding.userId, body.OutTradeNo)
-      if (!order) throw new Error('message rejected')
-      const expectedProductId = order.unitPriceFen === 100
-        ? current.paymentConfig.sandboxTestProductId
-        : current.paymentConfig.standardProductId
-      if (!expectedProductId || order.productId !== expectedProductId) throw new Error('message rejected')
-      const now = options.now ? options.now() : new Date()
-      const fact = normalizeWechatGoodsDeliveryMessage(body, order, {
-        originalId: current.messageConfig.originalId,
-        openid: body.OpenId,
-        userId: binding.userId,
-        now
+      const decrypted = decryptWechatAesMessage(envelope.Encrypt, {
+        aesKey: current.messageConfig.aesKey,
+        appId: current.messageConfig.appId
       })
-      await current.store.applyGoodsDeliveryNotification(binding.userId, order.orderNo, fact, { now })
-      sendJson(res, 200, { ErrCode: 0, ErrMsg: 'success' })
+      await processBusinessMessage(decrypted.body, current, now, query.openid)
+      const responseOptions = options.messageAesResponse || {}
+      const encryptedResponse = encryptWechatAesMessage(JSON.stringify({ ErrCode: 0, ErrMsg: 'success' }), {
+        aesKey: current.messageConfig.aesKey,
+        appId: current.messageConfig.appId,
+        token: current.messageConfig.token,
+        timestamp: responseOptions.timestamp === undefined ? Math.floor(now.getTime() / 1000) : responseOptions.timestamp,
+        nonce: responseOptions.nonce,
+        randomBytes: responseOptions.randomBytes
+      })
+      sendJson(res, 200, encryptedResponse)
       return true
     } catch (error) {
       sendFailure(res, error)
