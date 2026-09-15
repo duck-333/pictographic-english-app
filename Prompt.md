@@ -134,3 +134,8 @@
 - AES 使用 Node 内置 crypto、AES-256-CBC、EncodingAESKey派生IV和微信32字节PKCS#7规则；严格校验Base64、长度、UTF-8、JSON与AppID，不增加依赖、迁移或新的支付状态。
 - AES外层必须显式携带并匹配 `ToUserName`；完整解密缓冲区必须为32字节整数倍。成功兼容性测试使用独立生成并硬编码的假值密文/签名，响应由测试端独立验签和解包，避免生产实现自证。
 - 本批只开发和离线测试 development+sandbox+Env=1，不部署、不改变微信后台配置，也不据此启用生产支付。
+
+### 2026-09-15：EncodingAESKey 非规范 Base64 兼容
+
+- 兼容微信后台生成的43位标准Base64字符EncodingAESKey：补`=`后可解码且结果恰为32字节即可，不再要求未使用低位为零；`=`、空白、控制字符、URL-safe字符和错误长度仍拒绝。
+- 仅调整Key文本解码兼容性，密文严格Base64、AES、签名、padding、AppID、沙箱门禁和支付业务流程保持不变。

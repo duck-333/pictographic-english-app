@@ -83,8 +83,8 @@ function decodeUtf8(value) {
 
 export function decodeWechatMessageEncodingAesKey(value) {
   if (typeof value !== 'string' || value.length !== 43 || !/^[A-Za-z0-9+/]{43}$/.test(value)) throw cryptoError()
-  const decoded = decodeStrictBase64(`${value}=`)
-  if (decoded.length !== 32 || decoded.toString('base64').slice(0, -1) !== value) throw cryptoError()
+  const decoded = Buffer.from(`${value}=`, 'base64')
+  if (decoded.length !== 32) throw cryptoError()
   return decoded
 }
 
