@@ -1,6 +1,10 @@
 import crypto from 'node:crypto'
 
 import { isVirtualPaymentProductId, virtualPaymentProductForPrice } from './virtual-payment-config.mjs'
+import {
+  decodeWechatMessageEncodingAesKey,
+  normalizeWechatMessageAppId
+} from './virtual-payment-message-crypto.mjs'
 
 const MESSAGE_EVENT = 'xpay_goods_deliver_notify'
 const ORDER_NUMBER_PATTERN = /^VP[A-F0-9]{30}$/
@@ -71,14 +75,28 @@ export function getVirtualPaymentMessageConfig(options = {}) {
   const token = env.WECHAT_VIRTUAL_PAYMENT_MESSAGE_TOKEN
   const originalId = env.WECHAT_VIRTUAL_PAYMENT_MESSAGE_ORIGINAL_ID
   const format = env.WECHAT_VIRTUAL_PAYMENT_MESSAGE_FORMAT
+  const mode = env.WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE
   if (
     typeof token !== 'string' || !/^[A-Za-z0-9]{3,32}$/.test(token) ||
     typeof originalId !== 'string' || !SAFE_ID_PATTERN.test(originalId) ||
-    format !== 'json'
+    format !== 'json' || !['plaintext', 'aes'].includes(mode)
   ) {
     throw messageError('Wechat virtual payment message endpoint is unavailable.', 'PAYMENT_MESSAGE_CONFIG_INVALID', 503)
   }
-  return Object.freeze({ enabled: true, environment: 'sandbox', wechatEnv: 1, token, originalId, format: 'json' })
+  let aesKey = null
+  let appId = null
+  if (mode === 'aes') {
+    try {
+      aesKey = decodeWechatMessageEncodingAesKey(env.WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY)
+      appId = normalizeWechatMessageAppId(env.WECHAT_MINIAPP_APPID)
+    } catch {
+      throw messageError('Wechat virtual payment message endpoint is unavailable.', 'PAYMENT_MESSAGE_CONFIG_INVALID', 503)
+    }
+  }
+  return Object.freeze({
+    enabled: true, environment: 'sandbox', wechatEnv: 1,
+    token, originalId, format: 'json', mode, aesKey, appId
+  })
 }
 
 export function parseWechatMessageQuery(requestUrl, options = {}) {
@@ -213,5 +231,8 @@ export const VIRTUAL_PAYMENT_MESSAGE_CONFIG_VARIABLES = Object.freeze({
   enabled: 'VIRTUAL_PAYMENT_WECHAT_MESSAGE_ENABLED',
   token: 'WECHAT_VIRTUAL_PAYMENT_MESSAGE_TOKEN',
   originalId: 'WECHAT_VIRTUAL_PAYMENT_MESSAGE_ORIGINAL_ID',
-  format: 'WECHAT_VIRTUAL_PAYMENT_MESSAGE_FORMAT'
+  format: 'WECHAT_VIRTUAL_PAYMENT_MESSAGE_FORMAT',
+  mode: 'WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE',
+  encodingAesKey: 'WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY',
+  appId: 'WECHAT_MINIAPP_APPID'
 })

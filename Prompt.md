@@ -127,3 +127,10 @@
 - 复用现有事件表和订单号会员幂等键，在一个数据库事务内完成事件去重、支付恢复、会员发放和 delivered 收口；成功推送不再调用 `notify_provide_goods`。
 - 消息推送启用时，用户 `/delivery` 先保留固定 60 秒消息主路径窗口；到期后才允许既有 `notify_provide_goods` 作为兜底。任一活动发货 attempt 已存在时，消息回调必须失败且不得改写该 attempt。
 - 不新增迁移或依赖，不写入真实 Token、OpenID、订单号或原始消息；AES 安全模式和生产启用仍是上线前限制。
+
+### 2026-09-15：虚拟支付发货消息 AES 传输适配
+
+- 在现有沙箱明文 JSON 回调之外增加显式 `plaintext|aes` 模式；AES 仅负责 POST 查询、`msg_signature`、解密/AppID校验及成功响应加密，解密后继续复用同一消息规范化与 Store 事务。
+- AES 使用 Node 内置 crypto、AES-256-CBC、EncodingAESKey派生IV和微信32字节PKCS#7规则；严格校验Base64、长度、UTF-8、JSON与AppID，不增加依赖、迁移或新的支付状态。
+- AES外层必须显式携带并匹配 `ToUserName`；完整解密缓冲区必须为32字节整数倍。成功兼容性测试使用独立生成并硬编码的假值密文/签名，响应由测试端独立验签和解包，避免生产实现自证。
+- 本批只开发和离线测试 development+sandbox+Env=1，不部署、不改变微信后台配置，也不据此启用生产支付。
