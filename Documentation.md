@@ -905,3 +905,4 @@ IDENTITY_STORE_ERROR
 - AES成功响应加密原 `{"ErrCode":0,"ErrMsg":"success"}`，返回Encrypt、MsgSignature、TimeStamp、Nonce；plaintext成功响应保持不变。失败响应仍固定且不记录Token、Key、密文、解密正文、OpenID、完整订单号或交易号。
 - crypto、message、Store和route专项测试及 `check:server:delivery`、`check:miniapp` 均通过。本轮未连接数据库、服务器或微信接口，未执行真实支付、migration、部署或微信后台变更；AES尚未经过真实微信沙箱联调，不允许据此启用生产消息推送。
 - 独立复审修复：AES外层 `ToUserName` 改为必填字符串并严格匹配原始ID，缺失、null、数字、对象和不匹配均在身份/订单/Store调用前拒绝；PKCS#7移除前要求完整解密缓冲区为32字节整数倍，AES层合法但解密为48字节的报文被拒绝。因当前工作区未提供可可靠转录的官方PDF示例，测试改用一次性独立Node crypto编码器基于全假值生成并硬编码的密文和签名；路由成功请求不调用生产加密器，生产响应由测试端独立计算SHA-1、执行AES-256-CBC解密并校验padding、随机前缀、4字节长度、消息和AppID。
+- EncodingAESKey兼容修复：微信后台可能生成43位标准Base64字符、补`=`后解码为32字节但未使用低位非零的文本。Key入口不再要求规范重编码文本完全相等，仍严格要求类型、长度、标准字符集和32字节结果；密文的严格Base64及其余密码学、配置和业务门禁未放宽。回归使用全假值固定非规范Key，独立证明其解码结果、非规范性、配置接入和加解密成功，未读取或记录真实Key。

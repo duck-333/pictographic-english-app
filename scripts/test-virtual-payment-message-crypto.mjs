@@ -16,6 +16,9 @@ const APP_ID = 'wx1234567890abcdef'
 const OTHER_APP_ID = 'wxfedcba0987654321'
 const AES_KEY = Buffer.from(Array.from({ length: 32 }, (_, index) => index + 1))
 const ENCODING_AES_KEY = AES_KEY.toString('base64').slice(0, -1)
+// Fake key with the same decoded bytes as ENCODING_AES_KEY, but non-zero unused
+// low bits in its final Base64 character, matching the WeChat generator behavior.
+const NON_CANONICAL_ENCODING_AES_KEY = 'AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyB'
 const TIMESTAMP = '1789401600'
 const NONCE = 'crypto-nonce-safe'
 const RANDOM = Buffer.from(Array.from({ length: 16 }, (_, index) => 0xa0 + index))
@@ -27,8 +30,24 @@ const FIXED_ENCRYPT = 'RfFaxMrah+xa7fe8XcqsR0dqCOiMAQn/Yq+G2jUCSIkd571SIObjvRTgF
 const FIXED_SIGNATURE = '8d145f6193d1d064d2a326a43abd68b5a006180e'
 
 assert.deepEqual(decodeWechatMessageEncodingAesKey(ENCODING_AES_KEY), AES_KEY)
+assert.equal(NON_CANONICAL_ENCODING_AES_KEY.length, 43)
+assert.match(NON_CANONICAL_ENCODING_AES_KEY, /^[A-Za-z0-9+/]{43}$/)
+const independentlyDecodedNonCanonicalKey = Buffer.from(`${NON_CANONICAL_ENCODING_AES_KEY}=`, 'base64')
+assert.equal(independentlyDecodedNonCanonicalKey.length, 32)
+assert.notEqual(
+  independentlyDecodedNonCanonicalKey.toString('base64').slice(0, -1),
+  NON_CANONICAL_ENCODING_AES_KEY
+)
+const decodedNonCanonicalKey = decodeWechatMessageEncodingAesKey(NON_CANONICAL_ENCODING_AES_KEY)
+assert.deepEqual(decodedNonCanonicalKey, independentlyDecodedNonCanonicalKey)
+assert.deepEqual(decodedNonCanonicalKey, AES_KEY)
 assert.equal(normalizeWechatMessageAppId(APP_ID), APP_ID)
-for (const invalid of ['', 'x'.repeat(42), 'x'.repeat(44), '*'.repeat(43), `${ENCODING_AES_KEY.slice(0, -1)}*`]) {
+for (const invalid of [
+  null, 42, '', 'x'.repeat(42), 'x'.repeat(44), '*'.repeat(43),
+  `${ENCODING_AES_KEY.slice(0, -1)}*`, `${ENCODING_AES_KEY.slice(0, -1)}=`,
+  `${ENCODING_AES_KEY.slice(0, -1)} `, `${ENCODING_AES_KEY.slice(0, -1)}\n`,
+  `${ENCODING_AES_KEY.slice(0, -1)}-`, `${ENCODING_AES_KEY.slice(0, -1)}_`
+]) {
   assert.throws(() => decodeWechatMessageEncodingAesKey(invalid))
 }
 for (const invalid of ['', '123456', 'wx-short', 'wx1234567890abcdeg']) {
@@ -46,6 +65,19 @@ assert.equal(encrypted.TimeStamp, Number(TIMESTAMP))
 assert.equal(encrypted.Nonce, NONCE)
 assert.equal(decryptWechatAesMessage(encrypted.Encrypt, { aesKey: AES_KEY, appId: APP_ID }).message, MESSAGE)
 assert.deepEqual(decryptWechatAesMessage(encrypted.Encrypt, { aesKey: AES_KEY, appId: APP_ID }).body, JSON.parse(MESSAGE))
+assert.equal(decryptWechatAesMessage(encrypted.Encrypt, {
+  aesKey: decodedNonCanonicalKey, appId: APP_ID
+}).message, MESSAGE)
+
+// This compatibility round trip supplements the independently generated fixed
+// request vector above; it is not the sole successful encryption oracle.
+const nonCanonicalKeyRoundTrip = encryptWechatAesMessage(MESSAGE, {
+  aesKey: decodedNonCanonicalKey, appId: APP_ID, token: TOKEN,
+  timestamp: TIMESTAMP, nonce: NONCE, randomBytes: RANDOM
+})
+assert.equal(decryptWechatAesMessage(nonCanonicalKeyRoundTrip.Encrypt, {
+  aesKey: decodedNonCanonicalKey, appId: APP_ID
+}).message, MESSAGE)
 
 const query = parseWechatAesPostQuery(new URL(
   `http://local.invalid/path?encrypt_type=aes&msg_signature=${encrypted.MsgSignature}&timestamp=${TIMESTAMP}&nonce=${NONCE}&signature=${'a'.repeat(40)}&openid=openid-safe`

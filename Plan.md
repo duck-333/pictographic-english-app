@@ -321,3 +321,8 @@
 - 新增独立 crypto 传输模块，配置必须显式选择 plaintext 或 aes；aes要求合法43字符EncodingAESKey和小程序AppID，继续受 development+sandbox+Env=1 门禁约束。
 - 路由在AES模式完成外层查询/密文验签、解密和可选openid绑定后，复用现有身份、订单、消息规范化和Store流程；业务成功JSON按同一AppID封装规则加密返回。明文路径保持原响应。
 - 专项测试覆盖独立硬编码成功向量、签名、Base64、padding、32字节总长度、AppID、UTF-8/JSON、重复参数、必填外层ToUserName、路由Store单次调用及测试端独立成功响应验签/解密；不重做Store并发架构，不访问数据库或真实微信。
+
+## 2026-09-15：EncodingAESKey 兼容修复
+
+- EncodingAESKey继续要求字符串、43位标准Base64字符且补`=`后严格得到32字节，但允许最后字符的未使用低位非零，不再以规范重编码文本相等作为有效性条件。
+- 增加全假值非规范Key的独立解码、配置接入及加解密回归；其余AES传输与支付链路不变。
