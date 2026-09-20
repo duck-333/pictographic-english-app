@@ -26,6 +26,7 @@ const DEV_PREVIEW_DATA_PATH = 'miniapp-uni/word-app1/common/dev-preview-data.js'
 const HOME_PAGE_PATH = 'miniapp-uni/word-app1/pages/index/index.vue'
 const MINE_PAGE_PATH = 'miniapp-uni/word-app1/pages/mine/index.vue'
 const WORD_DETAIL_PATH = 'miniapp-uni/word-app1/pages/word-detail/index.vue'
+const LEARNING_BENEFITS_PATH = 'miniapp-uni/word-app1/pages/learning-benefits/index.vue'
 const MINIAPP_PAGES_PATH = 'miniapp-uni/word-app1/pages'
 const MINIAPP_PAGES_JSON_PATH = 'miniapp-uni/word-app1/pages.json'
 
@@ -63,6 +64,23 @@ const ALLOWED_USER_FACING_TEXT_BY_PATH = new Map([
     '开通会员或获取更多次数后，可以继续查看完整学习内容。',
     '开通会员或获取更多次数',
     '剩余查词次数不足，请购买会员或获取更多权益。'
+  ]],
+  [LEARNING_BENEFITS_PATH, [
+    '购买30天会员',
+    '一次性购买，非自动续费',
+    '会员期间不限学习次数',
+    '购买后顺延30天',
+    '查询上次购买结果',
+    '仍要另购30天会员',
+    '暂未完整获取历史购买记录，可稍后重试。',
+    '重新查找购买记录',
+    '本机购买记录',
+    '未确认的购买记录会保留，可稍后回来查询。',
+    '30天会员 · {{ dateText(record.createdAt) }}',
+    '查询购买结果',
+    '继续未完成的购买',
+    '确认购买',
+    '会员已到账，权益展示暂未刷新，请稍后重试'
   ]]
 ])
 
@@ -89,10 +107,114 @@ function addError(errors, message) {
   errors.push(message)
 }
 
+function removeExactQuotedString(sourceText, allowedText) {
+  let result = ''
+  let index = 0
+
+  while (index < sourceText.length) {
+    const current = sourceText[index]
+    const next = sourceText[index + 1]
+
+    if (current === '/' && next === '/') {
+      const lineEnd = sourceText.indexOf('\n', index + 2)
+      if (lineEnd < 0) return result + sourceText.slice(index)
+      result += sourceText.slice(index, lineEnd)
+      index = lineEnd
+      continue
+    }
+
+    if (current === '/' && next === '*') {
+      const commentEnd = sourceText.indexOf('*/', index + 2)
+      if (commentEnd < 0) return result + sourceText.slice(index)
+      const blockEnd = commentEnd + 2
+      result += sourceText.slice(index, blockEnd)
+      index = blockEnd
+      continue
+    }
+
+    if (current !== "'" && current !== '"' && current !== '`') {
+      result += current
+      index += 1
+      continue
+    }
+
+    const quote = current
+    const tokenStart = index
+    let escaped = false
+    let hasTemplateExpression = false
+    index += 1
+
+    while (index < sourceText.length) {
+      const character = sourceText[index]
+
+      if (escaped) {
+        escaped = false
+        index += 1
+        continue
+      }
+      if (character === '\\') {
+        escaped = true
+        index += 1
+        continue
+      }
+      if (quote === '`' && character === '$' && sourceText[index + 1] === '{') {
+        hasTemplateExpression = true
+      }
+      index += 1
+      if (character === quote) break
+    }
+
+    const token = sourceText.slice(tokenStart, index)
+    const isClosed = token.length >= 2 && token.endsWith(quote)
+    const rawContent = isClosed ? token.slice(1, -1) : ''
+    result += isClosed && !hasTemplateExpression && rawContent === allowedText
+      ? `${quote}${quote}`
+      : token
+  }
+
+  return result
+}
+
+function removeExactTemplateTextNode(sourceText, allowedText) {
+  return sourceText.split(`>${allowedText}<`).join('><')
+}
+
+function removeExactAllowedUserFacingText(relativePath, sourceText, allowedText) {
+  if (!relativePath.endsWith('.vue')) {
+    return removeExactQuotedString(sourceText, allowedText)
+  }
+
+  let result = sourceText
+  const initialScriptStart = result.search(/<script\b/i)
+  const templateSearchEnd = initialScriptStart >= 0 ? initialScriptStart : result.length
+  const templateStart = result.slice(0, templateSearchEnd).search(/<template\b/i)
+  const templateCloseStart = result.lastIndexOf('</template>', templateSearchEnd)
+
+  if (templateStart >= 0 && templateCloseStart > templateStart) {
+    const templateEnd = templateCloseStart + '</template>'.length
+    const templateSource = result.slice(templateStart, templateEnd)
+    result = result.slice(0, templateStart) +
+      removeExactTemplateTextNode(templateSource, allowedText) +
+      result.slice(templateEnd)
+  }
+
+  const scriptStart = result.search(/<script\b/i)
+  const scriptCloseStart = scriptStart >= 0 ? result.indexOf('</script>', scriptStart) : -1
+  if (scriptStart >= 0 && scriptCloseStart > scriptStart) {
+    const scriptEnd = scriptCloseStart + '</script>'.length
+    const scriptSource = result.slice(scriptStart, scriptEnd)
+    result = result.slice(0, scriptStart) +
+      removeExactQuotedString(scriptSource, allowedText) +
+      result.slice(scriptEnd)
+  }
+
+  return result
+}
+
 function findBlockedUserFacingText(relativePath, sourceText) {
   const allowedTexts = ALLOWED_USER_FACING_TEXT_BY_PATH.get(relativePath) || []
   const sourceWithoutAllowedTexts = allowedTexts.reduce(
-    (result, allowedText) => result.split(allowedText).join(''),
+    (result, allowedText) => removeExactAllowedUserFacingText(relativePath, result, allowedText),
     sourceText
   )
   return BLOCKED_USER_FACING_TEXT.filter((blocked) => blocked.pattern.test(sourceWithoutAllowedTexts))
@@ -101,10 +223,10 @@ function findBlockedUserFacingText(relativePath, sourceText) {
 function checkUserFacingAllowlistContract(errors) {
   ALLOWED_USER_FACING_TEXT_BY_PATH.forEach((allowedTexts, relativePath) => {
     allowedTexts.forEach((allowedText) => {
-      if (findBlockedUserFacingText(relativePath, allowedText).length > 0) {
+      if ([`<template><text>${allowedText}</text></template>`, `<script>const reviewedText = ${JSON.stringify(allowedText)}</script>`].some((sourceText) => findBlockedUserFacingText(relativePath, sourceText).length > 0)) {
         addError(errors, `${relativePath}: reviewed user-facing text is not covered by the exact allowlist: ${allowedText}`)
       }
-      if (findBlockedUserFacingText('miniapp-uni/word-app1/pages/unreviewed/index.vue', allowedText).length === 0) {
+      if ([`<template><text>${allowedText}</text></template>`, `<script>const reviewedText = ${JSON.stringify(allowedText)}</script>`].some((sourceText) => findBlockedUserFacingText('miniapp-uni/word-app1/pages/unreviewed/index.vue', sourceText).length === 0)) {
         addError(errors, `${relativePath}: reviewed user-facing text must remain blocked outside its exact page path.`)
       }
     })
@@ -113,7 +235,15 @@ function checkUserFacingAllowlistContract(errors) {
   const blockedCases = [
     [MINE_PAGE_PATH, '会员充值入口'],
     [WORD_DETAIL_PATH, '升级后解锁付费视频'],
-    [MINE_PAGE_PATH, 'Admin API Token: unsafe-placeholder']
+    [MINE_PAGE_PATH, 'Admin API Token: unsafe-placeholder'],
+    [LEARNING_BENEFITS_PATH, '<text>立即购买30天会员</text>'],
+    [LEARNING_BENEFITS_PATH, '<text>购买30天会员吧</text>'],
+    [LEARNING_BENEFITS_PATH, "const label = '请确认购买'"],
+    [LEARNING_BENEFITS_PATH, '<text>再次查询购买结果</text>'],
+    [LEARNING_BENEFITS_PATH, "<template><text>'购买30天会员'</text></template>"],
+    [LEARNING_BENEFITS_PATH, '<template><text>"确认购买"</text></template>'],
+    [LEARNING_BENEFITS_PATH, `<script>const label = "请'确认购买'操作"</script>`],
+    [LEARNING_BENEFITS_PATH, `<script>const label = '请"确认购买"操作'</script>`]
   ]
   blockedCases.forEach(([relativePath, sourceText]) => {
     if (findBlockedUserFacingText(relativePath, sourceText).length === 0) {
