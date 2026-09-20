@@ -145,6 +145,24 @@ assert.equal(sandboxTestFact.paidAmountFen, 100)
 assert.throws(() => normalizeVerifiedWechatQueryFact(queryResult(2), sandboxTestOrder, { now: () => NOW }),
   (error) => error.code === 'PAYMENT_QUERY_RESULT_INVALID')
 
+const productionOrder = order({ environment: 'production', wechatEnv: 0, productId: 'production-product' })
+const productionQueryResult = queryResult(2, { environment: 'production', environmentType: 1 })
+const productionFact = normalizeVerifiedWechatQueryFact(productionQueryResult, productionOrder, { now: () => NOW })
+assert.equal(productionFact.environment, 'production')
+assert.equal(productionFact.wechatEnv, 0)
+assert.throws(
+  () => normalizeVerifiedWechatQueryFact(queryResult(2), productionOrder, { now: () => NOW }),
+  (error) => error.code === 'PAYMENT_QUERY_RESULT_INVALID'
+)
+assert.throws(
+  () => normalizeVerifiedWechatQueryFact(
+    { ...productionQueryResult, orderFeeFen: 100, paidFeeFen: 100 },
+    { ...productionOrder, unitPriceFen: 100, orderAmountFen: 100 },
+    { now: () => NOW }
+  ),
+  (error) => ['PAYMENT_QUERY_RESULT_INVALID', 'PAYMENT_ORDER_CONFLICT'].includes(error.code)
+)
+
 for (const status of [1, 6]) {
   assert.equal(
     normalizeVerifiedWechatQueryFact(queryResult(status, { wechatPaymentOrderId: null }), order(), {

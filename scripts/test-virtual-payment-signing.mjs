@@ -27,6 +27,18 @@ function enabledEnv(overrides = {}) {
   }
 }
 
+function productionEnv(overrides = {}) {
+  return {
+    NODE_ENV: 'production',
+    VIRTUAL_PAYMENT_ENABLED: 'true',
+    VIRTUAL_PAYMENT_ENV: 'production',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID: 'production.offer-001',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID: 'production.product-30d',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY: 'production-app-key-fixed-vector',
+    ...overrides
+  }
+}
+
 function createSession() {
   return createSensitivePaymentSession({
     userId: '42',
@@ -227,5 +239,37 @@ for (const invalidQuerySignData of [
 ]) {
   expectCode(() => service.signQueryOrderPayload(invalidQuerySignData), 'VIRTUAL_PAYMENT_QUERY_PAYLOAD_INVALID')
 }
+
+const productionService = createVirtualPaymentSigningService({ env: productionEnv() })
+const productionResult = productionService.createPaymentParameters({
+  orderNo: ORDER_NO,
+  attach: ATTACH,
+  paymentSession: createSession()
+})
+assert.deepEqual(JSON.parse(productionResult.signData), {
+  offerId: 'production.offer-001',
+  buyQuantity: 1,
+  env: 0,
+  currencyType: 'CNY',
+  productId: 'production.product-30d',
+  goodsPrice: 3000,
+  outTradeNo: ORDER_NO,
+  attach: ATTACH
+})
+const productionQuerySignData = '{"openid":"openid-fixed-vector","env":0,"order_id":"VP20260830ABC123"}'
+assert.match(productionService.signQueryOrderPayload(productionQuerySignData), /^[a-f0-9]{64}$/)
+expectCode(
+  () => productionService.signQueryOrderPayload(querySignData),
+  'VIRTUAL_PAYMENT_QUERY_PAYLOAD_INVALID'
+)
+expectCode(
+  () => productionService.createPaymentParameters({
+    orderNo: ORDER_NO,
+    attach: ATTACH,
+    paymentSession: createSession(),
+    productContext: productContext()
+  }),
+  'VIRTUAL_PAYMENT_PRODUCT_INVALID'
+)
 
 console.log('Virtual payment signing tests passed.')

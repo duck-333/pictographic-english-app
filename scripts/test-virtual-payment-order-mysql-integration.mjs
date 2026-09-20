@@ -46,7 +46,7 @@ async function assertDatabaseAbsent(rootConnection, databaseName) {
   assert.equal(rows.length, 0, 'isolated order-store test database was not removed')
 }
 
-function input(userId, clientRequestId) {
+function input(userId, clientRequestId, overrides = {}) {
   return {
     userId,
     clientRequestId,
@@ -60,7 +60,8 @@ function input(userId, clientRequestId) {
     environment: 'sandbox',
     wechatEnv: 1,
     paymentChannel: 'wechat_virtual_payment',
-    clientPlatform: 'android'
+    clientPlatform: 'android',
+    ...overrides
   }
 }
 
@@ -91,6 +92,20 @@ async function testOrderStore(pool) {
   const otherUserStore = createVirtualPaymentStore({ pool, orderNoFactory: () => fixedOrderNo('D') })
   const otherUser = await otherUserStore.createOrder(input('103', 'mysql-request-concurrent'))
   assert.notEqual(otherUser.order.orderNo, concurrent[0].order.orderNo)
+
+  const productionStore = createVirtualPaymentStore({ pool, orderNoFactory: () => fixedOrderNo('E') })
+  const production = await productionStore.createOrder(input('105', 'mysql-request-production', {
+    productId: 'production-product', environment: 'production', wechatEnv: 0
+  }))
+  assert.equal(production.order.environment, 'production')
+  assert.equal(production.order.wechatEnv, 0)
+  await assert.rejects(
+    productionStore.createOrder(input('105', 'mysql-request-production-test', {
+      productId: 'production-test-product', unitPriceFen: 100, orderAmountFen: 100,
+      environment: 'production', wechatEnv: 0
+    })),
+    { code: 'PAYMENT_REQUEST_INVALID' }
+  )
 
   assert.equal(await firstStore.findByUserAndOrderNo('999', first.order.orderNo), null)
   assert.equal((await firstStore.findByUserAndOrderNo('101', first.order.orderNo)).orderNo, first.order.orderNo)
@@ -221,20 +236,25 @@ async function testRecoveryStore(pool) {
   await pool.execute("UPDATE virtual_payment_orders SET wechat_env=0 WHERE order_no=?", [created[4]])
   await pool.execute("UPDATE virtual_payment_orders SET created_at='2026-09-04 00:00:00', updated_at='2026-09-04 00:00:00'")
   const [expected] = await pool.execute("SELECT order_no FROM virtual_payment_orders WHERE user_id=501 AND environment='sandbox' AND wechat_env=1 AND payment_status NOT IN ('closed','failed') AND delivery_status <> 'delivered' ORDER BY created_at DESC,id DESC")
-  const first = await store.listRecoveryOrders('501')
+  const recoveryEnvironment = { environment: 'sandbox', wechatEnv: 1 }
+  const productionRecovery = await store.listRecoveryOrders('501', null, {
+    environment: 'production', wechatEnv: 0
+  })
+  assert.deepEqual(productionRecovery.orders.map((entry) => entry.orderNo), [created[3]])
+  const first = await store.listRecoveryOrders('501', null, recoveryEnvironment)
   assert.equal(first.orders.length, 20); assert.equal(first.nextCursor, first.orders[19].orderNo)
   await pool.execute("UPDATE virtual_payment_orders SET payment_status='paid', entitlement_status='granted', delivery_status='delivered' WHERE order_no=?", [first.nextCursor])
-  const second = await store.listRecoveryOrders('501', first.nextCursor)
+  const second = await store.listRecoveryOrders('501', first.nextCursor, recoveryEnvironment)
   assert.equal(second.orders.length, 20); assert.equal(second.nextCursor, null)
   assert.deepEqual([...first.orders, ...second.orders].map((r) => r.orderNo), expected.map((r) => r.order_no))
   assert.equal(new Set([...first.orders, ...second.orders].map((r) => r.orderNo)).size, 40)
   assert(first.orders.concat(second.orders).some((r) => r.entitlementStatus === 'failed'))
   assert(first.orders.concat(second.orders).some((r) => r.deliveryStatus === 'manual_review'))
-  for (const cursor of [created[3], created[4], `VP${'0'.repeat(30)}`]) await assert.rejects(store.listRecoveryOrders('501', cursor), { code: 'PAYMENT_REQUEST_INVALID' })
-  await assert.rejects(store.listRecoveryOrders('502', created[5]), { code: 'PAYMENT_REQUEST_INVALID' })
-  assert.deepEqual(await store.listRecoveryOrders('503'), { orders: [], nextCursor: null })
+  for (const cursor of [created[3], created[4], `VP${'0'.repeat(30)}`]) await assert.rejects(store.listRecoveryOrders('501', cursor, recoveryEnvironment), { code: 'PAYMENT_REQUEST_INVALID' })
+  await assert.rejects(store.listRecoveryOrders('502', created[5], recoveryEnvironment), { code: 'PAYMENT_REQUEST_INVALID' })
+  assert.deepEqual(await store.listRecoveryOrders('503', null, recoveryEnvironment), { orders: [], nextCursor: null })
   const [[before]] = await pool.query('SELECT COUNT(*) AS count, SUM(version) AS versions, MAX(updated_at) AS latest FROM virtual_payment_orders')
-  await store.listRecoveryOrders('501')
+  await store.listRecoveryOrders('501', null, recoveryEnvironment)
   const [[after]] = await pool.query('SELECT COUNT(*) AS count, SUM(version) AS versions, MAX(updated_at) AS latest FROM virtual_payment_orders')
   assert.deepEqual(after, before)
   const [plan] = await pool.execute("EXPLAIN SELECT id,user_id,environment,wechat_env,order_no,client_request_id,payment_status,entitlement_status,delivery_status,created_at,updated_at FROM virtual_payment_orders WHERE user_id=? AND environment=? AND wechat_env=? AND payment_status NOT IN ('closed','failed') AND delivery_status <> 'delivered' ORDER BY created_at DESC,id DESC LIMIT 21", ['501', 'sandbox', 1])

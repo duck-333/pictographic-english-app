@@ -21,7 +21,7 @@ export function createPurchaseController(options = {}) {
   let visible = true
   let epoch = 0, disposed = false, currentRun = null
   let discoveryIncomplete = false
-  const key = (owner) => `pictographic:purchase:sandbox:${encodeURIComponent(owner.baseUrl)}:${owner.userId}`
+  const key = (owner) => `pictographic:purchase:${owner.environment}:${encodeURIComponent(owner.baseUrl)}:${owner.userId}`
   function readRecords(owner) {
     api.assertContext(owner)
     let raw
@@ -38,7 +38,7 @@ export function createPurchaseController(options = {}) {
     if (!Array.isArray(raw)) throw paymentError('PAYMENT_RECORDS_INVALID')
     const intents = new Map(), orders = new Map()
     for (const r of raw) {
-      if (!r || r.userId !== owner.userId || r.environment !== 'sandbox' ||
+      if (!r || r.userId !== owner.userId || r.environment !== owner.environment ||
           (r.baseUrl !== undefined && r.baseUrl !== owner.baseUrl) ||
           typeof r.clientRequestId !== 'string' || typeof r.orderNo !== 'string' ||
           !/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,79}$/.test(r.clientRequestId) ||
@@ -50,7 +50,7 @@ export function createPurchaseController(options = {}) {
       if ((previous && previous.orderNo && r.orderNo && previous.orderNo !== r.orderNo) ||
           (r.orderNo && orders.has(r.orderNo) && orders.get(r.orderNo) !== r.clientRequestId)) throw paymentError('PAYMENT_RECORDS_INVALID')
       if (r.orderNo) orders.set(r.orderNo, r.clientRequestId)
-      const merged = { userId: r.userId, environment: 'sandbox', clientRequestId: r.clientRequestId,
+      const merged = { userId: r.userId, environment: owner.environment, clientRequestId: r.clientRequestId,
         orderNo: r.orderNo || (previous && previous.orderNo) || '',
         mayHaveInvoked: r.mayHaveInvoked || Boolean(previous && previous.mayHaveInvoked),
         createdAt: previous ? Math.min(previous.createdAt, r.createdAt) : r.createdAt,
@@ -70,7 +70,7 @@ export function createPurchaseController(options = {}) {
   function save(owner, record) {
     const list = records(owner)
     const index = list.findIndex((r) => r.clientRequestId === record.clientRequestId)
-    const safe = { userId: owner.userId, environment: 'sandbox', clientRequestId: record.clientRequestId, orderNo: record.orderNo,
+    const safe = { userId: owner.userId, environment: owner.environment, clientRequestId: record.clientRequestId, orderNo: record.orderNo,
       mayHaveInvoked: record.mayHaveInvoked, createdAt: record.createdAt, updatedAt: now(), hint: record.hint }
     if (list.some((r) => safe.orderNo && r.orderNo === safe.orderNo && r.clientRequestId !== safe.clientRequestId) ||
         (index >= 0 && list[index].orderNo && list[index].orderNo !== safe.orderNo)) throw paymentError('PAYMENT_RECORDS_INVALID')

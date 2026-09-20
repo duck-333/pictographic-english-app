@@ -1,6 +1,12 @@
 import crypto from 'node:crypto'
 
-import { isVirtualPaymentProductId, virtualPaymentProductForPrice } from './virtual-payment-config.mjs'
+import {
+  getVirtualPaymentConfig,
+  isVirtualPaymentProductId,
+  matchesVirtualPaymentEnvironment,
+  VIRTUAL_PAYMENT_PRODUCT,
+  virtualPaymentProductForPrice
+} from './virtual-payment-config.mjs'
 import {
   decodeWechatMessageEncodingAesKey,
   normalizeWechatMessageAppId
@@ -66,10 +72,15 @@ export function getVirtualPaymentMessageConfig(options = {}) {
   if (enabled !== 'true') {
     throw messageError('Wechat virtual payment message endpoint is unavailable.', 'PAYMENT_MESSAGE_DISABLED', 503)
   }
-  if (
-    nodeEnv !== 'development' || env.VIRTUAL_PAYMENT_ENABLED !== 'true' ||
-    env.VIRTUAL_PAYMENT_ENV !== 'sandbox'
-  ) {
+  let paymentConfig
+  try {
+    paymentConfig = getVirtualPaymentConfig({ env, nodeEnv })
+  } catch {
+    throw messageError('Wechat virtual payment message endpoint is unavailable.', 'PAYMENT_MESSAGE_CONFIG_INVALID', 503)
+  }
+  if (!paymentConfig.enabled) throw messageError('Wechat virtual payment message endpoint is unavailable.', 'PAYMENT_MESSAGE_CONFIG_INVALID', 503)
+  if ((paymentConfig.environment === 'sandbox' && nodeEnv !== 'development') ||
+      (paymentConfig.environment === 'production' && nodeEnv !== 'production')) {
     throw messageError('Wechat virtual payment message endpoint is unavailable.', 'PAYMENT_MESSAGE_CONFIG_INVALID', 503)
   }
   const token = env.WECHAT_VIRTUAL_PAYMENT_MESSAGE_TOKEN
@@ -79,7 +90,8 @@ export function getVirtualPaymentMessageConfig(options = {}) {
   if (
     typeof token !== 'string' || !/^[A-Za-z0-9]{3,32}$/.test(token) ||
     typeof originalId !== 'string' || !SAFE_ID_PATTERN.test(originalId) ||
-    format !== 'json' || !['plaintext', 'aes'].includes(mode)
+    format !== 'json' || !['plaintext', 'aes'].includes(mode) ||
+    (paymentConfig.environment === 'production' && mode !== 'aes')
   ) {
     throw messageError('Wechat virtual payment message endpoint is unavailable.', 'PAYMENT_MESSAGE_CONFIG_INVALID', 503)
   }
@@ -94,7 +106,7 @@ export function getVirtualPaymentMessageConfig(options = {}) {
     }
   }
   return Object.freeze({
-    enabled: true, environment: 'sandbox', wechatEnv: 1,
+    enabled: true, environment: paymentConfig.environment, wechatEnv: paymentConfig.wechatEnv,
     token, originalId, format: 'json', mode, aesKey, appId
   })
 }
@@ -138,7 +150,7 @@ export function verifyWechatMessageSignature(query, token) {
 export function createWechatGoodsDeliveryCanonicalFact(input) {
   if (
     !hasExactFields(input, CANONICAL_FIELDS) || input.source !== 'wechat_goods_delivery_message' ||
-    input.environment !== 'sandbox' || input.wechatEnv !== 1 ||
+    !matchesVirtualPaymentEnvironment(input.environment, input.wechatEnv) ||
     typeof input.userId !== 'string' || !/^[1-9][0-9]*$/.test(input.userId) ||
     typeof input.orderNo !== 'string' || !ORDER_NUMBER_PATTERN.test(input.orderNo) ||
     !isVirtualPaymentProductId(input.productId) || input.internalSku !== 'membership_30d' ||
@@ -146,6 +158,7 @@ export function createWechatGoodsDeliveryCanonicalFact(input) {
     input.attach.length === 0 || input.attach.length > 128 ||
     /[\u0000-\u001f\u007f]/.test(input.attach) ||
     !virtualPaymentProductForPrice(input.unitPriceFen) ||
+    (input.environment === 'production' && input.unitPriceFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen) ||
     input.orderAmountFen !== input.unitPriceFen ||
     (input.providerMerchantOrderNo !== null && (
       typeof input.providerMerchantOrderNo !== 'string' ||
@@ -168,12 +181,13 @@ export function normalizeWechatGoodsDeliveryMessage(body, order, context = {}) {
     body.ToUserName !== context.originalId ||
     !SAFE_ID_PATTERN.test(body.FromUserName || '') ||
     !Number.isSafeInteger(body.CreateTime) || body.CreateTime <= 0 ||
-    body.MsgType !== 'event' || body.Event !== MESSAGE_EVENT || body.Env !== 1 ||
+    body.MsgType !== 'event' || body.Event !== MESSAGE_EVENT || body.Env !== order.wechatEnv ||
     !SAFE_ID_PATTERN.test(body.OpenId || '') ||
     typeof body.OutTradeNo !== 'string' || !ORDER_NUMBER_PATTERN.test(body.OutTradeNo) ||
     !order || typeof order !== 'object' || body.OutTradeNo !== order.orderNo ||
     body.OpenId !== context.openid || order.userId !== context.userId ||
-    order.environment !== 'sandbox' || order.wechatEnv !== 1
+    !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
+    (order.environment === 'production' && order.unitPriceFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen)
   ) throw messageError()
   if (!hasRequiredFields(body.GoodsInfo, GOODS_REQUIRED_FIELDS)) throw messageError()
   const goods = body.GoodsInfo
@@ -210,14 +224,15 @@ export function normalizeWechatGoodsDeliveryMessage(body, order, context = {}) {
   if (!Number.isFinite(nowValue)) throw messageError('Wechat virtual payment message service is unavailable.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
   if (body.CreateTime > Math.floor(nowValue / 1000) + 300 || paidAtSeconds > Math.floor(nowValue / 1000) + 300) throw messageError()
   const canonical = createWechatGoodsDeliveryCanonicalFact({
-    source: 'wechat_goods_delivery_message', environment: 'sandbox', wechatEnv: 1,
+    source: 'wechat_goods_delivery_message', environment: order.environment, wechatEnv: order.wechatEnv,
     userId: context.userId, orderNo: order.orderNo, productId: order.productId,
     internalSku: order.internalSku, quantity: order.quantity, attach,
     unitPriceFen: order.unitPriceFen, orderAmountFen: order.orderAmountFen,
     providerMerchantOrderNo, providerTransactionId, paidAtSeconds
   })
   return Object.freeze({
-    source: 'wechat_goods_delivery_message', eventType: MESSAGE_EVENT,
+    source: 'wechat_goods_delivery_message', environment: order.environment, wechatEnv: order.wechatEnv,
+    eventType: MESSAGE_EVENT,
     eventKey: canonical.eventKey, payloadHash: canonical.payloadHash,
     userId: context.userId, orderNo: order.orderNo, productId: order.productId,
     internalSku: order.internalSku, quantity: order.quantity, attach,

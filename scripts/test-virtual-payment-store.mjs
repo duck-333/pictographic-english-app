@@ -152,6 +152,47 @@ const sandboxTestCreated = await store.createOrder(createInput({
 assert.equal(sandboxTestCreated.order.productId, 'sandbox-test-product')
 assert.equal(sandboxTestCreated.order.unitPriceFen, 100)
 
+let productionInsertParams
+const productionStore = createVirtualPaymentStore({
+  orderNoFactory: () => SECOND_ORDER_NO,
+  pool: {
+    async execute(sql, params) {
+      if (sql.startsWith('INSERT')) {
+        productionInsertParams = params
+        return [{ affectedRows: 1 }]
+      }
+      if (sql.includes('order_no = ?')) {
+        return [[row({
+          id: 2,
+          order_no: SECOND_ORDER_NO,
+          client_request_id: 'production-request-1',
+          product_id: 'production-product',
+          environment: 'production',
+          wechat_env: 0
+        })]]
+      }
+      throw new Error('unexpected SQL')
+    }
+  }
+})
+const productionCreated = await productionStore.createOrder(createInput({
+  clientRequestId: 'production-request-1',
+  productId: 'production-product',
+  environment: 'production',
+  wechatEnv: 0
+}))
+assert.equal(productionCreated.order.environment, 'production')
+assert.equal(productionCreated.order.wechatEnv, 0)
+assert.equal(productionInsertParams[10], 'production')
+assert.equal(productionInsertParams[11], 0)
+await assert.rejects(
+  productionStore.createOrder(createInput({
+    clientRequestId: 'production-request-2', productId: 'production-test-product',
+    unitPriceFen: 100, orderAmountFen: 100, environment: 'production', wechatEnv: 0
+  })),
+  (error) => error.code === 'PAYMENT_REQUEST_INVALID'
+)
+
 let duplicateSelects = 0
 const idempotentStore = createVirtualPaymentStore({
   orderNoFactory: () => SECOND_ORDER_NO,
@@ -696,7 +737,8 @@ console.log('Virtual payment store tests passed.')
     async execute(sql, values) { queries.push({ sql, values }); assert.match(sql, /^SELECT /); assert(!/FOR UPDATE|provider|events|attempt|queries/i.test(sql)); return [answer] },
     release() { release++ }
   } } } })
-  const result = await recovery.listRecoveryOrders('42')
+  const recoveryEnvironment = { environment: 'sandbox', wechatEnv: 1 }
+  const result = await recovery.listRecoveryOrders('42', null, recoveryEnvironment)
   assert.equal(result.orders.length, 20)
   assert.equal(result.nextCursor, source[19].order_no)
   assert.equal(release, 1)
@@ -704,16 +746,36 @@ console.log('Virtual payment store tests passed.')
   assert.deepEqual(queries[0].values, ['42', 'sandbox', 1])
   assert.deepEqual(Object.keys(result.orders[0]), ['orderNo', 'clientRequestId', 'paymentStatus', 'entitlementStatus', 'deliveryStatus', 'createdAt', 'updatedAt'])
   answer = []
-  assert.deepEqual(await recovery.listRecoveryOrders('42'), { orders: [], nextCursor: null })
-  await assert.rejects(recovery.listRecoveryOrders('42', ORDER_NO), { code: 'PAYMENT_REQUEST_INVALID' })
+  assert.deepEqual(await recovery.listRecoveryOrders('42', null, recoveryEnvironment), { orders: [], nextCursor: null })
+  await assert.rejects(recovery.listRecoveryOrders('42', ORDER_NO, recoveryEnvironment), { code: 'PAYMENT_REQUEST_INVALID' })
   for (const bad of [row({ user_id: 43 }), row({ environment: 'production' }), row({ wechat_env: 0 }), row({ payment_status: 'pending', entitlement_status: 'granted' }), row({ payment_status: 'closed' }), row({ delivery_status: 'delivered' })]) {
     answer = [bad]
-    await assert.rejects(recovery.listRecoveryOrders('42'))
+    await assert.rejects(recovery.listRecoveryOrders('42', null, recoveryEnvironment))
   }
   assert.equal(release, queries.length)
   let released = 0
   const failed = createVirtualPaymentStore({ pool: { async getConnection() { return { execute() { throw new Error('SQL password token') }, release() { released++ } } } } })
-  await assert.rejects(failed.listRecoveryOrders('42'), (error) => error.code === 'PAYMENT_SERVICE_UNAVAILABLE' && !/password|token|SQL/.test(error.message))
+  await assert.rejects(failed.listRecoveryOrders('42', null, recoveryEnvironment), (error) => error.code === 'PAYMENT_SERVICE_UNAVAILABLE' && !/password|token|SQL/.test(error.message))
   assert.equal(released, 1)
   console.log('Recovery Store: bounded read-only SQL, row validation, whitelist and release passed.')
+}
+
+{
+  const productionRows = [row({
+    environment: 'production', wechat_env: 0, product_id: 'production-product',
+    order_no: SECOND_ORDER_NO, client_request_id: 'production-recovery-1'
+  })]
+  let values
+  const recovery = createVirtualPaymentStore({ pool: { async getConnection() { return {
+    async execute(_sql, input) { values = input; return [productionRows] },
+    release() {}
+  } } } })
+  const page = await recovery.listRecoveryOrders('42', null, { environment: 'production', wechatEnv: 0 })
+  assert.equal(page.orders.length, 1)
+  assert.equal(page.orders[0].orderNo, SECOND_ORDER_NO)
+  assert.deepEqual(values, ['42', 'production', 0])
+  await assert.rejects(
+    recovery.listRecoveryOrders('42', null, { environment: 'sandbox', wechatEnv: 1 }),
+    (error) => error.code === 'PAYMENT_SERVICE_UNAVAILABLE'
+  )
 }

@@ -1,6 +1,11 @@
 import crypto from 'node:crypto'
 
-import { virtualPaymentProductForPrice } from './virtual-payment-config.mjs'
+import {
+  matchesVirtualPaymentEnvironment,
+  VIRTUAL_PAYMENT_PRODUCT,
+  virtualPaymentEnvironment,
+  virtualPaymentProductForPrice
+} from './virtual-payment-config.mjs'
 
 const ORDER_NUMBER_PATTERN = /^VP[A-F0-9]{30}$/
 const SAFE_REFERENCE_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
@@ -36,15 +41,17 @@ export function normalizeVerifiedWechatDeliveryQueryFact(input, order, options =
   const queryOperationId = options.queryOperationId
   const querySequence = options.querySequence
   const claimedOrderVersion = options.claimedOrderVersion
+  const environmentConfig = virtualPaymentEnvironment(order && order.environment)
   if (
     !isPlainObject(input) ||
     Object.keys(input).join(',') !== EXPECTED_RESULT_KEYS.join(',') ||
     !isPlainObject(order) || typeof order.userId !== 'string' || !/^[1-9][0-9]*$/.test(order.userId) ||
     !product || order.orderAmountFen !== product.priceFen * product.quantity ||
-    order.environment !== 'sandbox' || order.wechatEnv !== 1 || order.currency !== product.currency ||
+    !environmentConfig || !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
+    (order.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) || order.currency !== product.currency ||
     typeof order.orderNo !== 'string' || !ORDER_NUMBER_PATTERN.test(order.orderNo) ||
     input.orderId !== order.orderNo ||
-    input.environment !== 'sandbox' || input.environmentType !== 2 ||
+    input.environment !== order.environment || input.environmentType !== environmentConfig.expectedWechatEnvironmentType ||
     input.orderType !== 0 || input.orderFeeFen !== order.orderAmountFen ||
     typeof input.status !== 'number' || !Number.isSafeInteger(input.status) ||
     input.status < 0 || input.status > 10 ||

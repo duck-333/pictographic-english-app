@@ -21,6 +21,18 @@ function enabledEnv(overrides = {}) {
   }
 }
 
+function productionEnv(overrides = {}) {
+  return {
+    NODE_ENV: 'production',
+    VIRTUAL_PAYMENT_ENABLED: 'true',
+    VIRTUAL_PAYMENT_ENV: 'production',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID: 'production.offer-001',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID: 'production.product-30d',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY: 'production-app-key-fixed-vector',
+    ...overrides
+  }
+}
+
 function response(body, options = {}) {
   const raw = typeof body === 'string' ? body : JSON.stringify(body)
   const encoded = new TextEncoder().encode(raw)
@@ -482,4 +494,48 @@ await new Promise((resolve) => setImmediate(resolve))
 assert.equal(timedReadCancel, 1)
 assert.equal(timedReadRelease, 1)
 assert.equal(stalledStream.locked, false)
+
+const productionRequests = []
+const productionClient = createVirtualPaymentClient({
+  env: productionEnv(),
+  accessTokenProvider: tokenProvider(),
+  async fetch(url, options) {
+    productionRequests.push({ url, options })
+    if (url.pathname === '/xpay/query_order') {
+      return response({
+        errcode: 0,
+        order: {
+          order_id: ORDER_NO,
+          wx_order_id: 'WXPRODUCTION123',
+          wxpay_order_id: 'WXPAYPRODUCTION123',
+          status: 2,
+          order_type: 0,
+          order_fee: 3000,
+          paid_fee: 3000,
+          paid_time: 1788048000,
+          provide_time: 0,
+          env_type: 1
+        }
+      })
+    }
+    return response('')
+  }
+})
+const productionQueryResult = await productionClient.queryOrder({ openid: OPENID, orderNo: ORDER_NO })
+assert.equal(JSON.parse(productionRequests[0].options.body).env, 0)
+assert.equal(productionQueryResult.environment, 'production')
+assert.equal(productionQueryResult.environmentType, 1)
+await productionClient.notifyProvideGoods({ orderNo: ORDER_NO })
+assert.equal(productionRequests[1].url.searchParams.get('env'), '0')
+
+const wrongProductionEnvironmentClient = createVirtualPaymentClient({
+  env: productionEnv(), accessTokenProvider: tokenProvider(),
+  async fetch() {
+    return response({ errcode: 0, order: { order_id: ORDER_NO, status: 2, env_type: 2 } })
+  }
+})
+await expectCode(
+  () => wrongProductionEnvironmentClient.queryOrder({ openid: OPENID, orderNo: ORDER_NO }),
+  'VIRTUAL_PAYMENT_RESPONSE_INVALID'
+)
 console.log('Virtual payment client tests passed, including native 204 and exact cleanup counts.')

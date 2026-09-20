@@ -10,7 +10,13 @@ import {
 } from './virtual-payment-state.mjs'
 import { createWechatQueryCanonicalFact } from './virtual-payment-reconciliation.mjs'
 import { createWechatGoodsDeliveryCanonicalFact } from './virtual-payment-message.mjs'
-import { isVirtualPaymentProductId, virtualPaymentProductForPrice } from './virtual-payment-config.mjs'
+import {
+  isVirtualPaymentProductId,
+  matchesVirtualPaymentEnvironment,
+  VIRTUAL_PAYMENT_PRODUCT,
+  virtualPaymentEnvironment,
+  virtualPaymentProductForPrice
+} from './virtual-payment-config.mjs'
 
 const DEFAULT_DB_HOST = '127.0.0.1'
 const DEFAULT_DB_PORT = 3306
@@ -267,8 +273,12 @@ function normalizeOrderRow(row) {
   const product = virtualPaymentProductForPrice(unitPriceFen)
   const orderAmountFen = requireUnsignedInteger(row.order_amount_fen)
   const paidAmountFen = row.paid_amount_fen === null ? null : requireUnsignedInteger(row.paid_amount_fen)
+  const environment = requireString(row.environment, 32)
+  const wechatEnv = requireUnsignedInteger(row.wechat_env, { maximum: 255 })
   if (!product || orderAmountFen !== product.priceFen * product.quantity ||
-      (paidAmountFen !== null && paidAmountFen !== orderAmountFen)) {
+      (paidAmountFen !== null && paidAmountFen !== orderAmountFen) ||
+      !matchesVirtualPaymentEnvironment(environment, wechatEnv) ||
+      (environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT)) {
     throw createStoreError('Payment order data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
   }
   return Object.freeze({
@@ -284,8 +294,8 @@ function normalizeOrderRow(row) {
     orderAmountFen,
     paidAmountFen,
     currency: requireExactString(row.currency, 'CNY'),
-    environment: requireExactString(row.environment, 'sandbox'),
-    wechatEnv: requireUnsignedInteger(row.wechat_env, { expected: 1, maximum: 255 }),
+    environment,
+    wechatEnv,
     paymentChannel: requireExactString(row.payment_channel, 'wechat_virtual_payment'),
     clientPlatform,
     providerOrderId: normalizeNullableString(row.provider_order_id),
@@ -464,7 +474,8 @@ function normalizeDeliveryQueryFact(value) {
     !Number.isSafeInteger(value.querySequence) || value.querySequence <= 0 ||
     !Number.isSafeInteger(value.claimedOrderVersion) || value.claimedOrderVersion < 0 ||
     typeof value.userId !== 'string' || !/^[1-9][0-9]*$/.test(value.userId) ||
-    value.environment !== 'sandbox' || value.wechatEnv !== 1 || value.environmentType !== 2 || value.currency !== 'CNY' ||
+    !matchesVirtualPaymentEnvironment(value.environment, value.wechatEnv, value.environmentType) ||
+    (value.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) || value.currency !== 'CNY' ||
     typeof value.orderNo !== 'string' || !ORDER_NUMBER_PATTERN.test(value.orderNo) ||
     typeof value.providerOrderId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value.providerOrderId) ||
     typeof value.providerTransactionId !== 'string' || value.providerTransactionId.length < 1 ||
@@ -522,7 +533,7 @@ function normalizeDeliveryQueryFact(value) {
 
 function normalizeGoodsDeliveryNotificationFact(value) {
   const keys = [
-    'source', 'eventType', 'eventKey', 'payloadHash', 'userId', 'orderNo',
+    'source', 'environment', 'wechatEnv', 'eventType', 'eventKey', 'payloadHash', 'userId', 'orderNo',
     'productId', 'internalSku', 'quantity', 'attach', 'unitPriceFen', 'orderAmountFen',
     'providerMerchantOrderNo', 'providerTransactionId', 'paidAtSeconds', 'paidAt'
   ]
@@ -537,7 +548,7 @@ function normalizeGoodsDeliveryNotificationFact(value) {
   let canonical
   try {
     canonical = createWechatGoodsDeliveryCanonicalFact({
-      source: value.source, environment: 'sandbox', wechatEnv: 1,
+      source: value.source, environment: value.environment, wechatEnv: value.wechatEnv,
       userId: value.userId, orderNo: value.orderNo, productId: value.productId,
       internalSku: value.internalSku, quantity: value.quantity, attach: value.attach,
       unitPriceFen: value.unitPriceFen, orderAmountFen: value.orderAmountFen,
@@ -575,8 +586,8 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
     let canonical
     try {
       canonical = createWechatGoodsDeliveryCanonicalFact({
-        source: 'wechat_goods_delivery_message', environment: 'sandbox',
-        wechatEnv: requireUnsignedInteger(row.wechat_env, { expected: 1, maximum: 255 }),
+        source: 'wechat_goods_delivery_message', environment: requireString(row.environment, 32),
+        wechatEnv: requireUnsignedInteger(row.wechat_env, { maximum: 255 }),
         userId: normalizeBigIntId(row.linked_user_id), orderNo,
         productId: requireProductId(row.linked_product_id),
         internalSku: requireExactString(row.linked_internal_sku, 'membership_30d'),
@@ -596,7 +607,8 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
       normalizeBigIntId(row.order_id) !== normalizeBigIntId(row.linked_order_id) ||
       orderNo !== row.linked_order_no ||
       providerTransactionId !== row.linked_provider_transaction_id ||
-      row.environment !== 'sandbox' || row.processing_status !== 'processed' || row.last_error_code !== null ||
+      !matchesVirtualPaymentEnvironment(row.environment, Number(row.wechat_env)) ||
+      row.processing_status !== 'processed' || row.last_error_code !== null ||
       !Buffer.isBuffer(row.payload_hash) || row.payload_hash.length !== 32 ||
       !crypto.timingSafeEqual(row.payload_hash, canonical.payloadHash) || eventKey !== canonical.eventKey ||
       requireUnsignedInteger(row.received_count) < 1 || requireUnsignedInteger(row.attempt_count) < 1
@@ -625,7 +637,8 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
         normalizeBigIntId(row.order_id) !== normalizeBigIntId(row.linked_order_id) ||
         orderNo !== row.linked_order_no || providerOrderId !== row.linked_provider_order_id ||
         providerTransactionId !== row.linked_provider_transaction_id ||
-        row.environment !== 'sandbox' || row.processing_status !== 'processed' || row.last_error_code !== null ||
+        !matchesVirtualPaymentEnvironment(row.environment, Number(row.wechat_env)) ||
+        row.processing_status !== 'processed' || row.last_error_code !== null ||
         !Buffer.isBuffer(payloadHash) || payloadHash.length !== 32 ||
         eventKey !== `wechat_delivery_query:${payloadHash.toString('hex')}`
       ) throw createStoreError('Payment event data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
@@ -659,12 +672,14 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
       normalizeBigIntId(row.order_id) !== normalizeBigIntId(row.linked_order_id) ||
       orderNo !== row.linked_order_no || providerOrderId !== row.linked_provider_order_id ||
       providerTransactionId !== row.linked_provider_transaction_id ||
-      row.environment !== 'sandbox' || row.processing_status !== 'processed' || row.last_error_code !== null ||
+      !matchesVirtualPaymentEnvironment(row.environment, Number(row.wechat_env)) ||
+      row.processing_status !== 'processed' || row.last_error_code !== null ||
       !Buffer.isBuffer(payloadHash) || payloadHash.length !== 32 ||
       !/^[a-f0-9]{64}$/.test(queryOperationId) || !/^[a-f0-9]{64}$/.test(observationId) ||
       normalizeBigIntId(row.delivery_query_user_id) !== normalizeBigIntId(row.linked_user_id) ||
-      row.delivery_query_environment !== 'sandbox' || row.delivery_query_env !== 1 ||
-      row.delivery_query_env_type !== 2 || row.delivery_query_currency !== 'CNY' ||
+      row.delivery_query_environment !== row.environment || row.delivery_query_env !== Number(row.wechat_env) ||
+      !matchesVirtualPaymentEnvironment(row.delivery_query_environment, row.delivery_query_env, row.delivery_query_env_type) ||
+      row.delivery_query_currency !== 'CNY' ||
       row.delivery_query_order_no !== orderNo || row.delivery_query_provider_order_id !== providerOrderId ||
       row.delivery_query_provider_transaction_id !== providerTransactionId ||
       eventType !== `wechat_delivery_query_status_${wechatStatus}` ||
@@ -685,7 +700,7 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
     orderNo !== row.linked_order_no ||
     providerOrderId !== row.linked_provider_order_id ||
     (eventRule && eventRule.paid && providerTransactionId !== row.linked_provider_transaction_id) ||
-    row.environment !== 'sandbox' ||
+    !matchesVirtualPaymentEnvironment(row.environment, Number(row.wechat_env)) ||
     row.processing_status !== 'processed' ||
     row.last_error_code !== null ||
     (paidAtSeconds !== null && (!Number.isSafeInteger(paidAtSeconds) || paidAtSeconds <= 0)) ||
@@ -701,8 +716,8 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
   try {
     canonicalFact = createWechatQueryCanonicalFact({
       source: 'wechat_query',
-      environment: 'sandbox',
-      wechatEnv: requireUnsignedInteger(row.wechat_env, { expected: 1, maximum: 255 }),
+      environment: requireString(row.environment, 32),
+      wechatEnv: requireUnsignedInteger(row.wechat_env, { maximum: 255 }),
       orderNo,
       providerOrderId,
       providerTransactionId,
@@ -782,8 +797,8 @@ function normalizeReconciliationFact(value) {
     Object.keys(value).length !== allowedKeys.size ||
     [...allowedKeys].some((key) => !Object.hasOwn(value, key)) ||
     value.source !== 'wechat_query' ||
-    value.environment !== 'sandbox' ||
-    value.wechatEnv !== 1 ||
+    !matchesVirtualPaymentEnvironment(value.environment, value.wechatEnv) ||
+    (value.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
     typeof value.orderNo !== 'string' ||
     !ORDER_NUMBER_PATTERN.test(value.orderNo) ||
     typeof value.eventKey !== 'string' ||
@@ -858,8 +873,8 @@ function normalizeReconciliationFact(value) {
   }
   return Object.freeze({
     source: 'wechat_query',
-    environment: 'sandbox',
-    wechatEnv: 1,
+    environment: value.environment,
+    wechatEnv: value.wechatEnv,
     orderNo: value.orderNo,
     eventKey: canonicalFact.eventKey,
     payloadHash: Buffer.from(canonicalFact.payloadHash),
@@ -1073,8 +1088,12 @@ export function createVirtualPaymentStore(options = {}) {
     return normalizeSingleOrder(result)
   }
 
-  async function listRecoveryOrders(userIdValue, cursor = null) {
+  async function listRecoveryOrders(userIdValue, cursor = null, environmentValue = {}) {
     const userId = normalizeUserId(userIdValue)
+    const environment = virtualPaymentEnvironment(environmentValue.environment)
+    if (!environment || environment.wechatEnv !== environmentValue.wechatEnv) {
+      throw createStoreError('Payment recovery environment is invalid.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
+    }
     const invalidCursor = () => createStoreError('Payment request is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
     if (cursor !== null && (typeof cursor !== 'string' || !ORDER_NUMBER_PATTERN.test(cursor))) throw invalidCursor()
     const columns = 'id, user_id, environment, wechat_env, order_no, client_request_id, payment_status, entitlement_status, delivery_status, created_at, updated_at'
@@ -1083,7 +1102,7 @@ export function createVirtualPaymentStore(options = {}) {
       return result[0]
     }
     function normalize(row) {
-      if (!row || normalizeBigIntId(row.user_id) !== userId || row.environment !== 'sandbox' || Number(row.wechat_env) !== 1) throw createStoreError('Payment order data is invalid.')
+      if (!row || normalizeBigIntId(row.user_id) !== userId || row.environment !== environment.environment || Number(row.wechat_env) !== environment.wechatEnv) throw createStoreError('Payment order data is invalid.')
       const value = { orderNo: normalizeOrderNo(row.order_no), clientRequestId: normalizeVirtualPaymentClientRequestId(row.client_request_id),
         paymentStatus: row.payment_status, entitlementStatus: row.entitlement_status, deliveryStatus: row.delivery_status,
         createdAt: normalizeRequiredDate(row.created_at), updatedAt: normalizeRequiredDate(row.updated_at) }
@@ -1091,7 +1110,7 @@ export function createVirtualPaymentStore(options = {}) {
       if (value.updatedAt < value.createdAt) throw createStoreError('Payment order data is invalid.')
       return { id: normalizeBigIntId(row.id), value }
     }
-    let boundary = '', values = [userId, 'sandbox', 1]
+    let boundary = '', values = [userId, environment.environment, environment.wechatEnv]
     if (cursor !== null) {
       const anchorRows = rowsOf(await execute(`SELECT ${columns} FROM ${ORDERS_TABLE}
         WHERE user_id = ? AND environment = ? AND wechat_env = ? AND order_no = ? LIMIT 2`, [...values, cursor]))
@@ -1201,7 +1220,8 @@ export function createVirtualPaymentStore(options = {}) {
       !product || order.internalSku !== product.internalSku || order.productId !== expectedProductId ||
       order.productName !== product.displayName || order.quantity !== product.quantity ||
       order.unitPriceFen !== product.priceFen || order.orderAmountFen !== product.priceFen || order.paidAmountFen !== product.priceFen ||
-      order.currency !== product.currency || order.environment !== 'sandbox' || order.wechatEnv !== 1 ||
+      order.currency !== product.currency || !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
+      (order.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
       order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
       order.providerOrderId === null || order.providerTransactionId === null || order.paidAt === null ||
       order.deliveryStatus !== 'not_ready' || order.deliveredAt !== null
@@ -1346,7 +1366,8 @@ export function createVirtualPaymentStore(options = {}) {
       !product || order.internalSku !== product.internalSku || order.productId !== expectedProductId ||
       order.productName !== product.displayName || order.quantity !== product.quantity ||
       order.unitPriceFen !== product.priceFen || order.orderAmountFen !== product.priceFen || order.paidAmountFen !== product.priceFen ||
-      order.currency !== product.currency || order.environment !== 'sandbox' || order.wechatEnv !== 1 ||
+      order.currency !== product.currency || !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
+      (order.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
       order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
       (requireProviderOrderId && order.providerOrderId === null) || order.providerTransactionId === null || order.paidAt === null ||
       order.entitlementStatus !== 'granted' || order.membershipGrantId === null ||
@@ -1502,7 +1523,8 @@ export function createVirtualPaymentStore(options = {}) {
       if (
         query.status !== 'applied' || query.completedAt === null || query.leaseExpiresAt !== null || query.providerEventId === null ||
         query.observationId === null || query.wechatStatus === null || query.orderType !== 0 ||
-        query.observedEnvironment !== 'sandbox' || query.requestEnv !== 1 || query.responseEnvType !== 2 ||
+        query.observedEnvironment !== order.environment || query.requestEnv !== order.wechatEnv ||
+        !matchesVirtualPaymentEnvironment(query.observedEnvironment, query.requestEnv, query.responseEnvType) ||
         query.observedCurrency !== 'CNY' || query.observedOrderNo !== order.orderNo ||
         query.observedProviderOrderId !== order.providerOrderId ||
         query.observedProviderTransactionId !== order.providerTransactionId ||
@@ -2217,7 +2239,9 @@ export function createVirtualPaymentStore(options = {}) {
         order.productName !== product.displayName || order.quantity !== fact.quantity || order.quantity !== product.quantity ||
         fact.attach !== order.orderNo ||
         order.unitPriceFen !== fact.unitPriceFen || order.orderAmountFen !== fact.orderAmountFen ||
-        order.currency !== product.currency || order.environment !== 'sandbox' || order.wechatEnv !== 1 ||
+        order.currency !== product.currency || order.environment !== fact.environment || order.wechatEnv !== fact.wechatEnv ||
+        !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
+        (order.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
         order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
         (order.providerTransactionId !== null && order.providerTransactionId !== fact.providerTransactionId) ||
         (order.paidAmountFen !== null && order.paidAmountFen !== fact.orderAmountFen) ||
@@ -2397,8 +2421,8 @@ export function createVirtualPaymentStore(options = {}) {
       input.quantity !== product.quantity ||
       input.orderAmountFen !== product.priceFen * product.quantity ||
       input.currency !== product.currency ||
-      input.environment !== 'sandbox' ||
-      input.wechatEnv !== 1 ||
+      !matchesVirtualPaymentEnvironment(input.environment, input.wechatEnv) ||
+      (input.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
       input.paymentChannel !== 'wechat_virtual_payment' ||
       !CLIENT_PLATFORMS.has(clientPlatform)
     ) {

@@ -85,7 +85,7 @@ for (const variableName of [
   )
 }
 
-for (const environment of ['production', 'prod', 'live', 'test']) {
+for (const environment of ['prod', 'live', 'test']) {
   assert.throws(
     () => getVirtualPaymentConfig({ env: enabledEnv({ VIRTUAL_PAYMENT_ENV: environment }) }),
     (error) => {
@@ -96,6 +96,43 @@ for (const environment of ['production', 'prod', 'live', 'test']) {
     }
   )
 }
+
+const productionEnv = (overrides = {}) => ({
+  NODE_ENV: 'production',
+  VIRTUAL_PAYMENT_ENABLED: 'true',
+  VIRTUAL_PAYMENT_ENV: 'production',
+  WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID: 'production-offer-fake',
+  WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID: 'production-product-fake',
+  WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY: 'production-app-key-fake',
+  ...overrides
+})
+const production = getVirtualPaymentConfig({ env: productionEnv() })
+assert.equal(production.environment, 'production')
+assert.equal(production.wechatEnv, 0)
+assert.equal(production.expectedWechatEnvironmentType, 1)
+assert.equal(production.product, VIRTUAL_PAYMENT_PRODUCT)
+assert.equal(production.productId, 'production-product-fake')
+assert.equal(production.sandboxTestProductEnabled, false)
+assert.equal(production.sandboxUserIds, null)
+for (const variableName of [
+  'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID',
+  'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID',
+  'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY'
+]) {
+  const env = productionEnv()
+  delete env[variableName]
+  assert.throws(() => getVirtualPaymentConfig({ env }), (error) => error.variableName === variableName)
+}
+assert.throws(() => getVirtualPaymentConfig({ env: productionEnv({ NODE_ENV: 'development' }) }),
+  (error) => error.code === 'VIRTUAL_PAYMENT_PRODUCTION_ENVIRONMENT_REQUIRED')
+assert.throws(() => getVirtualPaymentConfig({ env: productionEnv({ VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true' }) }),
+  (error) => error.code === 'VIRTUAL_PAYMENT_PRODUCTION_TEST_PRODUCT_FORBIDDEN')
+assert.doesNotThrow(() => getVirtualPaymentConfig({ env: productionEnv({
+  VIRTUAL_PAYMENT_SANDBOX_USER_IDS: undefined,
+  WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID: 'unused-sandbox-offer',
+  WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID: 'unused-sandbox-product',
+  WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY: 'unused-sandbox-key'
+}) }))
 
 assert.throws(
   () => getVirtualPaymentConfig({ env: enabledEnv({ NODE_ENV: 'production' }) }),
@@ -110,6 +147,7 @@ const configured = getVirtualPaymentConfig({ env: enabledEnv() })
 assert.equal(configured.enabled, true)
 assert.equal(configured.environment, 'sandbox')
 assert.equal(configured.wechatEnv, 1)
+assert.equal(configured.expectedWechatEnvironmentType, 2)
 assert.equal(configured.offerId, SECRET_SENTINELS.WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID)
 assert.equal(configured.productId, SECRET_SENTINELS.WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID)
 assert.equal(configured.standardProductId, SECRET_SENTINELS.WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID)
@@ -198,7 +236,10 @@ assert.deepEqual(VIRTUAL_PAYMENT_CONFIG_VARIABLES, {
   sandboxTestProductEnabled: 'VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED',
   sandboxTestProductId: 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID',
   sandboxAppKey: 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY',
-  sandboxUserIds: 'VIRTUAL_PAYMENT_SANDBOX_USER_IDS'
+  sandboxUserIds: 'VIRTUAL_PAYMENT_SANDBOX_USER_IDS',
+  productionOfferId: 'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID',
+  productionProductId: 'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID',
+  productionAppKey: 'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY'
 })
 
 for (const invalidUserIds of ['', 'abc', '0', '-1', '1.5', '9007199254740992']) {
@@ -209,7 +250,7 @@ for (const invalidUserIds of ['', 'abc', '0', '-1', '1.5', '9007199254740992']) 
 }
 
 const source = await readFile(new URL('../server/virtual-payment-config.mjs', import.meta.url), 'utf8')
-assert(!/PRODUCTION_[A-Z_]*APP_KEY/.test(source), 'stage 1 must not contain a production AppKey read path')
+assert(source.includes('WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY'))
 assert(!/VUE_APP_[A-Z_]*APP_KEY/.test(source), 'payment secrets must not use client-exposed VUE_APP variables')
 
 console.log('virtual payment config tests passed')

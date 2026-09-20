@@ -2,6 +2,8 @@ import fs from 'node:fs'
 
 import { DEFAULT_DEV_ADMIN_API_TOKEN, getAdminApiToken, getUserAuthConfig } from '../server/auth.mjs'
 import { createCampaignPhoneIdentity } from '../server/book-benefit-foundation.mjs'
+import { getVirtualPaymentConfig, parseVirtualPaymentEnabled } from '../server/virtual-payment-config.mjs'
+import { getVirtualPaymentMessageConfig } from '../server/virtual-payment-message.mjs'
 import {
   PRODUCTION_WORD_API_BASE_URL,
   getWordApiBaseUrl
@@ -430,6 +432,31 @@ function checkCampaignPhoneIdentitySecretGuard(errors) {
   }
 }
 
+function checkVirtualPaymentProduction(errors) {
+  let enabled
+  try {
+    enabled = parseVirtualPaymentEnabled(process.env.VIRTUAL_PAYMENT_ENABLED)
+  } catch {
+    addError(errors, 'production virtual payment enablement flag is invalid.')
+    return
+  }
+  if (!enabled) return
+  try {
+    const payment = getVirtualPaymentConfig({ env: process.env, nodeEnv: process.env.NODE_ENV })
+    const message = getVirtualPaymentMessageConfig({ env: process.env, nodeEnv: process.env.NODE_ENV })
+    if (
+      payment.environment !== 'production' || payment.wechatEnv !== 0 ||
+      payment.expectedWechatEnvironmentType !== 1 || payment.sandboxTestProductEnabled !== false ||
+      message.enabled !== true || message.environment !== 'production' || message.wechatEnv !== 0 ||
+      message.format !== 'json' || message.mode !== 'aes'
+    ) {
+      addError(errors, 'enabled production virtual payment configuration is inconsistent.')
+    }
+  } catch {
+    addError(errors, 'enabled production virtual payment configuration is incomplete or invalid.')
+  }
+}
+
 function checkWordDetailUsesMediaGuard(errors) {
   const sourceText = fs.readFileSync(new URL(`../${WORD_DETAIL_PATH}`, import.meta.url), 'utf8')
   if (!/const\s+ENABLE_VIDEO_MODULE\s*=\s*true/.test(sourceText)) {
@@ -488,6 +515,7 @@ function main() {
   checkAdminAuthGuards(errors)
   checkUserJwtSecretGuard(errors)
   checkCampaignPhoneIdentitySecretGuard(errors)
+  checkVirtualPaymentProduction(errors)
   checkWordDetailUsesMediaGuard(errors)
   checkHomepageFeaturedGuards(errors)
 
@@ -508,6 +536,7 @@ function main() {
   console.log('- production admin API auth rejects empty/default tokens')
   console.log('- production user JWT auth requires JWT_SECRET')
   console.log('- production campaign phone identity requires an independent CAMPAIGN_PHONE_IDENTITY_HASH_SECRET')
+  console.log('- enabled production virtual payment requires Env=0, the ¥30 product, and AES message delivery')
   console.log('- homepage featured word uses the public API with published filtering')
 }
 

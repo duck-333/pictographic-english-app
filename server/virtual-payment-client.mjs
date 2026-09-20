@@ -81,26 +81,27 @@ function normalizeNotifyReference(input) {
   return Object.freeze({ orderNo: input.orderNo })
 }
 
-function assertEnabledSandbox(config) {
+function assertEnabled(config) {
   if (!config || !config.enabled) {
     throw createClientError('Virtual payment is disabled.', 'VIRTUAL_PAYMENT_DISABLED', 503)
   }
-  if (config.environment !== 'sandbox' || config.wechatEnv !== 1) {
+  if (!['sandbox', 'production'].includes(config.environment) || ![0, 1].includes(config.wechatEnv) ||
+      ![1, 2].includes(config.expectedWechatEnvironmentType)) {
     throw createClientError('Virtual payment environment is invalid.', 'VIRTUAL_PAYMENT_ENVIRONMENT_INVALID', 503)
   }
 }
 
-function createRequestBody(reference) {
+function createRequestBody(reference, wechatEnv) {
   if (reference.orderNo) {
     return Object.freeze({
       openid: reference.openid,
-      env: 1,
+      env: wechatEnv,
       order_id: reference.orderNo
     })
   }
   return Object.freeze({
     openid: reference.openid,
-    env: 1,
+    env: wechatEnv,
     wx_order_id: reference.wechatOrderId
   })
 }
@@ -279,7 +280,7 @@ function optionalSafeString(value, maximumLength = 128) {
   return value
 }
 
-function normalizeQueryOrderResponse(payload) {
+function normalizeQueryOrderResponse(payload, config) {
   if (!isPlainObject(payload.order)) {
     throw createClientError('Wechat virtual payment order response is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
   }
@@ -297,7 +298,7 @@ function normalizeQueryOrderResponse(payload) {
     throw createClientError('Wechat virtual payment order response is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
   }
   const environmentType = optionalInteger(order.env_type, 'environment type')
-  if (environmentType !== 2) {
+  if (environmentType !== config.expectedWechatEnvironmentType) {
     throw createClientError('Wechat virtual payment order environment is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
   }
   return Object.freeze({
@@ -311,7 +312,7 @@ function normalizeQueryOrderResponse(payload) {
     paidAtSeconds: optionalInteger(order.paid_time, 'paid time'),
     providedAtSeconds: optionalInteger(order.provide_time, 'provide time'),
     environmentType,
-    environment: 'sandbox'
+    environment: config.environment
   })
 }
 
@@ -361,20 +362,20 @@ export function createVirtualPaymentClient(options = {}) {
   }
 
   async function queryOrder(input = {}) {
-    assertEnabledSandbox(config)
+    assertEnabled(config)
     const reference = normalizeOrderReference(input, { requireOpenid: true })
-    const requestBody = JSON.stringify(createRequestBody(reference))
+    const requestBody = JSON.stringify(createRequestBody(reference, config.wechatEnv))
     const paySig = signingService.signQueryOrderPayload(requestBody)
     const payload = await postWechat(QUERY_ORDER_PATH, requestBody, { pay_sig: paySig })
-    return normalizeQueryOrderResponse(payload)
+    return normalizeQueryOrderResponse(payload, config)
   }
 
   async function notifyProvideGoods(input = {}) {
-    assertEnabledSandbox(config)
+    assertEnabled(config)
     const reference = normalizeNotifyReference(input)
     await postWechat(NOTIFY_PROVIDE_GOODS_PATH, undefined, {
       order_id: reference.orderNo,
-      env: '1'
+      env: String(config.wechatEnv)
     }, { expectEmptyResponse: true })
     return Object.freeze({ accepted: true })
   }

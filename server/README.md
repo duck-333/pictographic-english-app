@@ -244,6 +244,28 @@ The stored configuration is:
 
 Only published word IDs can be saved. Daily rotation uses the Asia/Shanghai calendar-day number modulo the number of currently published pool words. Manual mode returns `manualWordId` when it is still published; otherwise it falls back to the published recommendation pool. An empty valid pool returns `word: null`.
 
+## WeChat virtual payment environments
+
+`VIRTUAL_PAYMENT_ENV` is the authoritative environment selector when
+`VIRTUAL_PAYMENT_ENABLED=true`:
+
+- `sandbox` derives request/message `Env=1` and `query_order env_type=2`. It uses the
+  existing sandbox Offer ID, Product ID, AppKey, user allowlist, and optional ¥1 test
+  product configuration.
+- `production` requires `NODE_ENV=production`, derives request/message `Env=0` and
+  `query_order env_type=1`, and uses only the ¥30 product configured by
+  `WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID`,
+  `WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID`, and
+  `WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY`. It does not read the sandbox user
+  allowlist and rejects the sandbox ¥1 test-product switch.
+
+Production message delivery additionally requires the existing message endpoint to
+be enabled with JSON and AES mode, including its Token, original ID, mini-program
+AppID, and EncodingAESKey environment variables. `npm.cmd run check:production`
+validates these requirements only when virtual payment is enabled and never prints
+secret values. This is a code/configuration readiness boundary; it does not mean the
+production payment feature has been deployed or validated against WeChat.
+
 ## Safety Boundaries
 
 - Production mini programs read published text entries from `https://baxiaota.com/api/words` and `https://baxiaota.com/api/words/:id`.

@@ -139,3 +139,9 @@
 
 - 兼容微信后台生成的43位标准Base64字符EncodingAESKey：补`=`后可解码且结果恰为32字节即可，不再要求未使用低位为零；`=`、空白、控制字符、URL-safe字符和错误长度仍拒绝。
 - 仅调整Key文本解码兼容性，密文严格Base64、AES、签名、padding、AppID、沙箱门禁和支付业务流程保持不变。
+
+### 2026-09-15：虚拟支付 production / Env=0 支持
+
+- 以 `VIRTUAL_PAYMENT_ENV` 作为唯一权威环境来源：sandbox固定派生请求/消息 `Env=1` 与查询响应 `env_type=2`，production固定派生 `Env=0` 与 `env_type=1`。
+- production只在 `NODE_ENV=production` 下启用，只允许现有¥30会员商品，不读取sandbox用户白名单，并要求消息推送为JSON AES模式；sandbox现有¥1/¥30、明文/AES及备用发货行为保持兼容。
+- 同一套签名、session、Client、Service、Store、对账、发货和消息业务按环境事实参数化，不复制状态机、会员事务或回调业务；本批只做本地开发和离线验收，不部署、不访问微信或真实数据库。

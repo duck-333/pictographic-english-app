@@ -20,6 +20,7 @@ const USER_ID = '42'
 const DB_HOST = 'fake-db-host-sensitive'
 const DB_PASSWORD = 'fake-db-password-sensitive'
 const SIGN_DATA = '{"offerId":"sandbox.offer-001","buyQuantity":1,"env":1,"currencyType":"CNY","productId":"membership.product-30d","goodsPrice":3000,"outTradeNo":"VP20260830ABC123","attach":"opaque_ref_1234567890"}'
+const PRODUCTION_SIGN_DATA = '{"offerId":"production.offer-001","buyQuantity":1,"env":0,"currencyType":"CNY","productId":"production.product-30d","goodsPrice":3000,"outTradeNo":"VP20260830ABC123","attach":"opaque_ref_1234567890"}'
 const EXPECTED_SIGNATURE = '41933e9eacbeee03ef147736896a76f916cca9c2d545218cf42bb85907a68c82'
 const SENSITIVE_VALUES = [
   APP_SECRET,
@@ -597,6 +598,27 @@ assert.equal(
   createPaymentSessionSignature(invalidSignDataSession, SIGN_DATA),
   EXPECTED_SIGNATURE,
   'invalid signData must not consume the private session'
+)
+
+const wrongProductionEnvironmentSession = createSensitivePaymentSession({ openid: OPENID }, SESSION_KEY)
+await expectError(
+  () => createPaymentSessionSignature(wrongProductionEnvironmentSession, SIGN_DATA, 3000, 0),
+  'WECHAT_SERVICE_UNAVAILABLE'
+)
+assert.match(
+  createPaymentSessionSignature(wrongProductionEnvironmentSession, PRODUCTION_SIGN_DATA, 3000, 0),
+  /^[a-f0-9]{64}$/,
+  'an environment mismatch must not consume the private payment session'
+)
+const productionTestProductSession = createSensitivePaymentSession({ openid: OPENID }, SESSION_KEY)
+await expectError(
+  () => createPaymentSessionSignature(
+    productionTestProductSession,
+    PRODUCTION_SIGN_DATA.replace('"goodsPrice":3000', '"goodsPrice":100'),
+    100,
+    0
+  ),
+  'WECHAT_SERVICE_UNAVAILABLE'
 )
 
 console.log('Virtual payment session tests passed.')

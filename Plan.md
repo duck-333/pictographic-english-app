@@ -326,3 +326,10 @@
 
 - EncodingAESKey继续要求字符串、43位标准Base64字符且补`=`后严格得到32字节，但允许最后字符的未使用低位非零，不再以规范重编码文本相等作为有效性条件。
 - 增加全假值非规范Key的独立解码、配置接入及加解密回归；其余AES传输与支付链路不变。
+
+## 2026-09-15：虚拟支付 production / Env=0 开发验收
+
+- 参数化权威环境映射及服务器签名、session、微信Client、Service、Store、对账、发货和AES消息链路；production订单固定为production/0/¥30，sandbox保持sandbox/1及双商品能力。
+- 小程序production仅允许release包、正式API域名、Env=0和¥30，恢复记录按环境隔离；sandbox继续允许development下develop/trial及Env=1。
+- 扩展production preflight，在支付启用时检查production三项支付配置、禁用¥1开关及JSON AES消息必需配置，不输出秘密，也不接入普通健康检查。
+- 使用全假值离线测试覆盖Env映射、错环境拒绝、生产AES固定向量及响应独立验签解密；Store变更需在可用的隔离MySQL环境执行集成门禁。全部修改保持未暂存、未提交并等待独立复审。

@@ -40,6 +40,18 @@ assert.throws(() => normalizeVerifiedWechatDeliveryQueryFact(query4, sandboxTest
   queryOperationId: 'f'.repeat(64), querySequence: 1, claimedOrderVersion: order.version, now: NOW.getTime()
 }), (error) => error.code === 'PAYMENT_DELIVERY_QUERY_INVALID')
 
+const productionOrder = Object.freeze({ ...order, environment: 'production', wechatEnv: 0, productId: 'production-product' })
+const productionQuery = Object.freeze({ ...query4, environment: 'production', environmentType: 1 })
+const productionFact = normalizeVerifiedWechatDeliveryQueryFact(productionQuery, productionOrder, {
+  queryOperationId: 'd'.repeat(64), querySequence: 1, claimedOrderVersion: order.version, now: NOW.getTime()
+})
+assert.equal(productionFact.environment, 'production')
+assert.equal(productionFact.wechatEnv, 0)
+assert.equal(productionFact.environmentType, 1)
+assert.throws(() => normalizeVerifiedWechatDeliveryQueryFact(query4, productionOrder, {
+  queryOperationId: 'd'.repeat(64), querySequence: 1, claimedOrderVersion: order.version, now: NOW.getTime()
+}), (error) => error.code === 'PAYMENT_DELIVERY_QUERY_INVALID')
+
 function baseStore(overrides = {}) {
   return {
     async findByUserAndClientRequestId() { return null },

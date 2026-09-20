@@ -1,6 +1,11 @@
 import crypto from 'node:crypto'
 
-import { virtualPaymentProductForPrice } from './virtual-payment-config.mjs'
+import {
+  matchesVirtualPaymentEnvironment,
+  VIRTUAL_PAYMENT_PRODUCT,
+  virtualPaymentEnvironment,
+  virtualPaymentProductForPrice
+} from './virtual-payment-config.mjs'
 
 const ORDER_NUMBER_PATTERN = /^VP[A-F0-9]{30}$/
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
@@ -114,14 +119,13 @@ export function createWechatQueryCanonicalFact(input) {
     Object.keys(input).length !== CANONICAL_FACT_KEYS.length ||
     CANONICAL_FACT_KEYS.some((key) => !Object.hasOwn(input, key)) ||
     input.source !== 'wechat_query' ||
-    input.environment !== 'sandbox' ||
-    input.wechatEnv !== 1 ||
+    !matchesVirtualPaymentEnvironment(input.environment, input.wechatEnv) ||
     typeof input.orderNo !== 'string' ||
     !ORDER_NUMBER_PATTERN.test(input.orderNo) ||
     typeof input.orderType !== 'number' ||
     !Number.isSafeInteger(input.orderType) ||
     input.orderType !== 0 ||
-    !product
+    !product || (input.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT)
   ) {
     throw reconciliationError('Wechat payment query fact is invalid.')
   }
@@ -155,8 +159,8 @@ export function createWechatQueryCanonicalFact(input) {
   }
   const raw = JSON.stringify({
     source: 'wechat_query',
-    environment: 'sandbox',
-    wechatEnv: 1,
+    environment: input.environment,
+    wechatEnv: input.wechatEnv,
     orderNo: input.orderNo,
     providerOrderId,
     providerTransactionId,
@@ -188,8 +192,8 @@ function assertOrderSnapshot(order) {
     order.quantity !== product.quantity ||
     order.orderAmountFen !== product.priceFen * product.quantity ||
     order.currency !== product.currency ||
-    order.environment !== 'sandbox' ||
-    order.wechatEnv !== 1 ||
+    !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
+    (order.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
     order.paymentChannel !== 'wechat_virtual_payment'
   ) {
     throw reconciliationError('Payment order conflicts with current configuration.', 'PAYMENT_ORDER_CONFLICT', 409)
@@ -210,10 +214,11 @@ function normalizePaidTime(seconds, nowSeconds) {
 
 export function normalizeVerifiedWechatQueryFact(input, order, options = {}) {
   assertOrderSnapshot(order)
+  const environmentConfig = virtualPaymentEnvironment(order.environment)
   if (!isPlainObject(input) || Object.keys(input).join(',') !== EXPECTED_RESULT_KEYS.join(',')) {
     throw reconciliationError('Wechat payment query result is invalid.')
   }
-  if (input.environmentType !== 2 || input.environment !== 'sandbox') {
+  if (input.environmentType !== environmentConfig.expectedWechatEnvironmentType || input.environment !== order.environment) {
     throw reconciliationError('Wechat payment query result is invalid.')
   }
   if (input.orderId !== order.orderNo) {
@@ -255,8 +260,8 @@ export function normalizeVerifiedWechatQueryFact(input, order, options = {}) {
 
   const canonicalFact = createWechatQueryCanonicalFact({
     source: 'wechat_query',
-    environment: 'sandbox',
-    wechatEnv: 1,
+    environment: order.environment,
+    wechatEnv: order.wechatEnv,
     orderNo: order.orderNo,
     providerOrderId,
     providerTransactionId,
@@ -270,8 +275,8 @@ export function normalizeVerifiedWechatQueryFact(input, order, options = {}) {
   })
   return Object.freeze({
     source: 'wechat_query',
-    environment: 'sandbox',
-    wechatEnv: 1,
+    environment: order.environment,
+    wechatEnv: order.wechatEnv,
     orderNo: order.orderNo,
     eventKey: canonicalFact.eventKey,
     payloadHash: canonicalFact.payloadHash,
