@@ -19,6 +19,18 @@ function enabledEnv(overrides = {}) {
   }
 }
 
+function productionEnv(overrides = {}) {
+  return {
+    NODE_ENV: 'production',
+    VIRTUAL_PAYMENT_ENABLED: 'true',
+    VIRTUAL_PAYMENT_ENV: 'production',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID: 'production-offer',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID: 'production-product',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY: 'fake-production-app-key',
+    ...overrides
+  }
+}
+
 function order(overrides = {}) {
   return {
     id: '1',
@@ -89,6 +101,8 @@ function createHarness(overrides = {}) {
         unitPriceFen: input.unitPriceFen,
         orderAmountFen: input.orderAmountFen,
         currency: input.currency,
+        environment: input.environment,
+        wechatEnv: input.wechatEnv,
         clientPlatform: input.clientPlatform,
         ...(overrides.createdOrderOverrides || {})
       })
@@ -170,6 +184,28 @@ assert.deepEqual(harness.calls.find((call) => call[0] === 'sign')[1].productCont
   currency: 'CNY',
   membershipSourceType: 'wechat_order'
 })
+
+const productionHarness = createHarness({ env: productionEnv() })
+await productionHarness.service.createOrResumeOrder(request())
+const productionCreateCall = productionHarness.calls.find((call) => call[0] === 'create')[1]
+assert.equal(productionCreateCall.environment, 'production')
+assert.equal(productionCreateCall.wechatEnv, 0)
+assert.equal(productionCreateCall.productId, 'production-product')
+assert.equal(productionCreateCall.unitPriceFen, 3000)
+assert.equal(productionHarness.getCurrentOrder().environment, 'production')
+assert.equal(productionHarness.getCurrentOrder().wechatEnv, 0)
+assert.equal(productionHarness.calls.some((call) => call[0] === 'exchange'), true,
+  'production users must not be gated by a sandbox allowlist')
+for (const invalidProductionOrder of [
+  order({ environment: 'production', wechatEnv: 0, productId: 'production-product', unitPriceFen: 100, orderAmountFen: 100 }),
+  order({ environment: 'sandbox', wechatEnv: 1, productId: 'production-product' })
+]) {
+  const invalidProduction = createHarness({ env: productionEnv(), currentOrder: invalidProductionOrder })
+  await assert.rejects(
+    invalidProduction.service.getOwnedOrder({ authenticatedUserId: '42', orderNo: ORDER_NO }),
+    (error) => error.code === 'PAYMENT_ORDER_CONFLICT'
+  )
+}
 
 const sandboxTestHarness = createHarness({ env: enabledEnv({
   VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
@@ -520,7 +556,11 @@ console.log('Virtual payment service tests passed.')
   let reads = 0
   const forbidden = () => { throw new Error('unexpected mutation or WeChat call') }
   const recoveryStore = { findByUserAndClientRequestId: forbidden, findByUserAndOrderNo: forbidden, createOrder: forbidden, markOrderPending: forbidden,
-    async listRecoveryOrders(userId, cursor) { reads++; assert.equal(userId, '42'); assert.equal(cursor, null); return { orders: [order({ secret: 'not-returned' })], nextCursor: null } } }
+    async listRecoveryOrders(userId, cursor, environment) {
+      reads++; assert.equal(userId, '42'); assert.equal(cursor, null)
+      assert.deepEqual(environment, { environment: 'sandbox', wechatEnv: 1 })
+      return { orders: [order({ secret: 'not-returned' })], nextCursor: null }
+    } }
   const recovery = createHarness({ store: recoveryStore, paymentSessionService: { exchangeAndVerifyPaymentSession: forbidden }, signingService: { createPaymentParameters: forbidden } }).service
   const page = await recovery.listRecoveryOrders({ authenticatedUserId: '42' })
   assert.deepEqual(Object.keys(page.orders[0]), ['orderNo', 'clientRequestId', 'paymentStatus', 'entitlementStatus', 'deliveryStatus', 'createdAt', 'updatedAt'])
@@ -529,4 +569,26 @@ console.log('Virtual payment service tests passed.')
   recoveryStore.listRecoveryOrders = () => { throw new Error('SQL password token') }
   await assert.rejects(recovery.listRecoveryOrders({ authenticatedUserId: '42' }), (error) => error.code === 'PAYMENT_SERVICE_UNAVAILABLE' && !/SQL|password|token/.test(error.message))
   console.log('Recovery Service: authenticated ownership, no mutation/WeChat, whitelist and safe errors passed.')
+}
+
+{
+  let receivedEnvironment
+  const forbiddenProductionOperation = () => { throw new Error('unexpected production recovery mutation') }
+  const productionRecovery = createHarness({
+    env: productionEnv(),
+    store: {
+      findByUserAndClientRequestId: forbiddenProductionOperation,
+      findByUserAndOrderNo: forbiddenProductionOperation,
+      createOrder: forbiddenProductionOperation,
+      markOrderPending: forbiddenProductionOperation,
+      async listRecoveryOrders(_userId, _cursor, environment) {
+        receivedEnvironment = environment
+        return { orders: [], nextCursor: null }
+      }
+    }
+  }).service
+  assert.deepEqual(await productionRecovery.listRecoveryOrders({ authenticatedUserId: '42' }), {
+    orders: [], nextCursor: null
+  })
+  assert.deepEqual(receivedEnvironment, { environment: 'production', wechatEnv: 0 })
 }

@@ -45,14 +45,16 @@ export function validateRecoveryPage(value, cursor = null) {
   return value
 }
 export function paymentError(code) { const error = new Error('购买操作暂未完成'); error.code = code; return error }
-export function validatePaymentParams(params, orderNo, expectedPriceFen = 3000) {
+export function validatePaymentParams(params, orderNo, expectedPriceFen = 3000, expectedWechatEnv = 1) {
   if (!params || Array.isArray(params) || params.mode !== 'short_series_goods' ||
       typeof params.signData !== 'string' || !params.signData.length ||
       typeof params.paySig !== 'string' || !/^[a-f0-9]{64}$/.test(params.paySig) ||
       typeof params.signature !== 'string' || !/^[a-f0-9]{64}$/.test(params.signature)) throw paymentError('PAYMENT_RESPONSE_INVALID')
   let data
   try { data = JSON.parse(params.signData) } catch (_) { throw paymentError('PAYMENT_RESPONSE_INVALID') }
-  if (!data || data.env !== 1 || data.buyQuantity !== 1 || data.currencyType !== 'CNY' || data.goodsPrice !== expectedPriceFen ||
+  if (!data || data.env !== expectedWechatEnv || ![0, 1].includes(expectedWechatEnv) ||
+      (expectedWechatEnv === 0 && expectedPriceFen !== 3000) || data.buyQuantity !== 1 ||
+      data.currencyType !== 'CNY' || data.goodsPrice !== expectedPriceFen ||
       data.outTradeNo !== orderNo || typeof orderNo !== 'string' || !/^VP[A-F0-9]{30}$/.test(orderNo)) throw paymentError('PAYMENT_RESPONSE_INVALID')
   return params
 }
@@ -85,23 +87,28 @@ export function createVirtualPaymentApi(options = {}) {
     const env = options.env || (typeof process !== 'undefined' && process.env ? process.env : {})
     const configured = String(rawApiBaseUrl(env) || '').trim().replace(/\/+$/, '')
     const baseUrl = getWordApiBaseUrl({ nodeEnv: env.NODE_ENV, apiBaseUrl: configured })
-    // Use the same explicit development backend as login and entitlements. Never
-    // let the global production fallback authorize a sandbox payment request.
+    const production = env.NODE_ENV === 'production'
     const authority = configured.match(/^https?:\/\/([^/?#]+)(?:\/[^?#]*)?$/i)
     const host = authority && authority[1].toLowerCase().split(':')[0]
-    if (env.NODE_ENV !== 'development' || !authority || authority[1].includes('@') ||
+    if (production) {
+      if (baseUrl !== PRODUCTION_WORD_API_BASE_URL || (configured && configured !== PRODUCTION_WORD_API_BASE_URL)) {
+        throw paymentError('PAYMENT_SANDBOX_UNAVAILABLE')
+      }
+    } else if (env.NODE_ENV !== 'development' || !authority || authority[1].includes('@') ||
         baseUrl !== configured || baseUrl === PRODUCTION_WORD_API_BASE_URL ||
-        host === 'baxiaota.com' || (host.endsWith('.baxiaota.com') && host !== 'sandbox-api.baxiaota.com')) throw paymentError('PAYMENT_SANDBOX_UNAVAILABLE')
+        host === 'baxiaota.com' || (host.endsWith('.baxiaota.com') && host !== 'sandbox-api.baxiaota.com')) {
+      throw paymentError('PAYMENT_SANDBOX_UNAVAILABLE')
+    }
     const native = runtime()
     let version
     try { version = native.getAccountInfoSync().miniProgram.envVersion } catch (_) {}
-    if (!native || !['develop', 'trial'].includes(version)) throw paymentError('PAYMENT_SANDBOX_UNAVAILABLE')
+    if (!native || (production ? version !== 'release' : !['develop', 'trial'].includes(version))) throw paymentError('PAYMENT_SANDBOX_UNAVAILABLE')
     let platform = ''
     if (purchase) {
       try { platform = (native.getDeviceInfo ? native.getDeviceInfo() : native.getSystemInfoSync()).platform } catch (_) {}
       if (!['android', 'harmony', 'windows'].includes(platform) || typeof native.requestVirtualPayment !== 'function') throw paymentError('PAYMENT_RUNTIME_UNSUPPORTED')
     }
-    return { baseUrl, platform, environment: 'sandbox' }
+    return { baseUrl, platform, environment: production ? 'production' : 'sandbox', wechatEnv: production ? 0 : 1 }
   }
   function context(purchase = false) {
     const target = environment(purchase)
@@ -112,7 +119,8 @@ export function createVirtualPaymentApi(options = {}) {
   }
   function assertContext(owner, purchase = false) {
     const current = context(purchase)
-    if (current.userId !== owner.userId || current.token !== owner.token || current.baseUrl !== owner.baseUrl) throw paymentError('PAYMENT_CONTEXT_CHANGED')
+    if (current.userId !== owner.userId || current.token !== owner.token || current.baseUrl !== owner.baseUrl ||
+        current.environment !== owner.environment || current.wechatEnv !== owner.wechatEnv) throw paymentError('PAYMENT_CONTEXT_CHANGED')
     return current
   }
   async function request(owner, method, path, data, run) {
@@ -169,14 +177,14 @@ export function createVirtualPaymentApi(options = {}) {
     delivery(owner, orderNo, run) { return request(owner, 'POST', `${orderPath(orderNo)}/delivery`, {}, run) },
     async refresh(owner) {
       assertContext(owner)
-      const result = await (options.entitlements || getUserEntitlements)({ session: owner.session, nodeEnv: 'development', apiBaseUrl: owner.baseUrl })
+      const result = await (options.entitlements || getUserEntitlements)({ session: owner.session, nodeEnv: owner.environment === 'production' ? 'production' : 'development', apiBaseUrl: owner.baseUrl })
       assertContext(owner)
       return result
     },
     invoke(owner, params, orderNo, run) {
       if (run) run.check()
       assertContext(owner, true)
-      validatePaymentParams(params, orderNo, product.priceFen)
+      validatePaymentParams(params, orderNo, product.priceFen, owner.wechatEnv)
       return new Promise((resolve) => {
         let settled = false, unsubscribe = () => {}
         const finish = (hint) => { if (settled) return; settled = true; clearTimeout(timer); unsubscribe(); resolve(hint) }

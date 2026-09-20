@@ -30,13 +30,14 @@ function orderRow(overrides = {}) {
   }
 }
 
-function body(transactionId = 'transaction-store-safe') {
+function body(transactionId = 'transaction-store-safe', overrides = {}) {
   return {
     ToUserName: 'gh_store_original', FromUserName: 'wechat-official-openid',
     CreateTime: Math.floor(NOW.getTime() / 1000), MsgType: 'event',
     Event: 'xpay_goods_deliver_notify', OpenId: 'openid-store-safe', OutTradeNo: ORDER_NO, Env: 1,
     GoodsInfo: { ProductId: PRODUCT_ID, Quantity: 1, Attach: ORDER_NO },
-    WeChatPayInfo: { MchOrderNo: 'merchant-store-safe', TransactionId: transactionId, PaidTime: Math.floor(PAID_AT.getTime() / 1000) }
+    WeChatPayInfo: { MchOrderNo: 'merchant-store-safe', TransactionId: transactionId, PaidTime: Math.floor(PAID_AT.getTime() / 1000) },
+    ...overrides
   }
 }
 
@@ -50,7 +51,10 @@ function fact(order, transactionId = 'transaction-store-safe') {
     providerTransactionId: order.provider_transaction_id,
     paidAt: order.paid_at instanceof Date ? order.paid_at.toISOString() : null
   }
-  return normalizeWechatGoodsDeliveryMessage(body(transactionId), normalizedOrder, {
+  return normalizeWechatGoodsDeliveryMessage(body(transactionId, {
+    Env: order.wechat_env,
+    GoodsInfo: { ProductId: order.product_id, Quantity: 1, Attach: ORDER_NO }
+  }), normalizedOrder, {
     originalId: 'gh_store_original', openid: 'openid-store-safe', userId: '42', now: NOW
   })
 }
@@ -196,6 +200,23 @@ const deliveryRecovery = await firstHarness.store.claimDeliveryWork('42', ORDER_
   expectedProductId: PRODUCT_ID, now: NOW
 })
 assert.equal(deliveryRecovery.action, 'delivered')
+
+const productionHarness = harness({ order: {
+  product_id: 'production-product', environment: 'production', wechat_env: 0
+} })
+const productionFact = fact(productionHarness.state.order, 'transaction-production-safe')
+const productionResult = await productionHarness.store.applyGoodsDeliveryNotification(
+  '42', ORDER_NO, productionFact, { now: NOW }
+)
+assert.equal(productionResult.eventDuplicate, false)
+assert.equal(productionHarness.state.order.payment_status, 'paid')
+assert.equal(productionHarness.state.order.entitlement_status, 'granted')
+assert.equal(productionHarness.state.order.delivery_status, 'delivered')
+assert.equal(productionHarness.state.event.received_count, 1)
+assert.equal(await productionHarness.store.findTrustedWechatQueryPaidEvidence('42', ORDER_NO), true)
+assert.equal((await productionHarness.store.claimDeliveryWork('42', ORDER_NO, {
+  expectedProductId: 'production-product', now: NOW
+})).action, 'delivered')
 
 const repeated = await firstHarness.store.applyGoodsDeliveryNotification('42', ORDER_NO, trustedFact, { now: NOW })
 assert.equal(repeated.eventDuplicate, true)

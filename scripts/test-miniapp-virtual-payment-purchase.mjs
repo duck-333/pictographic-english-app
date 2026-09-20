@@ -175,6 +175,15 @@ for (const invalid of [2, 3]) {
   assert(!h.calls.includes('entitlement') && !h.calls.includes('delivery'))
 }
 {
+  const h = harness()
+  await h.controller.buy()
+  assert.equal(h.controller.list().length, 1)
+  h.setOwner({ environment: 'production', baseUrl: 'https://baxiaota.com' })
+  assert.deepEqual(h.controller.list(), [], 'production recovery must not read sandbox records')
+  h.setOwner({ environment: 'sandbox', baseUrl: 'https://sandbox.test' })
+  assert.equal(h.controller.list().length, 1, 'sandbox records remain isolated and recoverable')
+}
+{
   const h = harness({ rejectConfirmation: true })
   await h.controller.buy()
   assert.deepEqual(h.calls, [])

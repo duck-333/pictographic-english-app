@@ -81,6 +81,49 @@ const testParams = { ...params, signData: JSON.stringify({ env: 1, buyQuantity: 
 assert.equal(validatePaymentParams(testParams, orderNo, 100), testParams)
 assert.throws(() => validatePaymentParams(testParams, orderNo), { code: 'PAYMENT_RESPONSE_INVALID' })
 assert.throws(() => validatePaymentParams(params, orderNo, 100), { code: 'PAYMENT_RESPONSE_INVALID' })
+const productionParams = { ...params, signData: JSON.stringify({
+  env: 0, buyQuantity: 1, currencyType: 'CNY', goodsPrice: 3000, outTradeNo: orderNo
+}) }
+assert.equal(validatePaymentParams(productionParams, orderNo, 3000, 0), productionParams)
+assert.throws(() => validatePaymentParams(params, orderNo, 3000, 0), { code: 'PAYMENT_RESPONSE_INVALID' })
+assert.throws(() => validatePaymentParams({
+  ...productionParams,
+  signData: JSON.stringify({ env: 0, buyQuantity: 1, currencyType: 'CNY', goodsPrice: 100, outTradeNo: orderNo })
+}, orderNo, 100, 0), { code: 'PAYMENT_RESPONSE_INVALID' })
+{
+  let invoked
+  const productionApi = createVirtualPaymentApi({
+    ...options,
+    env: {
+      NODE_ENV: 'production',
+      VUE_APP_WORD_API_BASE_URL: 'https://baxiaota.com',
+      VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true'
+    },
+    wx: {
+      ...native,
+      getAccountInfoSync: () => ({ miniProgram: { envVersion: 'release' } }),
+      requestVirtualPayment(args) { invoked = args; args.success({}) }
+    }
+  })
+  assert.deepEqual(productionApi.product(), { priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
+  const productionOwner = productionApi.context(true)
+  assert.equal(productionOwner.environment, 'production')
+  assert.equal(productionOwner.wechatEnv, 0)
+  assert.equal(productionOwner.baseUrl, 'https://baxiaota.com')
+  assert.equal(await productionApi.invoke(productionOwner, productionParams, orderNo), 'unknown')
+  assert.equal(JSON.parse(invoked.signData).env, 0)
+  assert.throws(() => productionApi.invoke(productionOwner, params, orderNo), { code: 'PAYMENT_RESPONSE_INVALID' })
+  assert.throws(() => createVirtualPaymentApi({
+    ...options,
+    env: { NODE_ENV: 'production', VUE_APP_WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com' },
+    wx: { ...native, getAccountInfoSync: () => ({ miniProgram: { envVersion: 'release' } }) }
+  }).context(true))
+  assert.throws(() => createVirtualPaymentApi({
+    ...options,
+    env: { NODE_ENV: 'production', VUE_APP_WORD_API_BASE_URL: 'https://baxiaota.com' },
+    wx: { ...native, getAccountInfoSync: () => ({ miniProgram: { envVersion: 'trial' } }) }
+  }).context(true))
+}
 {
   let invoked
   const sandboxTestApi = createVirtualPaymentApi({ ...options, env: sandboxTestEnv, wx: {

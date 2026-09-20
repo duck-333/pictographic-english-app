@@ -102,6 +102,7 @@ function assertEnabled(config) {
 }
 
 function assertAllowedUser(config, userId) {
+  if (config.environment === 'production') return
   if (!Array.isArray(config.sandboxUserIds) || !config.sandboxUserIds.includes(userId)) {
     throw createServiceError('User is not allowed to use sandbox payment.', 'PAYMENT_TEST_USER_NOT_ALLOWED', 403)
   }
@@ -127,14 +128,15 @@ function savedProductForOrder(order, config) {
     !product ||
     !isVirtualPaymentProductId(productId) ||
     (usesStandardProduct && productId !== config.standardProductId) ||
-    (!usesStandardProduct && productId === config.standardProductId)
+    (!usesStandardProduct && productId === config.standardProductId) ||
+    (config.environment === 'production' && !usesStandardProduct)
   ) {
     throw createServiceError('Payment order conflicts with saved product facts.', 'PAYMENT_ORDER_CONFLICT', 409)
   }
   return product
 }
 
-function assertOrderMatchesProduct(order, productId, product, userId, clientRequestId, platform) {
+function assertOrderMatchesProduct(order, productId, product, userId, clientRequestId, platform, config) {
   if (
     order.userId !== userId ||
     (clientRequestId !== undefined && order.clientRequestId !== clientRequestId) ||
@@ -146,8 +148,8 @@ function assertOrderMatchesProduct(order, productId, product, userId, clientRequ
     order.unitPriceFen !== product.priceFen ||
     order.orderAmountFen !== product.priceFen * product.quantity ||
     order.currency !== product.currency ||
-    order.environment !== 'sandbox' ||
-    order.wechatEnv !== 1 ||
+    !config || order.environment !== config.environment ||
+    order.wechatEnv !== config.wechatEnv ||
     order.paymentChannel !== PAYMENT_CHANNEL
   ) {
     throw createServiceError('Payment order conflicts with current configuration.', 'PAYMENT_ORDER_CONFLICT', 409)
@@ -155,7 +157,7 @@ function assertOrderMatchesProduct(order, productId, product, userId, clientRequ
 }
 
 function assertOrderMatchesConfig(order, config, userId, clientRequestId, platform) {
-  assertOrderMatchesProduct(order, config.productId, config.product, userId, clientRequestId, platform)
+  assertOrderMatchesProduct(order, config.productId, config.product, userId, clientRequestId, platform, config)
 }
 
 function signingProductContext(productId, product) {
@@ -228,8 +230,8 @@ function assertCompleteLocalPaidOrder(order, config, userId, nowProvider) {
     order.paidAmountFen !== order.orderAmountFen ||
     order.paidAmountFen !== product.priceFen ||
     order.currency !== product.currency ||
-    order.environment !== 'sandbox' ||
-    order.wechatEnv !== 1 ||
+    order.environment !== config.environment ||
+    order.wechatEnv !== config.wechatEnv ||
     order.paymentChannel !== PAYMENT_CHANNEL ||
     !ALLOWED_PLATFORMS.has(order.clientPlatform) ||
     !isCanonicalPaidAt(order.paidAt, nowValue) ||
@@ -361,7 +363,7 @@ export function createVirtualPaymentService(options = {}) {
     if (resumedOrder) {
       orderProduct = savedProductForOrder(order, config)
       orderProductId = order.productId
-      assertOrderMatchesProduct(order, orderProductId, orderProduct, userId, clientRequestId, platform)
+      assertOrderMatchesProduct(order, orderProductId, orderProduct, userId, clientRequestId, platform, config)
       assertPayable(order)
     }
 
@@ -387,8 +389,8 @@ export function createVirtualPaymentService(options = {}) {
           unitPriceFen: config.product.priceFen,
           orderAmountFen: config.product.priceFen * config.product.quantity,
           currency: config.product.currency,
-          environment: 'sandbox',
-          wechatEnv: 1,
+          environment: config.environment,
+          wechatEnv: config.wechatEnv,
           paymentChannel: PAYMENT_CHANNEL,
           clientPlatform: platform
         })
@@ -420,7 +422,7 @@ export function createVirtualPaymentService(options = {}) {
     } catch (error) {
       throw mapDependencyError(error)
     }
-    assertOrderMatchesProduct(pendingOrder, orderProductId, orderProduct, userId, clientRequestId, platform)
+    assertOrderMatchesProduct(pendingOrder, orderProductId, orderProduct, userId, clientRequestId, platform, config)
     assertPayable(pendingOrder)
 
     return Object.freeze({
@@ -442,7 +444,7 @@ export function createVirtualPaymentService(options = {}) {
     }
     if (!order) throw createServiceError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
     const product = savedProductForOrder(order, config)
-    assertOrderMatchesProduct(order, order.productId, product, userId)
+    assertOrderMatchesProduct(order, order.productId, product, userId, undefined, undefined, config)
     return safeOrderSummary(order)
   }
 
@@ -453,7 +455,9 @@ export function createVirtualPaymentService(options = {}) {
     if (!isPlainObject(input) || Object.keys(input).some((key) => !['authenticatedUserId', 'cursor'].includes(key)) ||
         (input.cursor !== undefined && (typeof input.cursor !== 'string' || !ORDER_NUMBER_PATTERN.test(input.cursor)))) throw createServiceError('Payment request is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
     try {
-      const result = await store.listRecoveryOrders(userId, input.cursor === undefined ? null : input.cursor)
+      const result = await store.listRecoveryOrders(userId, input.cursor === undefined ? null : input.cursor, {
+        environment: config.environment, wechatEnv: config.wechatEnv
+      })
       return { orders: result.orders.map((row) => ({ orderNo: row.orderNo, clientRequestId: row.clientRequestId,
         paymentStatus: row.paymentStatus, entitlementStatus: row.entitlementStatus, deliveryStatus: row.deliveryStatus,
         createdAt: row.createdAt, updatedAt: row.updatedAt })), nextCursor: result.nextCursor }
@@ -503,7 +507,7 @@ export function createVirtualPaymentService(options = {}) {
       return safeOrderSummary(order)
     }
     const orderProduct = savedProductForOrder(order, config)
-    assertOrderMatchesProduct(order, order.productId, orderProduct, userId)
+    assertOrderMatchesProduct(order, order.productId, orderProduct, userId, undefined, undefined, config)
     if (
       order.entitlementStatus !== 'not_ready' ||
       order.deliveryStatus !== 'not_ready' ||
@@ -731,7 +735,7 @@ export function createVirtualPaymentService(options = {}) {
     }
     if (!ownedOrder) throw createServiceError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
     const ownedProduct = savedProductForOrder(ownedOrder, config)
-    assertOrderMatchesProduct(ownedOrder, ownedOrder.productId, ownedProduct, userId)
+    assertOrderMatchesProduct(ownedOrder, ownedOrder.productId, ownedProduct, userId, undefined, undefined, config)
     const productContext = Object.freeze({ productId: ownedOrder.productId, product: ownedProduct })
     let work
     try {

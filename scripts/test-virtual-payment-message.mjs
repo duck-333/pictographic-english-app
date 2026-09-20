@@ -27,6 +27,10 @@ function signature(timestamp = TIMESTAMP, nonce = NONCE) {
 function env(overrides = {}) {
   return {
     NODE_ENV: 'development', VIRTUAL_PAYMENT_ENABLED: 'true', VIRTUAL_PAYMENT_ENV: 'sandbox',
+    VIRTUAL_PAYMENT_SANDBOX_USER_IDS: '42',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID: 'sandbox-offer-safe',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID: 'sandbox-product',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY: 'sandbox-app-key-safe',
     VIRTUAL_PAYMENT_WECHAT_MESSAGE_ENABLED: 'true',
     WECHAT_VIRTUAL_PAYMENT_MESSAGE_TOKEN: TOKEN,
     WECHAT_VIRTUAL_PAYMENT_MESSAGE_ORIGINAL_ID: ORIGINAL_ID,
@@ -49,6 +53,19 @@ const aesConfig = getVirtualPaymentMessageConfig({ env: env({
 assert.equal(aesConfig.mode, 'aes')
 assert.equal(aesConfig.aesKey.length, 32)
 assert.equal(aesConfig.appId, APP_ID)
+const productionMessageConfig = getVirtualPaymentMessageConfig({ env: env({
+  NODE_ENV: 'production', VIRTUAL_PAYMENT_ENV: 'production',
+  VIRTUAL_PAYMENT_SANDBOX_USER_IDS: undefined,
+  WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID: 'production-offer-safe',
+  WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID: 'production-product',
+  WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY: 'production-app-key-safe',
+  WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'aes',
+  WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY: ENCODING_AES_KEY,
+  WECHAT_MINIAPP_APPID: APP_ID
+}) })
+assert.equal(productionMessageConfig.environment, 'production')
+assert.equal(productionMessageConfig.wechatEnv, 0)
+assert.equal(productionMessageConfig.mode, 'aes')
 const independentlyDecodedNonCanonicalKey = Buffer.from(`${NON_CANONICAL_ENCODING_AES_KEY}=`, 'base64')
 const nonCanonicalAesConfig = getVirtualPaymentMessageConfig({ env: env({
   WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'aes',
@@ -122,6 +139,25 @@ const rebuilt = createWechatGoodsDeliveryCanonicalFact({
 })
 assert.deepEqual(rebuilt.payloadHash, fact.payloadHash)
 assert.equal(fact.providerMerchantOrderNo, 'merchant-order-safe')
+const productionOrder = Object.freeze({ ...order, environment: 'production', wechatEnv: 0, productId: 'production-product' })
+const productionBody = body({
+  Env: 0,
+  GoodsInfo: { ProductId: 'production-product', Quantity: 1, Attach: ORDER_NO }
+})
+const productionFact = normalizeWechatGoodsDeliveryMessage(productionBody, productionOrder, {
+  originalId: ORIGINAL_ID, openid: OPENID, userId: '42', now: NOW
+})
+assert.equal(productionFact.environment, 'production')
+assert.equal(productionFact.wechatEnv, 0)
+assert.throws(() => normalizeWechatGoodsDeliveryMessage(body(), productionOrder, {
+  originalId: ORIGINAL_ID, openid: OPENID, userId: '42', now: NOW
+}))
+assert.throws(() => normalizeWechatGoodsDeliveryMessage({
+  ...productionBody,
+  GoodsInfo: { ProductId: 'production-test-product', Quantity: 1, Attach: ORDER_NO }
+}, { ...productionOrder, productId: 'production-test-product', unitPriceFen: 100, orderAmountFen: 100 }, {
+  originalId: ORIGINAL_ID, openid: OPENID, userId: '42', now: NOW
+}))
 const extensionFact = normalizeWechatGoodsDeliveryMessage(body({
   FutureRootField: { ignored: true },
   GoodsInfo: { ...body().GoodsInfo, TeamInfo: {

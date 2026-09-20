@@ -6,6 +6,9 @@ const SANDBOX_TEST_PRODUCT_ENABLED_VARIABLE = 'VIRTUAL_PAYMENT_SANDBOX_TEST_PROD
 const SANDBOX_TEST_PRODUCT_ID_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID'
 const SANDBOX_APP_KEY_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY'
 const SANDBOX_USER_IDS_VARIABLE = 'VIRTUAL_PAYMENT_SANDBOX_USER_IDS'
+const PRODUCTION_OFFER_ID_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID'
+const PRODUCTION_PRODUCT_ID_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID'
+const PRODUCTION_APP_KEY_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY'
 const MAX_SAFE_USER_ID = BigInt(Number.MAX_SAFE_INTEGER)
 const VIRTUAL_PAYMENT_PRODUCT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/
 
@@ -24,6 +27,21 @@ export const VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT = Object.freeze({
   ...VIRTUAL_PAYMENT_PRODUCT,
   priceFen: 100
 })
+
+export const VIRTUAL_PAYMENT_ENVIRONMENTS = Object.freeze({
+  sandbox: Object.freeze({ environment: 'sandbox', wechatEnv: 1, expectedWechatEnvironmentType: 2 }),
+  production: Object.freeze({ environment: 'production', wechatEnv: 0, expectedWechatEnvironmentType: 1 })
+})
+
+export function virtualPaymentEnvironment(value) {
+  return typeof value === 'string' ? VIRTUAL_PAYMENT_ENVIRONMENTS[value] || null : null
+}
+
+export function matchesVirtualPaymentEnvironment(environment, wechatEnv, environmentType) {
+  const expected = virtualPaymentEnvironment(environment)
+  return Boolean(expected && expected.wechatEnv === wechatEnv &&
+    (environmentType === undefined || expected.expectedWechatEnvironmentType === environmentType))
+}
 
 export function virtualPaymentProductForPrice(priceFen) {
   if (priceFen === VIRTUAL_PAYMENT_PRODUCT.priceFen) return VIRTUAL_PAYMENT_PRODUCT
@@ -142,18 +160,45 @@ export function getVirtualPaymentConfig(options = {}) {
     })
   }
 
-  if (nodeEnv === 'production') {
-    throw configError('Virtual payment sandbox cannot be enabled when NODE_ENV=production.', {
-      code: 'VIRTUAL_PAYMENT_SANDBOX_PRODUCTION_FORBIDDEN',
-      variableName: ENABLED_VARIABLE
+  const environment = requireVariable(env, ENVIRONMENT_VARIABLE).toLowerCase()
+  const environmentConfig = virtualPaymentEnvironment(environment)
+  if (!environmentConfig) {
+    throw configError(`${ENVIRONMENT_VARIABLE} must be sandbox or production.`, {
+      code: 'VIRTUAL_PAYMENT_ENVIRONMENT_UNSUPPORTED',
+      variableName: ENVIRONMENT_VARIABLE
     })
   }
 
-  const environment = requireVariable(env, ENVIRONMENT_VARIABLE).toLowerCase()
-  if (environment !== 'sandbox') {
-    throw configError(`${ENVIRONMENT_VARIABLE} must be sandbox in stage 1.`, {
-      code: 'VIRTUAL_PAYMENT_ENVIRONMENT_UNSUPPORTED',
-      variableName: ENVIRONMENT_VARIABLE
+  if (environment === 'sandbox' && nodeEnv === 'production') {
+    throw configError('Virtual payment sandbox cannot be enabled when NODE_ENV=production.', {
+      code: 'VIRTUAL_PAYMENT_SANDBOX_PRODUCTION_FORBIDDEN', variableName: ENABLED_VARIABLE
+    })
+  }
+  if (environment === 'production' && nodeEnv !== 'production') {
+    throw configError('Virtual payment production requires NODE_ENV=production.', {
+      code: 'VIRTUAL_PAYMENT_PRODUCTION_ENVIRONMENT_REQUIRED', variableName: ENVIRONMENT_VARIABLE
+    })
+  }
+
+  if (environment === 'production') {
+    if (env && env[SANDBOX_TEST_PRODUCT_ENABLED_VARIABLE] === 'true') {
+      throw configError('Sandbox test product cannot be enabled for production payment.', {
+        code: 'VIRTUAL_PAYMENT_PRODUCTION_TEST_PRODUCT_FORBIDDEN',
+        variableName: SANDBOX_TEST_PRODUCT_ENABLED_VARIABLE
+      })
+    }
+    const productId = readProductId(env, PRODUCTION_PRODUCT_ID_VARIABLE)
+    return Object.freeze({
+      enabled: true,
+      ...environmentConfig,
+      offerId: requireVariable(env, PRODUCTION_OFFER_ID_VARIABLE),
+      productId,
+      standardProductId: productId,
+      sandboxTestProductId: null,
+      sandboxTestProductEnabled: false,
+      appKey: requireVariable(env, PRODUCTION_APP_KEY_VARIABLE),
+      sandboxUserIds: null,
+      product: VIRTUAL_PAYMENT_PRODUCT
     })
   }
 
@@ -183,8 +228,7 @@ export function getVirtualPaymentConfig(options = {}) {
   const activeProductId = sandboxTestProductEnabled ? sandboxTestProductId : productId
   return Object.freeze({
     enabled: true,
-    environment: 'sandbox',
-    wechatEnv: 1,
+    ...environmentConfig,
     offerId,
     productId: activeProductId,
     standardProductId: productId,
@@ -204,5 +248,8 @@ export const VIRTUAL_PAYMENT_CONFIG_VARIABLES = Object.freeze({
   sandboxTestProductEnabled: SANDBOX_TEST_PRODUCT_ENABLED_VARIABLE,
   sandboxTestProductId: SANDBOX_TEST_PRODUCT_ID_VARIABLE,
   sandboxAppKey: SANDBOX_APP_KEY_VARIABLE,
-  sandboxUserIds: SANDBOX_USER_IDS_VARIABLE
+  sandboxUserIds: SANDBOX_USER_IDS_VARIABLE,
+  productionOfferId: PRODUCTION_OFFER_ID_VARIABLE,
+  productionProductId: PRODUCTION_PRODUCT_ID_VARIABLE,
+  productionAppKey: PRODUCTION_APP_KEY_VARIABLE
 })

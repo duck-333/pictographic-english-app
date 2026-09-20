@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import {
   getVirtualPaymentConfig,
   isVirtualPaymentProductId,
+  matchesVirtualPaymentEnvironment,
   VIRTUAL_PAYMENT_PRODUCT,
   virtualPaymentProductForPrice
 } from './virtual-payment-config.mjs'
@@ -65,8 +66,7 @@ function assertAuthoritativeConfig(config) {
     throw createSigningError('Virtual payment is disabled.', 'VIRTUAL_PAYMENT_DISABLED', 503)
   }
   if (
-    config.environment !== 'sandbox' ||
-    config.wechatEnv !== 1 ||
+    !matchesVirtualPaymentEnvironment(config.environment, config.wechatEnv, config.expectedWechatEnvironmentType) ||
     !assertSafeConfigValue(config.offerId) ||
     !isVirtualPaymentProductId(config.productId) ||
     typeof config.appKey !== 'string' ||
@@ -84,6 +84,7 @@ function assertAuthoritativeConfig(config) {
     product.quantity !== 1 ||
     product.durationSeconds !== 2592000 ||
     product.currency !== 'CNY'
+    || (config.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT)
   ) {
     throw createSigningError('Virtual payment product configuration is invalid.', 'VIRTUAL_PAYMENT_PRODUCT_INVALID', 503)
   }
@@ -121,6 +122,7 @@ function normalizeProductContext(value, config) {
     keys.length !== PAYMENT_PRODUCT_CONTEXT_FIELDS.length ||
     PAYMENT_PRODUCT_CONTEXT_FIELDS.some((field) => !Object.hasOwn(value, field)) ||
     !product ||
+    (config.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
     !isVirtualPaymentProductId(value.productId) ||
     (usesStandardProduct && value.productId !== config.standardProductId) ||
     (!usesStandardProduct && value.productId === config.standardProductId) ||
@@ -155,7 +157,7 @@ function buildSignData(config, productContext, orderNo, attach) {
   })
 }
 
-function assertQueryOrderSignData(signData) {
+function assertQueryOrderSignData(signData, config) {
   if (
     typeof signData !== 'string' ||
     !signData ||
@@ -170,7 +172,7 @@ function assertQueryOrderSignData(signData) {
   } catch {
     throw createSigningError('Virtual payment query payload is invalid.', 'VIRTUAL_PAYMENT_QUERY_PAYLOAD_INVALID', 400)
   }
-  if (!isPlainObject(payload) || payload.env !== 1 || !SAFE_OPENID_PATTERN.test(payload.openid || '')) {
+  if (!isPlainObject(payload) || payload.env !== config.wechatEnv || !SAFE_OPENID_PATTERN.test(payload.openid || '')) {
     throw createSigningError('Virtual payment query payload is invalid.', 'VIRTUAL_PAYMENT_QUERY_PAYLOAD_INVALID', 400)
   }
   const keys = Object.keys(payload)
@@ -209,7 +211,9 @@ export function createVirtualPaymentSigningService(options = {}) {
 
     let signature
     try {
-      signature = createPaymentSessionSignature(input.paymentSession, signData, productContext.product.priceFen)
+      signature = createPaymentSessionSignature(
+        input.paymentSession, signData, productContext.product.priceFen, config.wechatEnv
+      )
     } catch {
       throw createSigningError('Virtual payment session signature failed.', 'VIRTUAL_PAYMENT_SESSION_SIGNATURE_FAILED', 503)
     }
@@ -224,7 +228,7 @@ export function createVirtualPaymentSigningService(options = {}) {
 
   function signQueryOrderPayload(signData) {
     assertAuthoritativeConfig(config)
-    assertQueryOrderSignData(signData)
+    assertQueryOrderSignData(signData, config)
     return hmacSha256Hex(config.appKey, `${QUERY_ORDER_URI}&${signData}`)
   }
 

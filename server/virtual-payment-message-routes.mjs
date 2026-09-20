@@ -104,7 +104,8 @@ export function createVirtualPaymentMessageRoutes(options = {}) {
     if (runtime) return runtime
     const messageConfig = getVirtualPaymentMessageConfig(options)
     const paymentConfig = getVirtualPaymentConfig(options)
-    if (!paymentConfig.enabled || paymentConfig.environment !== 'sandbox' || paymentConfig.wechatEnv !== 1) {
+    if (!paymentConfig.enabled || messageConfig.environment !== paymentConfig.environment ||
+        messageConfig.wechatEnv !== paymentConfig.wechatEnv) {
       throw new Error('message unavailable')
     }
     const store = options.virtualPaymentStore || createVirtualPaymentStore(options)
@@ -122,15 +123,21 @@ export function createVirtualPaymentMessageRoutes(options = {}) {
       (queryOpenid !== null && queryOpenid !== body.OpenId)
     ) throw new Error('message rejected')
     const binding = await current.identityStore.findWechatBindingForPayment(body.OpenId)
-    if (!binding || typeof binding.userId !== 'string' || !current.paymentConfig.sandboxUserIds.includes(binding.userId)) {
+    if (!binding || typeof binding.userId !== 'string' ||
+        (current.paymentConfig.environment === 'sandbox' && !current.paymentConfig.sandboxUserIds.includes(binding.userId))) {
       throw new Error('message rejected')
     }
     const order = await current.store.findByUserAndOrderNo(binding.userId, body.OutTradeNo)
     if (!order) throw new Error('message rejected')
-    const expectedProductId = order.unitPriceFen === 100
+    const expectedProductId = current.paymentConfig.environment === 'production'
+      ? current.paymentConfig.standardProductId
+      : order.unitPriceFen === 100
       ? current.paymentConfig.sandboxTestProductId
       : current.paymentConfig.standardProductId
-    if (!expectedProductId || order.productId !== expectedProductId) throw new Error('message rejected')
+    if (!expectedProductId || order.productId !== expectedProductId ||
+        order.environment !== current.paymentConfig.environment || order.wechatEnv !== current.paymentConfig.wechatEnv) {
+      throw new Error('message rejected')
+    }
     const fact = normalizeWechatGoodsDeliveryMessage(body, order, {
       originalId: current.messageConfig.originalId,
       openid: body.OpenId,
