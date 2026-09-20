@@ -463,8 +463,8 @@ async function main() {
       const unsafeImageDetail = await readJson(await fetch(`${baseUrl}/api/words/${unsafeWord.id}`))
       assert(unsafeImageDetail.status === 200, 'published words with unsafe stored images should remain readable')
       assert(
-        Object.keys(unsafeImageDetail.body.word.illustrationImage).length === 0,
-        `public detail API should remove stored unsafe illustrationImage URL: ${unsafeWord.illustrationImage.url}`
+        !Object.prototype.hasOwnProperty.call(unsafeImageDetail.body.word, 'illustrationImage'),
+        `public detail API should omit stored unsafe illustrationImage URL: ${unsafeWord.illustrationImage.url}`
       )
     }
 

@@ -522,26 +522,30 @@ function testMembershipRevokeReplayStaticContract() {
   assert(revokeSource.includes('membershipStatus: schedule.membershipStatus'))
   assert(revokeSource.includes('alreadyRevoked: false'))
   assert(revokeSource.includes("if (targetGrant.status === 'revoked')"))
-  assert(revokeSource.includes('idempotent: false,\n          alreadyRevoked: true'))
+  assert(/idempotent:\s*false,\s*alreadyRevoked:\s*true/.test(revokeSource))
 }
 
 function testMembershipGrantDuplicateConflictStaticContract() {
   const source = readFileSync(new URL('../server/user-entitlement-store.mjs', import.meta.url), 'utf8')
-  const grantStart = source.indexOf('  async function grantMembershipDuration(input = {})')
+  const recoveryStart = source.indexOf('  async function recoverMembershipGrantAfterDuplicate(input = {})')
+  const recoveryEnd = source.indexOf('  async function grantMembershipDuration(input = {})', recoveryStart)
+  const recoverySource = source.slice(recoveryStart, recoveryEnd)
+  const grantStart = recoveryEnd
   const grantEnd = source.indexOf('  async function grantMembership(input = {})', grantStart)
   const grantSource = source.slice(grantStart, grantEnd)
-  const duplicateStart = grantSource.indexOf('if (isDuplicateEntryError(error))')
-  const duplicateSource = grantSource.slice(duplicateStart)
-  const idempotencyGrantRead = duplicateSource.indexOf('findMembershipGrantByIdempotencyKey(connection, idempotencyKey)')
-  const sourceRead = duplicateSource.indexOf('findMembershipGrantBySource(connection, sourceType, sourceId)')
-  const transactionRead = duplicateSource.indexOf('findTransactionByIdempotencyKey(connection, idempotencyKey)')
-  const sanitizedFallback = duplicateSource.indexOf("code: 'MEMBERSHIP_GRANT_CONFLICT'")
+  const idempotencyGrantRead = recoverySource.indexOf('findMembershipGrantByIdempotencyKey(recoveryConnection, idempotencyKey)')
+  const sourceRead = recoverySource.indexOf('findMembershipGrantBySource(recoveryConnection, sourceType, sourceId)')
+  const transactionRead = recoverySource.indexOf('findTransactionByIdempotencyKey(recoveryConnection, idempotencyKey)')
+  const sanitizedFallback = recoverySource.indexOf("code: 'MEMBERSHIP_GRANT_CONFLICT'")
 
-  assert(duplicateStart >= 0)
+  assert(recoveryStart >= 0 && recoveryEnd > recoveryStart)
+  assert(grantStart >= 0 && grantEnd > grantStart)
   assert(idempotencyGrantRead >= 0 && sourceRead > idempotencyGrantRead)
   assert(transactionRead > sourceRead && sanitizedFallback > transactionRead)
-  assert(duplicateSource.includes("code: 'MEMBERSHIP_SOURCE_CONFLICT'"))
-  assert(duplicateSource.includes('if (existingGrant) throw createIdempotencyConflictError()'))
+  assert(recoverySource.includes("code: 'MEMBERSHIP_SOURCE_CONFLICT'"))
+  assert(recoverySource.includes('assertMembershipGrantReplay(existingGrant, existingTransaction, {'))
+  assert(grantSource.includes('if (!isDuplicateEntryError(primaryError) || !rollbackCompleted || !releaseCompleted)'))
+  assert(grantSource.includes('return await recoverMembershipGrantAfterDuplicate(input)'))
 }
 
 testGrantWithoutMembership()
