@@ -13,7 +13,7 @@ import { createVirtualPaymentRoutes } from './virtual-payment-routes.mjs'
 import { createVirtualPaymentMessageRoutes } from './virtual-payment-message-routes.mjs'
 import { createWechatLoginClient } from './wechat-login.mjs'
 import { toBasicWord, toFullWord } from './word-access-policy.mjs'
-import { createWordStore } from './word-store.mjs'
+import { createRuntimeWordStore } from './word-store.mjs'
 import { checkVirtualPaymentDeliverySchema } from '../scripts/check-virtual-payment-delivery-schema.mjs'
 
 const DEFAULT_PORT = 3001
@@ -1021,7 +1021,7 @@ function summarizePublishedWords(words) {
 }
 
 export function createApiHandler(options = {}) {
-  const store = options.store || createWordStore()
+  const store = options.store || createRuntimeWordStore(options)
   const userStore = options.userStore || createUserStore(options)
   const shouldCreateDefaultUserEntitlementStore = !options.userEntitlementStore && !options.userStore && !options.identityStore
   const userEntitlementStore = options.userEntitlementStore || (
@@ -1922,7 +1922,7 @@ export function createApiHandler(options = {}) {
 export function startServer(options = {}) {
   const port = Number(options.port || process.env.PORT || DEFAULT_PORT)
   const host = options.host || process.env.HOST || DEFAULT_HOST
-  const store = options.store || createWordStore()
+  const store = options.store || createRuntimeWordStore(options)
   assertUserAuthConfig({
     jwtSecret: options.jwtSecret,
     nodeEnv: options.nodeEnv

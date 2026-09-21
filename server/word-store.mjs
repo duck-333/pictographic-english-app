@@ -1,6 +1,7 @@
+import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
   normalizeWordQuery,
@@ -9,6 +10,7 @@ import {
 } from '../miniapp-uni/word-app1/common/content-schema.js'
 
 const DEFAULT_DATA_PATH = new URL('./local-data/words.json', import.meta.url)
+const RELEASE_ROOT_PATH = fileURLToPath(new URL('../', import.meta.url))
 const HOMEPAGE_FEATURED_MODES = ['dailyRotation', 'manual']
 const SHANGHAI_UTC_OFFSET_MS = 8 * 60 * 60 * 1000
 const DEFAULT_HOMEPAGE_FEATURED_CONFIG = Object.freeze({
@@ -18,6 +20,103 @@ const DEFAULT_HOMEPAGE_FEATURED_CONFIG = Object.freeze({
   updatedAt: '',
   updatedBy: ''
 })
+
+const WORD_DATA_ERRORS = Object.freeze({
+  required: ['WORD_DATA_PATH_REQUIRED', 'Production word data path is required.'],
+  absolute: ['WORD_DATA_PATH_NOT_ABSOLUTE', 'Production word data path must be absolute.'],
+  insideRelease: ['WORD_DATA_PATH_INSIDE_RELEASE', 'Production word data path must be outside the release directory.'],
+  missing: ['WORD_DATA_FILE_NOT_FOUND', 'Production word data file was not found.'],
+  notFile: ['WORD_DATA_PATH_NOT_FILE', 'Production word data path must reference a regular file.'],
+  unreadable: ['WORD_DATA_FILE_NOT_READABLE', 'Production word data file is not readable.'],
+  invalidJson: ['WORD_DATA_JSON_INVALID', 'Production word data file must contain valid JSON.'],
+  invalidStructure: ['WORD_DATA_STRUCTURE_INVALID', 'Production word data JSON has an invalid root structure.'],
+  noPublishedWords: ['WORD_DATA_PUBLISHED_WORD_REQUIRED', 'Production word data must contain a valid published word.']
+})
+
+function wordDataError(type) {
+  const [code, message] = WORD_DATA_ERRORS[type]
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+function getConfiguredWordDataPath(options = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, 'wordDataPath')) {
+    return options.wordDataPath
+  }
+  return process.env.WORD_DATA_PATH
+}
+
+function isWithinRelease(path) {
+  const relativePath = relative(RELEASE_ROOT_PATH, resolve(path))
+  return relativePath === '' || (
+    relativePath !== '..' &&
+    !relativePath.startsWith(`..${sep}`) &&
+    !isAbsolute(relativePath)
+  )
+}
+
+export function createRuntimeWordStore(options = {}) {
+  const nodeEnv = String(options.nodeEnv ?? process.env.NODE_ENV ?? '').trim()
+  const configuredPath = String(getConfiguredWordDataPath(options) ?? '').trim()
+
+  if (nodeEnv !== 'production') {
+    if (!configuredPath) return createWordStore()
+    const developmentPath = isAbsolute(configuredPath)
+      ? resolve(configuredPath)
+      : resolve(RELEASE_ROOT_PATH, configuredPath)
+    return createWordStore({ dataPath: pathToFileURL(developmentPath) })
+  }
+  if (!configuredPath) throw wordDataError('required')
+  if (!isAbsolute(configuredPath)) throw wordDataError('absolute')
+
+  const fileSystem = options.fileSystem || { accessSync, readFileSync, realpathSync, statSync }
+  let stats
+  try {
+    stats = fileSystem.statSync(configuredPath)
+  } catch (error) {
+    if (error && error.code === 'ENOENT') throw wordDataError('missing')
+    throw wordDataError('unreadable')
+  }
+  if (!stats.isFile()) throw wordDataError('notFile')
+
+  let resolvedPath
+  try {
+    resolvedPath = fileSystem.realpathSync(configuredPath)
+  } catch (error) {
+    if (error && error.code === 'ENOENT') throw wordDataError('missing')
+    throw wordDataError('unreadable')
+  }
+  if (isWithinRelease(resolvedPath)) throw wordDataError('insideRelease')
+
+  let raw
+  try {
+    fileSystem.accessSync(resolvedPath, constants.R_OK)
+    raw = fileSystem.readFileSync(resolvedPath, 'utf8')
+  } catch (error) {
+    throw wordDataError('unreadable')
+  }
+
+  let payload
+  try {
+    payload = JSON.parse(raw)
+  } catch (error) {
+    throw wordDataError('invalidJson')
+  }
+  const hasSupportedRoot = Array.isArray(payload) || (
+    payload && typeof payload === 'object' && !Array.isArray(payload) && Array.isArray(payload.words)
+  )
+  if (!hasSupportedRoot) throw wordDataError('invalidStructure')
+
+  const words = Array.isArray(payload) ? payload : payload.words
+  const hasValidPublishedWord = words.some((word) => {
+    const validation = validateWordRecord(word)
+    return validation.ok && validation.value.status === 'published'
+  })
+  if (!hasValidPublishedWord) throw wordDataError('noPublishedWords')
+
+  return createWordStore({ dataPath: pathToFileURL(resolvedPath) })
+}
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))

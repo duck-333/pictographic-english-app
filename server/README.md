@@ -72,13 +72,15 @@ This is still not a complete user/account system. It is a minimum management pas
 
 ## Data
 
-The API stores local test data in:
+For tests and development, the API uses this local default file when `WORD_DATA_PATH` is not configured:
 
 ```text
 server/local-data/words.json
 ```
 
-This file is ignored by Git. It is test data, not production content.
+This default file is ignored by Git and is only for tests and development. In production, `WORD_DATA_PATH` is required and must be an absolute path to a persistent JSON file outside the release directory. Startup fails before the server listens if that file is missing, unreadable, malformed, has an unsupported root structure, or has no valid published word.
+
+Formal word data, including the production `words.json`, must remain outside Git and must not be copied into a release or committed to this repository.
 
 ## API
 
