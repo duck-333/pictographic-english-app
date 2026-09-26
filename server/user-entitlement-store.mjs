@@ -1,6 +1,7 @@
 import crypto from 'crypto'
 import mysql from 'mysql2/promise'
 
+import { requireDatabaseTransactionContext } from './database-transaction-context.mjs'
 import {
   MEMBERSHIP_GRANT_DAYS,
   MEMBERSHIP_GRANT_DURATION_SECONDS,
@@ -20,9 +21,11 @@ const MAX_TRANSACTION_TYPE_LENGTH = 64
 const MAX_OPERATOR_TYPE_LENGTH = 32
 const MAX_REASON_LENGTH = 512
 const REGISTRATION_BONUS_QUOTA = 30
-const REGISTRATION_BONUS_VALID_YEARS = 1
 const REGISTRATION_BONUS_SOURCE = 'registration'
 const REGISTRATION_BONUS_OPERATOR_ID = 'auth-registration'
+const MAX_UNSIGNED_BIGINT = 18446744073709551615n
+const MAX_UNSIGNED_INT = 4294967295n
+const MAX_SIGNED_INT = 2147483647n
 
 export const ENTITLEMENT_TRANSACTION_TYPES = Object.freeze({
   REGISTER_BONUS: 'REGISTER_BONUS',
@@ -130,12 +133,6 @@ function getRegistrationBonusIdempotencyKey(userId) {
   return `registration_bonus:${userId}`
 }
 
-function getRegistrationBonusExpiresAt(currentTime) {
-  const expiresAt = new Date(currentTime.getTime())
-  expiresAt.setFullYear(expiresAt.getFullYear() + REGISTRATION_BONUS_VALID_YEARS)
-  return expiresAt
-}
-
 function getDbConfig(options = {}) {
   const host = normalizeString(options.dbHost === undefined ? process.env.DB_HOST : options.dbHost) || DEFAULT_DB_HOST
   const port = Number(options.dbPort === undefined ? process.env.DB_PORT : options.dbPort) || DEFAULT_DB_PORT
@@ -190,9 +187,37 @@ function normalizeOptionalString(value, fieldName, code, options = {}) {
 }
 
 function normalizeUserId(userId) {
-  return normalizeRequiredString(userId, 'User id', 'USER_ID_REQUIRED', {
-    maxLength: MAX_ID_LENGTH
-  })
+  let normalized
+  if (typeof userId === 'bigint') normalized = userId.toString()
+  else if (typeof userId === 'number' && Number.isSafeInteger(userId)) normalized = String(userId)
+  else if (typeof userId === 'string') normalized = userId
+  else normalized = ''
+  if (!/^[1-9]\d{0,19}$/u.test(normalized) || BigInt(normalized) > MAX_UNSIGNED_BIGINT) {
+    throw createUserEntitlementStoreError('User id is invalid.', { code: 'USER_ID_INVALID', statusCode: 400 })
+  }
+  return normalized
+}
+
+function strictRegistrationInteger(value, options = {}) {
+  let text
+  if (typeof value === 'bigint') text = value.toString()
+  else if (typeof value === 'number' && Number.isSafeInteger(value)) text = String(value)
+  else if (typeof value === 'string') text = value
+  else throw createIdempotencyConflictError()
+  if (!/^(?:0|[1-9]\d*|-[1-9]\d*)$/u.test(text)) throw createIdempotencyConflictError()
+  let parsed
+  try { parsed = BigInt(text) } catch { throw createIdempotencyConflictError() }
+  const minimum = options.minimum === undefined ? 0n : options.minimum
+  const maximum = options.maximum === undefined ? MAX_UNSIGNED_BIGINT : options.maximum
+  if (parsed < minimum || parsed > maximum) throw createIdempotencyConflictError()
+  return parsed
+}
+
+function strictRegistrationDate(value) {
+  if (value === null || value === undefined || value === '') throw createIdempotencyConflictError()
+  const parsed = value instanceof Date ? new Date(value.getTime()) : new Date(value)
+  if (!Number.isFinite(parsed.getTime()) || parsed.getUTCMilliseconds() !== 0) throw createIdempotencyConflictError()
+  return parsed
 }
 
 function normalizeIdempotencyKey(idempotencyKey) {
@@ -1136,12 +1161,14 @@ export function createUserEntitlementStore(options = {}) {
   }
 
   async function insertTransaction(connection, transaction) {
+    const createdAtColumn = transaction.createdAt ? ', created_at' : ''
+    const createdAtPlaceholder = transaction.createdAt ? ', ?' : ''
     const [result] = await connection.execute(
       `INSERT INTO ${quoteIdentifier(ENTITLEMENT_TRANSACTIONS_TABLE)}
         (transaction_id, user_id, transaction_type, amount, balance_after, source, source_id,
          expires_at, grant_transaction_id, root_learning_object_id, current_learning_object_id,
-         access_context_json, idempotency_key, operator_type, operator_id, reason, metadata_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         access_context_json, idempotency_key, operator_type, operator_id, reason, metadata_json${createdAtColumn})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${createdAtPlaceholder})`,
       [
         transaction.transactionId,
         transaction.userId,
@@ -1159,7 +1186,8 @@ export function createUserEntitlementStore(options = {}) {
         transaction.operatorType,
         transaction.operatorId,
         transaction.reason,
-        transaction.metadataJson || null
+        transaction.metadataJson || null,
+        ...(transaction.createdAt ? [transaction.createdAt] : [])
       ]
     )
     return result && result.insertId ? String(result.insertId) : null
@@ -1351,83 +1379,223 @@ export function createUserEntitlementStore(options = {}) {
     }
   }
 
-  async function grantQuota(input = {}) {
+  function normalizeQuotaGrant(input = {}) {
     const userId = normalizeUserId(input.userId)
     const amount = normalizePositiveInteger(input.amount, 'Quota grant amount', 'QUOTA_GRANT_AMOUNT_INVALID')
     const source = normalizeSource(input.source)
-    const transactionType = normalizeTransactionType(
+    return {
+      userId,
+      amount,
+      source,
+      transactionType: normalizeTransactionType(
       input.transactionType,
       QUOTA_GRANT_TRANSACTION_TYPES,
       source,
       QUOTA_GRANT_SOURCE_TO_TRANSACTION_TYPE,
       'QUOTA_GRANT_TRANSACTION_TYPE_INVALID'
+      ),
+      sourceId: normalizeSourceId(input.sourceId),
+      expiresAt: normalizeDate(input.expiresAt, 'Quota grant expiry time', 'QUOTA_GRANT_EXPIRES_AT_INVALID'),
+      idempotencyKey: normalizeIdempotencyKey(input.idempotencyKey),
+      operatorType: normalizeOperatorType(input.operatorType),
+      operatorId: normalizeOperatorId(input.operatorId),
+      reason: normalizeReason(input.reason),
+      metadataJson: normalizeJson(input.metadata, 'Metadata', 'METADATA_INVALID'),
+      transactionId: normalizeTransactionId(input.transactionId),
+      createdAt: input.createdAt === undefined || input.createdAt === null
+        ? null
+        : normalizeDate(input.createdAt, 'Quota grant creation time', 'QUOTA_GRANT_CREATED_AT_INVALID')
+    }
+  }
+
+  async function applyQuotaGrantInTransaction(connection, grant, entitlement) {
+    const balanceAfter = entitlement.quotaBalance + grant.amount
+    const transactionInsertId = await insertTransaction(connection, {
+      transactionId: grant.transactionId,
+      userId: grant.userId,
+      transactionType: grant.transactionType,
+      amount: grant.amount,
+      balanceAfter,
+      source: grant.source,
+      sourceId: grant.sourceId,
+      expiresAt: grant.expiresAt,
+      idempotencyKey: grant.idempotencyKey,
+      operatorType: grant.operatorType,
+      operatorId: grant.operatorId,
+      reason: grant.reason,
+      metadataJson: grant.metadataJson,
+      createdAt: grant.createdAt
+    })
+
+    await connection.execute(
+      `UPDATE ${quoteIdentifier(USER_ENTITLEMENTS_TABLE)}
+          SET quota_balance = ?,
+              quota_total_granted = quota_total_granted + ?,
+              last_transaction_id = ?
+        WHERE user_id = ?`,
+      [balanceAfter, grant.amount, transactionInsertId, grant.userId]
     )
-    const sourceId = normalizeSourceId(input.sourceId)
-    const expiresAt = normalizeDate(input.expiresAt, 'Quota grant expiry time', 'QUOTA_GRANT_EXPIRES_AT_INVALID')
-    const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey)
-    const operatorType = normalizeOperatorType(input.operatorType)
-    const operatorId = normalizeOperatorId(input.operatorId)
-    const reason = normalizeReason(input.reason)
-    const metadataJson = normalizeJson(input.metadata, 'Metadata', 'METADATA_INVALID')
+
+    return {
+      granted: true,
+      idempotent: false,
+      transaction: await findTransactionByIdempotencyKey(connection, grant.idempotencyKey),
+      entitlement: await findUserEntitlement(connection, grant.userId)
+    }
+  }
+
+  async function grantQuotaInTransaction(connection, grant) {
+    const existingTransaction = await findTransactionByIdempotencyKey(connection, grant.idempotencyKey)
+    if (existingTransaction) {
+      assertIdempotentTransaction(existingTransaction, QUOTA_GRANT_TRANSACTION_TYPES, grant.userId)
+      return {
+        granted: false,
+        idempotent: true,
+        transaction: existingTransaction,
+        entitlement: await findUserEntitlement(connection, grant.userId)
+      }
+    }
+
+    const entitlement = await ensureUserEntitlementInTransaction(connection, grant.userId)
+    return await applyQuotaGrantInTransaction(connection, grant, entitlement)
+  }
+
+  async function getRegistrationBonusDatabaseWindow(connection) {
+    const [rows] = await connection.execute(`SELECT UTC_TIMESTAMP() AS granted_at,
+      DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 YEAR) AS expires_at`)
+    const row = Array.isArray(rows) && rows.length === 1 ? rows[0] : null
+    const grantedAt = row ? new Date(row.granted_at) : null
+    const expiresAt = row ? new Date(row.expires_at) : null
+    if (!grantedAt || !expiresAt || !Number.isFinite(grantedAt.getTime()) || !Number.isFinite(expiresAt.getTime()) ||
+        grantedAt.getUTCMilliseconds() !== 0 || expiresAt.getUTCMilliseconds() !== 0) {
+      throw createUserEntitlementStoreError('Registration bonus database time is invalid.', {
+        code: 'REGISTRATION_BONUS_DATABASE_TIME_INVALID'
+      })
+    }
+    return Object.freeze({ grantedAt, expiresAt })
+  }
+
+  async function assertRegistrationBonusReplay(connection, transaction, entitlement, userId) {
+    const expectedKey = getRegistrationBonusIdempotencyKey(userId)
+    const [countRows] = await connection.execute(`SELECT COUNT(*) AS row_count
+      FROM ${quoteIdentifier(ENTITLEMENT_TRANSACTIONS_TABLE)} WHERE idempotency_key = ?`, [expectedKey])
+    if (!Array.isArray(countRows) || countRows.length !== 1 ||
+        strictRegistrationInteger(countRows[0].row_count, { maximum: MAX_UNSIGNED_BIGINT }) !== 1n) {
+      throw createIdempotencyConflictError()
+    }
+
+    const [factRows] = await connection.execute(`SELECT id, user_id, transaction_type, amount, balance_after,
+        source, source_id, idempotency_key, operator_type, operator_id, created_at, expires_at,
+        (expires_at IS NOT NULL AND created_at IS NOT NULL AND
+         expires_at = DATE_ADD(created_at, INTERVAL 1 YEAR)) AS exact_year
+      FROM ${quoteIdentifier(ENTITLEMENT_TRANSACTIONS_TABLE)}
+      WHERE idempotency_key = ? LIMIT 2 FOR UPDATE`, [expectedKey])
+    const fact = Array.isArray(factRows) && factRows.length === 1 ? factRows[0] : null
+    if (!fact) throw createIdempotencyConflictError()
+    const transactionId = strictRegistrationInteger(fact.id, { minimum: 1n })
+    const factUserId = strictRegistrationInteger(fact.user_id, { minimum: 1n })
+    const expectedUserId = strictRegistrationInteger(userId, { minimum: 1n })
+    const amount = strictRegistrationInteger(fact.amount, { minimum: -2147483648n, maximum: MAX_SIGNED_INT })
+    const balanceAfter = strictRegistrationInteger(fact.balance_after, { maximum: MAX_UNSIGNED_INT })
+    strictRegistrationDate(fact.created_at)
+    strictRegistrationDate(fact.expires_at)
+    const stableFactsMatch = Boolean(
+      transaction && entitlement &&
+      factUserId === expectedUserId &&
+      fact.transaction_type === ENTITLEMENT_TRANSACTION_TYPES.REGISTER_BONUS &&
+      amount === BigInt(REGISTRATION_BONUS_QUOTA) &&
+      fact.source === REGISTRATION_BONUS_SOURCE &&
+      typeof fact.source_id === 'string' && fact.source_id === String(userId) &&
+      fact.operator_type === 'system' &&
+      fact.operator_id === REGISTRATION_BONUS_OPERATOR_ID &&
+      fact.idempotency_key === expectedKey &&
+      balanceAfter >= BigInt(REGISTRATION_BONUS_QUOTA) &&
+      strictRegistrationInteger(fact.exact_year, { maximum: 1n }) === 1n
+    )
+    if (!stableFactsMatch) throw createIdempotencyConflictError()
+
+    const [snapshotRows] = await connection.execute(`SELECT user_id, quota_balance, quota_total_granted, last_transaction_id
+      FROM ${quoteIdentifier(USER_ENTITLEMENTS_TABLE)} WHERE user_id = ? LIMIT 2 FOR UPDATE`, [userId])
+    const snapshot = Array.isArray(snapshotRows) && snapshotRows.length === 1 ? snapshotRows[0] : null
+    if (!snapshot || strictRegistrationInteger(snapshot.user_id, { minimum: 1n }) !== expectedUserId) {
+      throw createIdempotencyConflictError()
+    }
+    const quotaBalance = strictRegistrationInteger(snapshot.quota_balance, { maximum: MAX_UNSIGNED_INT })
+    const quotaTotalGranted = strictRegistrationInteger(snapshot.quota_total_granted, { maximum: MAX_UNSIGNED_INT })
+    const lastTransactionId = strictRegistrationInteger(snapshot.last_transaction_id, { minimum: 1n })
+
+    const [previousRows] = await connection.execute(`SELECT id, balance_after
+      FROM ${quoteIdentifier(ENTITLEMENT_TRANSACTIONS_TABLE)}
+      WHERE user_id = ? AND id < ? ORDER BY id DESC LIMIT 1`, [userId, transactionId.toString()])
+    let previousBalance = 0n
+    if (Array.isArray(previousRows) && previousRows.length) {
+      const previousId = strictRegistrationInteger(previousRows[0].id, { minimum: 1n })
+      if (previousId >= transactionId) throw createIdempotencyConflictError()
+      previousBalance = strictRegistrationInteger(previousRows[0].balance_after, { maximum: MAX_UNSIGNED_INT })
+    }
+    if (balanceAfter !== previousBalance + BigInt(REGISTRATION_BONUS_QUOTA)) {
+      throw createIdempotencyConflictError()
+    }
+
+    const [latestRows] = await connection.execute(`SELECT id, balance_after
+      FROM ${quoteIdentifier(ENTITLEMENT_TRANSACTIONS_TABLE)}
+      WHERE user_id = ? ORDER BY id DESC LIMIT 1`, [userId])
+    const latest = Array.isArray(latestRows) && latestRows.length ? latestRows[0] : null
+    if (!latest || strictRegistrationInteger(latest.id, { minimum: 1n }) !== lastTransactionId ||
+        strictRegistrationInteger(latest.balance_after, { maximum: MAX_UNSIGNED_INT }) !== quotaBalance) {
+      throw createIdempotencyConflictError()
+    }
+
+    const grantTypes = QUOTA_GRANT_TRANSACTION_TYPE_VALUES.map(() => '?').join(', ')
+    const [grantTotalRows] = await connection.execute(`SELECT SUM(amount) AS total_granted
+      FROM ${quoteIdentifier(ENTITLEMENT_TRANSACTIONS_TABLE)}
+      WHERE user_id = ? AND transaction_type IN (${grantTypes})`, [userId, ...QUOTA_GRANT_TRANSACTION_TYPE_VALUES])
+    if (!Array.isArray(grantTotalRows) || grantTotalRows.length !== 1 ||
+        strictRegistrationInteger(grantTotalRows[0].total_granted, { maximum: MAX_UNSIGNED_INT }) !== quotaTotalGranted) {
+      throw createIdempotencyConflictError()
+    }
+  }
+
+  async function ensureRegistrationBonusCore(connection, userId) {
+    const entitlement = await ensureUserEntitlementInTransaction(connection, userId)
+    const idempotencyKey = getRegistrationBonusIdempotencyKey(userId)
+    const existingTransaction = await findTransactionByIdempotencyKey(connection, idempotencyKey, { forUpdate: true })
+    if (existingTransaction) {
+      await assertRegistrationBonusReplay(connection, existingTransaction, entitlement, userId)
+      return { granted: false, idempotent: true, transaction: existingTransaction, entitlement }
+    }
+
+    const window = await getRegistrationBonusDatabaseWindow(connection)
+    const grant = normalizeQuotaGrant({
+      userId,
+      transactionType: ENTITLEMENT_TRANSACTION_TYPES.REGISTER_BONUS,
+      amount: REGISTRATION_BONUS_QUOTA,
+      source: REGISTRATION_BONUS_SOURCE,
+      sourceId: userId,
+      createdAt: window.grantedAt,
+      expiresAt: window.expiresAt,
+      idempotencyKey,
+      operatorType: 'system',
+      operatorId: REGISTRATION_BONUS_OPERATOR_ID,
+      reason: 'Registration bonus complete-content access quota.'
+    })
+    return await applyQuotaGrantInTransaction(connection, grant, entitlement)
+  }
+
+  async function grantQuota(input = {}) {
+    const grant = normalizeQuotaGrant(input)
 
     const connection = await getPool().getConnection()
     try {
       await connection.beginTransaction()
-
-      const existingTransaction = await findTransactionByIdempotencyKey(connection, idempotencyKey)
-      if (existingTransaction) {
-        assertIdempotentTransaction(existingTransaction, QUOTA_GRANT_TRANSACTION_TYPES, userId)
-        await connection.commit()
-        return {
-          granted: false,
-          idempotent: true,
-          transaction: existingTransaction,
-          entitlement: await findUserEntitlement(connection, userId)
-        }
-      }
-
-      const entitlement = await ensureUserEntitlementInTransaction(connection, userId)
-      const balanceAfter = entitlement.quotaBalance + amount
-      const transactionId = normalizeTransactionId(input.transactionId)
-      const transactionInsertId = await insertTransaction(connection, {
-        transactionId,
-        userId,
-        transactionType,
-        amount,
-        balanceAfter,
-        source,
-        sourceId,
-        expiresAt,
-        idempotencyKey,
-        operatorType,
-        operatorId,
-        reason,
-        metadataJson
-      })
-
-      await connection.execute(
-        `UPDATE ${quoteIdentifier(USER_ENTITLEMENTS_TABLE)}
-            SET quota_balance = ?,
-                quota_total_granted = quota_total_granted + ?,
-                last_transaction_id = ?
-          WHERE user_id = ?`,
-        [balanceAfter, amount, transactionInsertId, userId]
-      )
-
-      const updatedEntitlement = await findUserEntitlement(connection, userId)
-      const transaction = await findTransactionByIdempotencyKey(connection, idempotencyKey)
+      const result = await grantQuotaInTransaction(connection, grant)
       await connection.commit()
-      return {
-        granted: true,
-        idempotent: false,
-        transaction,
-        entitlement: updatedEntitlement
-      }
+      return result
     } catch (error) {
       await connection.rollback()
       if (isDuplicateEntryError(error)) {
-        const existing = await getEntitlementAndTransactionAfterDuplicate(connection, idempotencyKey)
-        assertIdempotentTransaction(existing.transaction, QUOTA_GRANT_TRANSACTION_TYPES, userId)
+        const existing = await getEntitlementAndTransactionAfterDuplicate(connection, grant.idempotencyKey)
+        assertIdempotentTransaction(existing.transaction, QUOTA_GRANT_TRANSACTION_TYPES, grant.userId)
         return {
           granted: false,
           idempotent: true,
@@ -1549,18 +1717,24 @@ export function createUserEntitlementStore(options = {}) {
 
   async function ensureRegistrationBonus(userId) {
     const normalizedUserId = normalizeUserId(userId)
-    return await grantQuota({
-      userId: normalizedUserId,
-      transactionType: ENTITLEMENT_TRANSACTION_TYPES.REGISTER_BONUS,
-      amount: REGISTRATION_BONUS_QUOTA,
-      source: REGISTRATION_BONUS_SOURCE,
-      sourceId: normalizedUserId,
-      expiresAt: getRegistrationBonusExpiresAt(now()),
-      idempotencyKey: getRegistrationBonusIdempotencyKey(normalizedUserId),
-      operatorType: 'system',
-      operatorId: REGISTRATION_BONUS_OPERATOR_ID,
-      reason: 'Registration bonus complete-content access quota.'
-    })
+    const connection = await getPool().getConnection()
+    try {
+      await connection.beginTransaction()
+      const result = await ensureRegistrationBonusCore(connection, normalizedUserId)
+      await connection.commit()
+      return result
+    } catch (error) {
+      await connection.rollback()
+      throw error
+    } finally {
+      connection.release()
+    }
+  }
+
+  async function ensureRegistrationBonusInTransaction(transactionContext, userId) {
+    const connection = requireDatabaseTransactionContext(transactionContext)
+    const normalizedUserId = normalizeUserId(userId)
+    return await ensureRegistrationBonusCore(connection, normalizedUserId)
   }
 
   async function grantMembershipDurationInTransaction(connection, input = {}) {
@@ -2483,6 +2657,7 @@ export function createUserEntitlementStore(options = {}) {
     listUserTransactions,
     ensureUserEntitlement,
     ensureRegistrationBonus,
+    ensureRegistrationBonusInTransaction,
     grantQuota,
     lockMembershipScheduleInTransaction,
     verifyMembershipGrantInTransaction,

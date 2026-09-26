@@ -1,6 +1,11 @@
 import crypto from 'crypto'
 import mysql from 'mysql2/promise'
 
+import {
+  insertDatabaseUserInTransaction,
+  requireDatabaseTransactionContext,
+  requireDatabaseUsersLocked
+} from './database-transaction-context.mjs'
 import { createIdentityConflictDiagnostic } from './identity-conflict-diagnostic.mjs'
 
 const DEFAULT_DB_HOST = '127.0.0.1'
@@ -34,6 +39,30 @@ function createIdentityStoreError(message, options = {}) {
 
 function isDuplicateEntryError(error) {
   return Boolean(error && error.code === 'ER_DUP_ENTRY')
+}
+
+export function isExpectedPhoneBindingUniqueConflict(error) {
+  if (!isDuplicateEntryError(error)) return false
+  const expectedConstraint = 'uk_user_phone_bindings_phone_hash'
+  const constraint = normalizeString(error.constraint)
+  if (constraint === expectedConstraint || constraint === `user_phone_bindings.${expectedConstraint}`) return true
+  const detail = [error.sqlMessage, error.message].filter(Boolean).join(' ')
+  return /for key ['"`](?:user_phone_bindings\.)?uk_user_phone_bindings_phone_hash['"`](?:\s|$)/iu.test(detail)
+}
+
+export function isExpectedWechatBindingUniqueConflict(error) {
+  if (!isDuplicateEntryError(error)) return false
+  const expectedConstraints = new Set([
+    'uk_wechat_user_bindings_openid',
+    'wechat_user_bindings.uk_wechat_user_bindings_openid',
+    'users.openid',
+    'uk_users_openid',
+    'users.uk_users_openid'
+  ])
+  const constraint = normalizeString(error.constraint)
+  if (expectedConstraints.has(constraint)) return true
+  const detail = [error.sqlMessage, error.message].filter(Boolean).join(' ')
+  return /for key ['"`](?:wechat_user_bindings\.)?uk_wechat_user_bindings_openid['"`](?:\s|$)|for key ['"`](?:users\.)?uk_users_openid['"`](?:\s|$)|for key ['"`]users\.openid['"`](?:\s|$)/iu.test(detail)
 }
 
 function createIdentityConflictError(diagnostic = null) {
@@ -447,7 +476,7 @@ async function updateUserLogin(connection, userId, timestamp) {
   }
 }
 
-async function createUser(connection, openid, timestamp) {
+async function createUser(connection, openid, timestamp, transactionContext = null) {
   const userColumns = await getTableColumns(connection, USERS_TABLE)
   const userValues = {
     status: userColumns.status ? 'active' : undefined,
@@ -461,6 +490,9 @@ async function createUser(connection, openid, timestamp) {
   }
 
   const userInsert = buildInsert(USERS_TABLE, userValues)
+  if (transactionContext) {
+    return await insertDatabaseUserInTransaction(transactionContext, { values: userValues })
+  }
   const [insertResult] = await connection.execute(userInsert.sql, userInsert.values)
   const userId = insertResult && insertResult.insertId
   if (!userId) {
@@ -471,7 +503,7 @@ async function createUser(connection, openid, timestamp) {
   return String(userId)
 }
 
-async function createOrUpdateWechatBinding(connection, userId, identity, timestamp) {
+async function createOrUpdateWechatBinding(connection, userId, identity, timestamp, options = {}) {
   const openid = normalizeString(identity && identity.openid)
   const unionid = normalizeString(identity && identity.unionid)
   if (!openid) {
@@ -512,6 +544,7 @@ async function createOrUpdateWechatBinding(connection, userId, identity, timesta
     created_at: bindingColumns.created_at ? timestamp : undefined,
     updated_at: bindingColumns.updated_at ? timestamp : undefined
   })
+  if (typeof options.beforeInsert === 'function') await options.beforeInsert({ userId: String(userId), openid })
   await connection.execute(bindingInsert.sql, bindingInsert.values)
 }
 
@@ -583,6 +616,7 @@ export async function createOrUpdatePhoneBinding(connection, userId, phoneIdenti
     created_at: bindingColumns.created_at ? timestamp : undefined,
     updated_at: bindingColumns.updated_at ? timestamp : undefined
   })
+  if (typeof options.beforeInsert === 'function') await options.beforeInsert({ userId: String(userId), phoneHash })
   await connection.execute(bindingInsert.sql, bindingInsert.values)
 }
 
@@ -619,6 +653,10 @@ export async function findCurrentCampaignPhoneIdentityInTransaction(connection, 
 
 export function createIdentityStore(options = {}) {
   let pool = options.pool || null
+  const preparedPhoneIdentities = new WeakSet()
+  const testHooks = options.enableTestHooks === true && options.testHooks && typeof options.testHooks === 'object'
+    ? options.testHooks
+    : Object.freeze({})
   const now = options.now || (() => new Date())
   const campaignPhoneIdentityFactory = options.campaignPhoneIdentityFactory || createDefaultCampaignPhoneIdentity
   const identityConflictDiagnostic = createIdentityConflictDiagnostic({
@@ -745,7 +783,7 @@ export function createIdentityStore(options = {}) {
     return result
   }
 
-  async function resolveWechatPhoneIdentity(identity = {}) {
+  async function prepareWechatPhoneIdentity(identity = {}) {
     const openid = normalizeString(identity.openid)
     const unionid = normalizeString(identity.unionid)
     if (!openid) {
@@ -781,6 +819,54 @@ export function createIdentityStore(options = {}) {
       ...campaignPhoneIdentity
     }
 
+    const prepared = Object.freeze({ openid, unionid, phoneIdentity: Object.freeze(phoneIdentity) })
+    preparedPhoneIdentities.add(prepared)
+    return prepared
+  }
+
+  function requirePreparedPhoneIdentity(preparedIdentity) {
+    if (!preparedIdentity || typeof preparedIdentity !== 'object' || !preparedPhoneIdentities.has(preparedIdentity)) {
+      throw createIdentityStoreError('Trusted prepared phone identity is required.', {
+        code: 'IDENTITY_TRANSACTION_FACT_INVALID', statusCode: 500
+      })
+    }
+    return preparedIdentity
+  }
+
+  async function locateWechatPhoneIdentityParticipantsInTransaction(transactionContext, preparedIdentity) {
+    const connection = requireDatabaseTransactionContext(transactionContext)
+    const prepared = requirePreparedPhoneIdentity(preparedIdentity)
+    const bindings = await findIdentityBinding(connection, {
+      openid: prepared.openid,
+      phoneHash: prepared.phoneIdentity.phoneHash
+    })
+    return Object.freeze({
+      userIds: Object.freeze([...new Set([
+        bindings.wechatBinding?.userId,
+        bindings.phoneBinding?.userId
+      ].filter(Boolean))])
+    })
+  }
+
+  async function resolveWechatPhoneIdentityInTransaction(transactionContext, preparedIdentity) {
+    const connection = requireDatabaseTransactionContext(transactionContext)
+    const prepared = requirePreparedPhoneIdentity(preparedIdentity)
+    return await resolveIdentityInTransaction(connection, {
+      ...prepared,
+      timestamp: now(),
+      allowCreateUser: true,
+      transactionContext
+    })
+  }
+
+  function publicIdentityResult(result) {
+    const { isFirstPhoneRegistration: internalFact, ...publicResult } = result
+    return publicResult
+  }
+
+  async function resolveWechatPhoneIdentity(identity = {}) {
+    const { openid, unionid, phoneIdentity } = await prepareWechatPhoneIdentity(identity)
+
     const connection = await getPool().getConnection()
     const timestamp = now()
     let connectionDisposed = false
@@ -794,7 +880,7 @@ export function createIdentityStore(options = {}) {
         allowCreateUser: true
       })
       await connection.commit()
-      return result
+      return publicIdentityResult(result)
     } catch (error) {
       if (error && error.code === 'IDENTITY_CONFLICT') {
         connectionDisposed = await rollbackIdentityConflict(connection)
@@ -803,12 +889,12 @@ export function createIdentityStore(options = {}) {
       }
       await connection.rollback()
       if (isDuplicateEntryError(error)) {
-        return resolveDuplicateIdentity({
+        return publicIdentityResult(await resolveDuplicateIdentity({
           openid,
           unionid,
           phoneIdentity,
           timestamp
-        })
+        }))
       }
       throw error
     } finally {
@@ -822,6 +908,19 @@ export function createIdentityStore(options = {}) {
       phoneHash: options.phoneIdentity.phoneHash
     })
     const resolution = resolveIdentityConflict(bindings)
+    if (options.transactionContext) {
+      const participantUserIds = [bindings.wechatBinding?.userId, bindings.phoneBinding?.userId].filter(Boolean)
+      try {
+        requireDatabaseUsersLocked(options.transactionContext, participantUserIds)
+      } catch (error) {
+        if (error?.code === 'DATABASE_TRANSACTION_USERS_NOT_LOCKED') {
+          throw createIdentityStoreError('Identity participants changed before the unified user lock completed.', {
+            code: 'IDENTITY_PARTICIPANTS_CHANGED', statusCode: 409
+          })
+        }
+        throw error
+      }
+    }
     if (resolution.conflict) {
       const diagnostic = await identityConflictDiagnostic.collect(connection, {
         aUserId: bindings.wechatBinding.userId,
@@ -840,19 +939,40 @@ export function createIdentityStore(options = {}) {
     }
 
     const isNew = resolution.action === 'create_user'
-    const userId = isNew ? await createUser(connection, options.openid, options.timestamp) : resolution.userId
-    await updateUserLogin(connection, userId, options.timestamp)
-    await createOrUpdateWechatBinding(connection, userId, {
-      openid: options.openid,
-      unionid: options.unionid
-    }, options.timestamp)
-    await createOrUpdatePhoneBinding(connection, userId, options.phoneIdentity, {
-      timestamp: options.timestamp
-    })
+    const isFirstPhoneRegistration = !bindings.phoneBinding
+    let userId
+    try {
+      userId = isNew
+        ? await createUser(connection, options.openid, options.timestamp, options.transactionContext)
+        : resolution.userId
+      await updateUserLogin(connection, userId, options.timestamp)
+      await createOrUpdateWechatBinding(connection, userId, {
+        openid: options.openid,
+        unionid: options.unionid
+      }, options.timestamp, { beforeInsert: testHooks.beforeWechatBindingInsert })
+      await createOrUpdatePhoneBinding(connection, userId, options.phoneIdentity, {
+        timestamp: options.timestamp,
+        beforeInsert: testHooks.beforePhoneBindingInsert
+      })
+    } catch (error) {
+      if (options.transactionContext && isExpectedPhoneBindingUniqueConflict(error)) {
+        throw createIdentityStoreError('Concurrent phone binding requires a complete transaction retry.', {
+          code: 'IDENTITY_PHONE_BINDING_CONCURRENT_CONFLICT', statusCode: 409
+        })
+      }
+      if (options.transactionContext && isExpectedWechatBindingUniqueConflict(error)) {
+        throw createIdentityStoreError('Concurrent WeChat binding requires a complete transaction retry.', {
+          code: 'IDENTITY_WECHAT_BINDING_CONCURRENT_CONFLICT', statusCode: 409
+        })
+      }
+      if (options.transactionContext && isDuplicateEntryError(error)) throw createIdentityConflictError()
+      throw error
+    }
 
     return {
       id: String(userId),
       isNew,
+      isFirstPhoneRegistration,
       hasWechatBinding: true,
       hasPhoneBinding: true,
       phoneMasked: options.phoneIdentity.phoneMasked
@@ -910,6 +1030,9 @@ export function createIdentityStore(options = {}) {
   return {
     findWechatBindingForPayment,
     findWechatOpenidByUserIdForPayment,
-    resolveWechatPhoneIdentity
+    resolveWechatPhoneIdentity,
+    prepareWechatPhoneIdentityForTransaction: prepareWechatPhoneIdentity,
+    locateWechatPhoneIdentityParticipantsInTransaction,
+    resolveWechatPhoneIdentityInTransaction
   }
 }
