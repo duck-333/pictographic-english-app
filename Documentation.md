@@ -1,5 +1,118 @@
 # Documentation
 
+## 2026-09-26：邀请基础层v6最新版隔离MySQL门禁通过（等待独立复审）
+
+- v6验证对象是READY复用封闭用户范围P2修复后的当前最新版：允许范围为`existingUserScope ∪ createdUserIds`，`lockedUserIds`只表达数据库实际锁定或本事务受控创建并锁定的用户。隔离环境为`pictographic-invitation-mysql-20260926-v6`，镜像和MySQL版本均为8.0.46，Docker Client/Server均为29.6.2，仅绑定`127.0.0.1:3309`，使用随机root测试密码、匿名MySQL卷及显式破坏性门禁`INVITATION_TEST_ALLOW_DESTRUCTIVE=local-docker-invitation-only`；未连接默认、远程或生产数据库。初始化期间前5次宿主机认证未就绪，第6次成功，不计为集成测试失败。
+- 单次执行当前最新版完整集成脚本通过：`V6_MYSQL_INTEGRATION_TEST_EXIT=0`、`V6_SINGLE_GATE_PASSED=True`；临时数据库及临时用户残留均为0，`POST_TEST_MYSQL_VERSION=8.0.46`、`POST_TEST_HEALTH_EXIT=0`。
+- 随后连续执行5次压力复跑，`V6_ITERATION_1_EXIT`至`V6_ITERATION_5_EXIT`均为0；汇总为`V6_MYSQL_TEST_PASS_COUNT=5`、`V6_MYSQL_TEST_FAILURE_ITERATION=0`、`V6_MYSQL_TEST_FAILURE_EXIT=0`、`V6_ALL_FIVE_TESTS_PASSED=True`及`V6_MYSQL_STRESS_GATE_PASSED=True`。压力复跑后临时数据库及临时用户残留仍均为0，`POST_STRESS_MYSQL_VERSION=8.0.46`、`POST_STRESS_HEALTH_EXIT=0`。单次加连续5次共完整运行当前最新版脚本6次。
+- 每次完整脚本均执行真实identity/user-entitlement/invitation三Store缺失邀请人场景：先创建邀请人、分享凭证和候选关系，注册事务开始前删除邀请人users行；邀请人ID仍属于首次`existingUserScope`，首次`allowMissing`锁查询未把它加入`lockedUserIds`，后续invitation Store复用同一封闭范围不再误判扩展。新人手机号身份写入成功且`REGISTER_BONUS +30`恰好一份，关系形成`FINAL`，`reward_status=NO_REWARD`、`no_reward_reason=INVITER_NOT_FOUND`、`reward_slot=NULL`、邀请人奖励流水为0、`registrationAllowed=true`，整体事务正常commit。该隔离MySQL场景随完整脚本真实执行并通过6次，不是生产验证。
+- 完整脚本继续覆盖phone/wechat强制双参与方竞争、事务锁范围及受控新用户创建、`REGISTER_BONUS`严格幂等、A↔B交叉邀请、同手机号和相同openid收敛、第5/6位奖励槽竞争、rollback释放槽位、自邀与非新人、7天与严格一年、迁移CHECK/唯一约束及best-effort数据库清理。barrier单方超时、主动abort和错误保留仍属于离线单元测试证据，没有声称在真实MySQL运行中故意触发timeout。
+- v6隔离环境完成精确清理：`V6_CLEANUP_TARGET_VALID=True`、`V6_CONTAINER_STOP_EXIT=0`、`V6_CONTAINER_REMOVED=True`、`V6_ANONYMOUS_VOLUME_REMOVED=True`、`V6_PORT_3309_LISTENER_COUNT=0`、`V6_PORT_3309_RELEASED=True`、`V6_CLEANUP_CONFIRMED=True`；全部`INVITATION_TEST_*`变量及`TestPassword`已清除，清理操作未修改项目文件，暂存区保持为空。
+- 事务探针不兼容、最小权限替代方案否决、真实1213反向锁序死锁及v2/v3/v4/v5证据均完整保留。v2/v3/v4是更早历史，v5是allowMissing范围复用修复前的历史成功证据，v6是当前最新版真实隔离MySQL证据。本轮已验证缺失邀请人不能阻止新人注册及其`REGISTER_BONUS`；当前等待新的独立复审，复审通过前不得暂存。
+- 当前仍只是数据与服务端基础层：未接正式手机号登录路由，未新增正式邀请HTTP API，未修改小程序分享按钮、卡片或邀请落地页，未在生产真实发放`REGISTER_BONUS`或`SHARE_REWARD`，未执行生产迁移、连接生产数据库或部署；本次通过不代表production-ready，也不允许据此部署。
+
+## 2026-09-26：邀请基础层READY缺失成员复用修复（已由v6验证）
+
+- v5后的独立复审发现1个P2：首次统一用户锁使用`allowMissing:true`时，`existingUserScope`已经封闭了全部既有用户ID候选范围，但READY复用错误地只检查`lockedUserIds`，导致“候选关系预定位到邀请人、邀请人users行已不存在”的合法缺失成员被误报为`DATABASE_TRANSACTION_USER_LOCK_EXPANSION_FORBIDDEN`，从而可能回滚普通新人注册及其`REGISTER_BONUS`。
+- 共享事务现在明确区分三个私有集合：`existingUserScope`记录首次调用封闭的全部既有用户候选（包括允许缺失但查询未找到者），`lockedUserIds`只记录真实查询锁定或本事务受控创建并锁定的用户，`createdUserIds`只记录本事务受控INSERT成功创建的新用户。READY复用是否扩大范围按`existingUserScope ∪ createdUserIds`判断，返回值仍只取`lockedUserIds`中的实际锁定子集。
+- 范围内缺失ID在`allowMissing:true`时返回空或实际已锁子集，不会伪装成已锁，也不会追加`SELECT ... FOR UPDATE`；在`allowMissing:false`时稳定返回`DATABASE_TRANSACTION_USER_NOT_FOUND`而不是扩展错误。范围外ID仍固定返回`DATABASE_TRANSACTION_USER_LOCK_EXPANSION_FORBIDDEN`；UNINITIALIZED、INITIALIZING、FAILED和context失效的fail-closed行为保持不变，新用户创建后仍不能扩大既有用户范围。
+- 离线测试新增直接状态机覆盖，并使用真实invitation Store组合验证：邀请人属于首次封闭范围但实际不存在时，新人受控创建、手机号身份写入和`REGISTER_BONUS +30`继续成功，邀请关系形成`FINAL + NO_REWARD`，`noRewardReason=INVITER_NOT_FOUND`、`reward_slot`不占用、`registrationAllowed=true`，事务正常提交。相同真实三Store场景随后已由v6单次及连续5次隔离MySQL运行验证。
+- v2/v3/v4历史及此前失败记录全部保留；v5单次和连续5次通过仍是当时代码与脚本覆盖范围内的真实证据，但发生在本轮P2修复之前，不能证明当前版本。当前最新版v6验证结论见文档顶部。
+- 当前仍只是数据与服务端基础层：未接正式手机号登录路由、邀请HTTP API、小程序分享按钮/卡片/落地页或生产奖励，未执行生产迁移、连接生产数据库或部署；不代表production-ready，也不允许据此部署。
+
+## 2026-09-26：邀请基础层v5隔离MySQL门禁通过（历史：本轮P2修复前）
+
+- v5验证对象是v4后续独立复审发现的两个P2完成修复后的当时代码：受控`users` INSERT必须在统一用户锁范围显式初始化并完成后执行；测试专用`twoPartyBarrier`具有有界超时、主动abort和异常释放能力。
+- 隔离环境为`pictographic-invitation-mysql-20260926-v5`，镜像`mysql:8.0.46`，Docker Client/Server均为29.6.2，仅绑定`127.0.0.1:3309`，使用随机root测试密码、匿名MySQL数据卷及显式破坏性门禁`INVITATION_TEST_ALLOW_DESTRUCTIVE=local-docker-invitation-only`；未连接默认、远程或生产数据库。MySQL初始化期间前5次宿主机认证尚未就绪，第6次认证成功并确认`MYSQL_VERSION=8.0.46`；这些初始化等待不属于集成测试失败。
+- 单次执行最新版完整集成脚本通过：`V5_MYSQL_INTEGRATION_TEST_EXIT=0`、`V5_SINGLE_GATE_PASSED=True`；临时数据库及临时用户残留均为0，`POST_TEST_MYSQL_VERSION=8.0.46`、`POST_TEST_HEALTH_EXIT=0`。
+- 随后对同一最新版代码连续执行5次压力复跑，`V5_ITERATION_1_EXIT`至`V5_ITERATION_5_EXIT`均为0；汇总为`V5_MYSQL_TEST_PASS_COUNT=5`、`V5_MYSQL_TEST_FAILURE_ITERATION=0`、`V5_MYSQL_TEST_FAILURE_EXIT=0`、`V5_ALL_FIVE_TESTS_PASSED=True`及`V5_MYSQL_STRESS_GATE_PASSED=True`。复跑后临时数据库及临时用户残留仍均为0，`POST_STRESS_MYSQL_VERSION=8.0.46`、`POST_STRESS_HEALTH_EXIT=0`。
+- 单次预检加5次压力复跑共完整运行当前脚本6次；每次均覆盖真实迁移、identity/user-entitlement/invitation三Store组合、并发、幂等、数据库约束及best-effort清理。phone和wechat正常双参与方唯一键竞争屏障继续在真实MySQL路径执行。barrier单方超时、主动abort、cause及多错误保留等异常释放路径由离线单元测试验证，本轮没有声称在真实MySQL中故意触发barrier超时。
+- 隔离环境最终完成精确清理：`V5_CLEANUP_TARGET_VALID=True`、`V5_CONTAINER_STOP_EXIT=0`、`V5_CONTAINER_REMOVED=True`、`V5_ANONYMOUS_VOLUME_REMOVED=True`、`V5_PORT_3309_LISTENER_COUNT=0`、`V5_PORT_3309_RELEASED=True`、`V5_CLEANUP_CONFIRMED=True`；全部`INVITATION_TEST_*`环境变量及`TestPassword`已清除，清理操作未修改项目文件，暂存区保持为空。
+- v2/v3继续作为更早覆盖历史，v4继续作为当时两个P2修复前的历史成功证据；v5证明那两个P2修复后的当时版本通过隔离MySQL门禁。后续独立复审又发现READY复用缺失范围成员的新P2，因此v5现为本轮修复前的历史证据，当前状态见文档顶部。
+- 当前仍只是数据与服务端基础层：尚未接入正式手机号登录路由或新增正式邀请HTTP API，尚未修改小程序分享按钮、分享卡片或邀请落地页，未在生产真实发放`REGISTER_BONUS`/`SHARE_REWARD`，未执行生产迁移、连接生产数据库或部署；本次通过不代表production-ready，也不允许据此部署。
+
+## 2026-09-26：邀请基础层v4后续两个P2修复（已由v5验证）
+
+- 最新独立复审没有P1，新增两个P2：受控`users` INSERT可以在统一用户锁范围尚未初始化时执行，破坏“预定位全部既有参与者→一次性按BIGINT升序锁定→再创建新用户”的顺序；MySQL集成脚本原`twoPartyBarrier`只有两方均抵达才释放，一方在hook前失败时会使另一方永久等待并阻断最终数据库清理。
+- 共享事务私有状态现显式区分“锁范围从未初始化”“已初始化为空范围”“已初始化为非空范围”，并分别记录封闭的既有用户范围、实际已锁用户及事务内受控新建用户。`lockDatabaseUsersInTransaction()`首次调用即封闭范围；重复调用只能核验已经实际锁定的用户，不能追加新发现的既有用户。`requireDatabaseUsersLocked()`即使收到空列表也会拒绝未初始化状态。
+- `insertDatabaseUserInTransaction()`在任何INSERT或`LAST_INSERT_ID()`查询前要求锁范围已初始化，否则稳定返回`DATABASE_USER_LOCK_SCOPE_REQUIRED`且不产生SQL或私有状态。显式`lockDatabaseUsersInTransaction(context, [])`后可创建全新用户；非空路径仍先按canonical BIGINT UNSIGNED升序锁定全部预定位既有参与者，随后受控INSERT、严格affectedRows/database insertId/同连接`LAST_INSERT_ID()`回读，成功后才把新用户加入已锁集合。失败、rollback及失效context均不保留状态。
+- 测试屏障抽为独立`invitation-test-barrier.mjs`，只用于测试脚本，不进入生产请求路径。屏障具有短且有界的超时、主动abort、统一等待者拒绝、settled/aborted状态、定时器清理、第三方超额抵达拒绝，以及`INVITATION_TEST_BARRIER_TIMEOUT`/`INVITATION_TEST_BARRIER_ABORTED`稳定错误码；abort保留原始分支错误为cause和`originalError`。
+- phone与wechat竞争的每个分支均在提前失败时主动abort对端，外层finally无条件abort未完成屏障并清除active hook；意外并发错误以`AggregateError`保留全部分支原因，既有最外层best-effort数据库清理仍可达。测试hook继续只有`enableTestHooks: true`时启用，正式默认路径不启用。
+- 已增加离线测试覆盖未初始化空范围拒绝、INSERT/LAST_INSERT_ID零执行、显式空范围后创建、非空范围后创建、identity Store不可绕过、创建后禁止扩展、context失效，以及屏障正常释放、超时、abort/cause、重复abort、定时器清理、超额抵达、finally清理和原始/屏障双错误保留。
+- v4单次预检及连续5次压力复跑仍是真实成功证据，但发生在本轮两个P2修复之前，现仅作为历史保留，不能证明修复后代码。两个P2修复版本随后已由v5单次预检及连续5次压力复跑验证，当前结论见文档顶部；仍须等待新的独立复审，复审通过前不得暂存。
+- 当前仍只是数据与服务端基础层：尚未接入正式手机号登录编排或邀请HTTP API，尚未修改小程序邀请卡片、分享按钮或邀请落地页，未在生产发放`REGISTER_BONUS`/`SHARE_REWARD`，未执行生产迁移、连接生产数据库或部署；不代表production-ready，也不允许据此部署。
+
+## 2026-09-26：邀请基础层v4隔离MySQL门禁通过（历史：本轮两个P2修复前）
+
+- v4验证对象是当时已完成独立复审4个P2与3个P3修复的代码。隔离环境为`pictographic-invitation-mysql-20260926-v4`，镜像`mysql:8.0.46`，仅绑定`127.0.0.1:3309`，使用随机root测试密码、匿名MySQL数据卷及显式破坏性门禁`INVITATION_TEST_ALLOW_DESTRUCTIVE=local-docker-invitation-only`；未连接默认、远程或生产数据库。
+- 单次执行`npm.cmd run test:invitation-mysql-integration`预检通过：`V4_MYSQL_INTEGRATION_TEST_EXIT=0`、`V4_SINGLE_GATE_PASSED=True`；临时数据库和临时用户残留均为0，测试后MySQL版本为8.0.46，健康检查退出码为0。
+- 随后对同一当时版本连续执行5次压力复跑，`V4_ITERATION_1_EXIT`至`V4_ITERATION_5_EXIT`均为0；汇总为`V4_MYSQL_TEST_PASS_COUNT=5`、`V4_MYSQL_TEST_FAILURE_ITERATION=0`、`V4_MYSQL_TEST_FAILURE_EXIT=0`、`V4_ALL_FIVE_TESTS_PASSED=True`及`V4_MYSQL_STRESS_GATE_PASSED=True`。压力复跑后临时数据库和临时用户残留仍均为0，MySQL 8.0.46保持健康。
+- 集成脚本内置、不依赖外部环境变量开关的`twoPartyBarrier`真实强制两类身份唯一键竞争。同手机号场景设置`activePhoneInsertBarrier = phoneInsertBarrier`，两个连接均在phone binding INSERT前抵达屏障，`phoneInsertBarrier.arrivals === 2`；一个请求成功，另一个稳定返回`IDENTITY_CONFLICT`且不泄漏`ER_DUP_ENTRY`，最终精确保留一条手机号绑定、一份`REGISTER_BONUS`、一条`FINAL`和一个奖励槽。相同新openid场景设置`activeWechatInsertBarrier = wechatInsertBarrier`，两个连接均在wechat binding INSERT前抵达屏障，`wechatInsertBarrier.arrivals === 2`；两请求均成功并收敛到同一user ID，最终精确保留一条微信绑定、一条手机号绑定、一份`REGISTER_BONUS`、一条`FINAL`和一个奖励槽。单次预检加连续5次完整运行使两类强制竞争场景各真实执行并通过6次，不能解释为普通串行收敛。
+- 隔离环境最终完成精确清理：`V4_CLEANUP_TARGET_VALID=True`、`V4_CONTAINER_STOP_EXIT=0`、`V4_CONTAINER_REMOVED=True`、`V4_ANONYMOUS_VOLUME_REMOVED=True`、`V4_PORT_3309_LISTENER_COUNT=0`、`V4_PORT_3309_RELEASED=True`、`V4_CLEANUP_CONFIRMED=True`；所有`INVITATION_TEST_*`环境变量和`TestPassword`均已清除。
+- v2连续5次通过与v3单次及连续5次通过继续作为更早版本和覆盖范围内的历史证据；v3发生在4个P2与3个P3修复之前。v4在当时是最新版真实MySQL证据，但后续复审发现本节未覆盖的锁范围初始化和无界barrier问题，因此当前状态已由文档顶部的新节取代。
+- 当前仍只是数据与服务端基础层：尚未接入正式手机号登录路由或新增正式邀请HTTP API，尚未修改小程序分享卡片、分享按钮或邀请落地页，未在生产发放`REGISTER_BONUS`/`SHARE_REWARD`，未执行生产迁移、连接生产数据库或部署；本次通过不代表production-ready，也不允许据此部署。
+
+## 2026-09-26：邀请基础层最新复审4个P2与3个P3修复（已由v4验证）
+
+- 最新独立复审发现4个P2与3个P3：公开导出的新用户锁登记函数可伪造锁状态；`REGISTER_BONUS`严格回读仍使用归零型宽松整数转换；手机号/微信身份唯一键竞争耗尽时可能泄漏内部错误；011无生产DDL证据却修改既有权益流水时间列；用户ID缺少`BIGINT UNSIGNED`上界；release失败后连接所有权不明确；011的MODIFY还可能丢失005列属性。本节取代此前“锁状态完全不可伪造、异常历史已完全严格、最新版MySQL门禁已覆盖当前代码”的结论。
+- 删除任意ID登记接口。共享事务模块现在只提供受控`users` INSERT：列白名单禁止显式`id`，实际INSERT必须严格`affectedRows === 1`，用户ID只取数据库`insertId`，并由同一连接以`LAST_INSERT_ID()`锁定回读一致后才登记到私有锁集合。INSERT失败、伪造结果、任意既存ID、失效context或rollback后均不能登记；普通callback及其他Store无法直接修改锁集合。
+- `REGISTER_BONUS`回放改为读取原始数据库事实并使用专用严格整数解析。NULL、空字符串、布尔、小数、非数字、指数文本、异常空白、负的非负字段、非安全number及越界值均以`IDEMPOTENCY_KEY_CONFLICT`失败；当前奖励、前序/最新余额、流水ID、快照余额/累计量、SUM与COUNT均严格校验，不修正或覆盖损坏历史。
+- 手机号与微信openid已知唯一键竞争使用独立内部重试码，只在rollback完成后与死锁/锁等待共用最多3次总尝试；耗尽后由最外层转换为不含SQL、表名、约束名或`sqlMessage`的稳定`IDENTITY_CONFLICT`。未知或邀请/权益重复键不被身份逻辑误分类，也不自动重试。真实MySQL脚本新增默认关闭、仅显式测试启用的双参与方INSERT屏障，分别强制两个连接抵达手机号和微信绑定真实INSERT竞争点。
+- 两份011已删除对既有`entitlement_transactions`的ALTER，保持为新增邀请基础表，不再触碰或丢失005的列COMMENT、NULL、DEFAULT等属性。`REGISTER_BONUS`继续使用005现有秒级`DATETIME`：同一事务connection取得`UTC_TIMESTAMP()`与MySQL严格一年，测试边界调整为少/多1秒；邀请新表自身继续使用`DATETIME(3)`，两种精度不作错误的跨精度相等比较。
+- 所有本批用户ID入口按规范十进制及BigInt比较限制为1至`18446744073709551615`，拒绝0、负数、超上界、小数、指数、空白和非规范输入。release失败会立即quarantine并尽力destroy，绝不二次release或复用；`originalError`、`rollbackError`、`releaseError`与`destroyError`继续分离。
+- 2026-09-26 v3单次预检和连续5次压力复跑全部通过仍是真实历史证据，但发生在本轮代码修改前；它不能证明删除ALTER、受控用户INSERT、严格数值回读、身份同步屏障和release隔离版本。上述4个P2与3个P3修复版本随后由v4单次预检及连续5次压力复跑验证；更晚发现的两个P2及该阶段待v5状态已由文档顶部的v5结果取代。
+- 当前仍只是数据与服务端基础层：未接正式手机号登录路由或邀请HTTP API，未完成小程序邀请卡片、微信分享或邀请落地页，未执行生产011、生产奖励、生产连接或部署，不代表production-ready。
+
+## 2026-09-26：邀请基础层v3隔离MySQL门禁通过（历史：本轮修改前）
+
+- 在完成2026-09-25独立复审发现的4个P2与1个非阻塞P3修复后，用户重新创建全新的隔离容器`pictographic-invitation-mysql-20260926-v3`：镜像为MySQL 8.0.46，仅绑定`127.0.0.1:3309`，使用随机测试密码、匿名MySQL数据卷及显式破坏性门禁`INVITATION_TEST_ALLOW_DESTRUCTIVE=local-docker-invitation-only`。宿主机TCP认证在第4次等待尝试成功，确认`MYSQL_VERSION=8.0.46`、`HOST_AUTH_READY=True`、`HOST_AUTH_EXIT=0`；前三次连接失败仅发生在新容器初始化等待期，不属于集成测试失败。
+- 最新版先单次执行`npm.cmd run test:invitation-mysql-integration`预检并通过，`V3_MYSQL_INTEGRATION_TEST_EXIT=0`、`V3_SINGLE_GATE_PASSED=True`。随后对同一代码连续执行5次压力复跑，`V3_ITERATION_1_EXIT`至`V3_ITERATION_5_EXIT`均为0，汇总为`V3_MYSQL_TEST_PASS_COUNT=5`、`V3_MYSQL_TEST_FAILURE_ITERATION=0`、`V3_MYSQL_TEST_FAILURE_EXIT=0`、`V3_ALL_FIVE_TESTS_PASSED=True`及`V3_MYSQL_STRESS_GATE_PASSED=True`。
+- 当时v3脚本使用真实identity Store、user-entitlement Store、invitation Store和共享事务组合编排，覆盖A↔B双连接交叉邀请完整注册、同手机号双连接并发收敛、注册奖励回放、数据库时间及一年、普通日期/闰年/当时时间边界、第5/6位竞争、rollback释放奖励槽、候选替换、数据库约束与best-effort清理。单次预检和5次压力复跑后，临时数据库及临时用户残留均为0，MySQL 8.0.46健康检查退出码均为0，暂存区为空；这是本轮修改前代码的历史通过证据，当前状态以上一节为准。
+- 清理阶段第一次停止容器后，瞬时TCP检查曾得到`V3_PORT_3309_RELEASED=False`，但没有发现容器或卷残留。随后只读复核确认容器和匿名卷均不存在、3309端口TCP条目和监听器数量均为0、无监听状态为真，最终`V3_CLEANUP_CONFIRMED=True`；测试host、port、user、password及破坏性门禁环境变量也全部不存在。该瞬时结果不是遗留故障，容器、卷、端口和环境变量最终均已清理。
+- v2连续5次通过继续作为当时脚本覆盖范围内的真实历史证据保留；后续独立复审确认其未覆盖真实identity＋entitlement＋invitation完整组合。该缺口及当时4个P2/1个P3修复曾由v3单次预检和连续5次压力复跑验证；本轮更晚的复审又发现新问题，因此当前结论以上一节为准。
+- 当前批次仍仅为数据与服务端基础层：未接正式手机号登录路由或邀请HTTP API，未完成小程序邀请卡片、微信分享或邀请落地页，未在生产发放`REGISTER_BONUS`/`SHARE_REWARD`，未执行生产011、连接生产数据库或部署；本次通过不表示production-ready或允许部署。
+
+## 2026-09-25：邀请基础层完整组合并发与注册奖励严格事实修复（历史：当时等待真实MySQL复跑）
+
+- 最新独立复审确认4个P2与1个非阻塞P3：完整组合在identity阶段先持有单个用户、同手机号唯一键竞争未能整事务收敛、`REGISTER_BONUS`回放事实过宽、注册奖励使用应用时间且闰年一年语义错误，以及release失败误用`rollbackError`字段。2026-09-24“5个P2已全部修复”“REGISTER_BONUS严格幂等”“完整共享锁序已统一”等结论因此撤回，由本节取代。
+- 组合事务现在先以非锁定查询定位微信绑定用户、手机号绑定用户和邀请人，再由共享context一次性按BIGINT数值升序锁定全部已知用户；context私有记录锁集合并禁止后续扩张。身份写入前重新读取绑定事实并核验参与者仍在锁集合内，新增用户由身份Store在同一不可伪造context中登记；邀请Store复用该锁集合，不再在身份写入后重新构造另一套用户锁序。
+- 手机号绑定仅在错误明确命中`user_phone_bindings.uk_user_phone_bindings_phone_hash`时转换为`IDENTITY_PHONE_BINDING_CONCURRENT_CONFLICT`。测试用顶层组合入口只在整个事务rollback后重放，从参与者非锁定预解析开始重新读取；它与死锁/锁等待共用最多3次总尝试。其他`ER_DUP_ENTRY`不分类、不重试、不吞掉；每次失败context永久失效。
+- `REGISTER_BONUS`改为先锁定权益快照，再严格核验用户、类型、30次、source/sourceId、operator、幂等键、历史自身的一年有效期、前序流水余额、最新流水与快照链接及余额，并核对快照累计发放量与全部额度发放流水之和。任一事实不一致固定返回`IDEMPOTENCY_KEY_CONFLICT`，不返回幂等成功，也不追加或覆盖奖励。
+- 当时方案让注册奖励由同一事务connection执行`UTC_TIMESTAMP(3)` / `DATE_ADD(..., INTERVAL 1 YEAR)`并由011把既有流水列提升为`DATETIME(3)`；本轮复审确认该ALTER缺少生产DDL证据，已撤销并改为遵循005秒级DATETIME，现行规则见2026-09-26最新节。
+- release失败现使用独立`releaseError`字段；`originalError`、`rollbackError`、`releaseError`与`destroyError`保持可区分，既有rollback失败destroy/quarantine行为不变。
+- 当时隔离MySQL脚本新增两类真实三Store完整组合：已有微信空壳A↔B交叉邀请并发注册，以及两个微信身份并发首次绑定同一手机号，并覆盖当时采用的毫秒边界；本轮已按005实际schema改为秒级边界，并新增可证明真实唯一键竞争的测试同步屏障。
+- 2026-09-24 v2连续5次通过仍是真实历史证据，但当时脚本没有覆盖真实identity＋entitlement＋invitation完整组合，不能作为2026-09-25修复的验证证据。当时隔离容器已清理且只完成离线测试，因此该阶段记录为等待复跑；后续最新版v3实跑结果见2026-09-26记录。
+- 本批仍只是数据与服务端基础层：未接正式手机号登录路由、邀请HTTP API、小程序邀请卡片、微信分享能力或落地页，未在生产发放`REGISTER_BONUS`/`SHARE_REWARD`，未执行生产011、连接生产数据库或部署。
+
+## 2026-09-24：邀请基础层首轮复审定向修复（等待再次独立复审）
+
+- 最终独立复审新增5个P2和1个P3：原邀请私有事务品牌无法组合身份与权益、同connection可重入、rollback失败会掩盖原错且未隔离连接、密钥隔离与周期重复检测不足、文档锁顺序陈旧，以及MySQL finally清理非逐层best-effort。当时按该范围记录为已修复；2026-09-25后续复审发现完整组合锁序和注册奖励事实仍不充分，当前结论以上一节为准。
+- 新增共享 `database-transaction-context`：身份、权益、邀请共同接受同一不可伪造且按尝试失效的context；同connection嵌套/并发在begin前分别以稳定busy错误拒绝，rollback失败保留originalError与rollbackError、优先destroy并永久quarantine。仅死锁和锁等待超时最多3次整事务重放，pool所有权入口不会release被隔离连接。
+- 身份侧当时新增事务内手机号身份解析/绑定，权益侧新增事务内`REGISTER_BONUS`入口和集合mock组合测试；后续复审证明这尚不足以构成严格幂等或真实三Store完整锁序，已由2026-09-25修复补齐。本批始终未接入正式HTTP路由。
+- 首轮复审结论不通过，共 1 个 P1、5 个 P2、2 个 P3。修复增加服务端可信候选主体摘要、`SUPERSEDED` 历史候选和当前候选生成列唯一键；A→B后旧A receipt只返回不阻塞注册的 `CANDIDATE_SUPERSEDED`，不能锁定A。
+- 新建候选不接受调用方receipt；恢复必须命中同一可信主体的已存在receipt。最终预留先非锁定定位参与者，再按BIGINT数值升序一次锁定新人和邀请人用户行，使不同receipt的串行或并发重放收敛到同一invitation id，重复键仅作回读兜底。
+- 第一次在用户隔离 Docker 的 MySQL 8.0.46（仅 `127.0.0.1:3309`）实跑时，`@@session.in_transaction` 因该版本不支持而以 `ER_UNKNOWN_SYSTEM_VARIABLE` 失败。继续验证发现，`performance_schema.events_transactions_current` 需要额外全局读取权限，`information_schema.innodb_trx` 需要 `PROCESS` 权限，因此两种替代方案均被否决，没有给生产业务账号增加这些权限。
+- 事务入口现统一为共享 `withDatabaseTransaction(connection, callback)`：入口负责 begin/commit/rollback、排他、隔离和有界重试，共享模块私有品牌绑定活动context与唯一底层连接，callback每次尝试结束后永久失效；身份、权益和邀请一致性函数只接受该context。业务时间仍由同一连接执行 `SELECT UTC_TIMESTAMP(3) AS database_now` 获取。
+- 第二次真实 MySQL 运行已进入第5/6位双连接竞争场景，并以 `ER_LOCK_DEADLOCK` / 1213失败。InnoDB死锁报告确认一条事务持有候选关系主键锁后等待分享凭证，另一条事务持有分享凭证锁后在奖励槽扫描中等待候选关系，根因为reserve的跨表锁定JOIN形成“关系→凭证”，与capture/reward路径的“凭证→关系”反向。
+- 已移除reserve的锁定JOIN：先非锁定定位稳定主键，再用BigInt语义按升序一次锁定新人和邀请人用户行，随后按“分享凭证主键→注册关系主键”锁定并重新核验receipt、主体、凭证、邀请人、关系状态、撤销和期限事实，最后扫描槽位。事务入口仅对死锁和锁等待超时做最多3次完整重放，每次rollback后销毁旧上下文并创建新上下文；callback契约限定为可回滚数据库操作。
+- 两类邀请密钥新增拒绝复用sandbox/production虚拟支付AppKey；凭证执行32字节解码和逐字canonical重编码校验。迁移强制奖励到期日恰为发放日加一年，并按状态约束当前补偿调度字段。
+- 上一版第三轮真实验证曾由用户在 Windows Docker Desktop 的临时容器 `pictographic-invitation-mysql-20260924` 中完成：MySQL 8.0.46仅绑定 `127.0.0.1:3309`，连续5次执行 `npm.cmd run test:invitation-mysql-integration` 均以退出码0通过，随机测试数据库和临时测试用户残留均为0。该结果作为最终P2/P3修复前的历史证据保留。
+- 完成共享事务组合、connection重入拒绝、rollback失败隔离、密钥检查和best-effort清理等最终5个P2与1个P3修复后，用户重新创建全新的隔离容器 `pictographic-invitation-mysql-20260924-v2`（`mysql:8.0.46`、仅绑定 `127.0.0.1:3309`、随机测试密码、匿名数据卷，并设置 `INVITATION_TEST_ALLOW_DESTRUCTIVE=local-docker-invitation-only`）。容器初始化期间 `mysqladmin` 曾短暂返回ready，但首次宿主机TCP验证遇到 `PROTOCOL_CONNECTION_LOST`；等待初始化完成后第一次重试即成功，确认 `MYSQL_VERSION=8.0.46` 且回环绑定与端口检查通过。
+- 当时代码随后连续5次执行 `npm.cmd run test:invitation-mysql-integration`，`ITERATION_1_EXIT` 至 `ITERATION_5_EXIT` 均为0；汇总为 `MYSQL_TEST_PASS_COUNT=5`、`MYSQL_TEST_FAILURE_ITERATION=0`、`MYSQL_TEST_FAILURE_EXIT=0`、`ALL_FIVE_MYSQL_TESTS_PASSED=True`、`MYSQL_STRESS_GATE_PASSED=True`。测试后数据库和用户残留均为0且MySQL健康；但后续复审确认当时脚本未覆盖真实三Store完整组合，因此只保留为当时覆盖范围内的历史通过证据。
+- 隔离环境已按精确目标清理：`CLEANUP_TARGET_VALID=True`、`CONTAINER_STOP_EXIT=0`、`CONTAINER_REMOVED=True`、`ANONYMOUS_VOLUME_REMOVED=True`、`PORT_3309_RELEASED=True`；测试host、port、user、password及破坏性门禁环境变量均确认不存在，暂存区为空。未连接生产数据库，也未执行生产迁移。该证据仅覆盖“数据与服务端基础层”，不表示production-ready、允许部署或保证未来绝不出现其他死锁。
+
+## 2026-09-23：邀请奖励批次1——数据与服务端基础层（等待独立复审）
+
+- 开发基线为 `a52ab14cf65ef538ae40f2326f2d2754cbf22ef4`，分支为 `feature/invitation-data-foundation`；开始时 HEAD、`master`、`origin/master` 三者一致且工作区干净。
+- 新增双目录逐字节一致的 011 迁移。`invitation_share_credentials` 保存邀请人、稳定 credential id、token HMAC 摘要/密钥版本、7 天到期和撤销审计；`invitation_registration_relations` 保存稳定 invitation id、candidateReceipt HMAC 摘要/密钥版本、候选/最终关系、新人唯一约束、资格与奖励状态、1..5 奖励槽、补偿字段和权益流水引用。
+- bearer credential 使用 `ivt1.` / `icr1.` 加 32 字节密码学安全随机数的 base64url 编码。`INVITATION_TOKEN_HMAC_SECRET` 与 `INVITATION_CANDIDATE_HMAC_SECRET` 分别计算带命名空间的 HMAC-SHA-256；两者至少 32 字节、彼此不同，并拒绝复用 JWT、手机号、活动手机号、管理员、兑换码、购书订单或微信密钥。明文只在创建时返回一次，数据库、公共查询结果和日志均不保存。
+- store 的所有一致性写入函数都要求调用者传入共享事务模块创建的受控context；context只代理同一底层connection的 `execute`/受控 `query`，业务store不二次取连接，也不执行HTTP。有效token行与候选关系均使用 `FOR UPDATE`；无效、篡改、过期或撤销token在候选写入前失败，因此不会覆盖已有有效候选。
+- 最终预留的真实顺序为：非锁定关系定位；新人和邀请人 `users` 行按BIGINT数值升序一次性 `FOR UPDATE`；用户锁保护下快速回读已有FINAL（此时尚未锁关系行）；分享凭证主键 `FOR UPDATE`；当前邀请关系主键 `FOR UPDATE`；锁后复核全部安全事实；再次锁定回读FINAL；扫描奖励槽；最后写 `FINAL + REWARD_PENDING` 或 `FINAL + NO_REWARD`。不存在“先候选关系、后邀请人用户行”的旧顺序，不使用跨表 `JOIN ... FOR UPDATE`。
+- 新增迁移静态测试、凭证与 store 纯单元测试，以及只允许 `127.0.0.1:3309`、随机 `invitation_test_*` 数据库、显式破坏性确认且保证清理的 MySQL 集成脚本。实际测试结果在本批最终报告记录。
+- `npm.cmd run test:invitation-foundation` 与完整 `npm.cmd run check:server` 均以退出码 0 通过。在2026-09-23初始开发阶段，当时的 Codex Windows 环境找不到 `docker` 命令，因此该阶段隔离 MySQL 脚本仅完成语法检查；后续真实运行、两次失败证据及最终五次通过结果见上方2026-09-24记录。
+- 未修改正式手机号登录路由，未接入正式权益发放流程，也未修改小程序、虚拟支付或生产补偿任务；未连接生产数据库、服务器或微信，未执行迁移、真实支付或部署。
+- v2五次真实MySQL通过及完整清理仍作为当时脚本的历史证据；它不覆盖2026-09-25新增的真实三Store完整组合和严格注册奖励校验。该缺口后来已由2026-09-26最新版v3隔离门禁验证，本批仍只实现数据与服务端基础层，后续功能边界不变。
+
 ## 2026-09-23：邀请新用户注册成功得30次——规则文档修订（等待独立复审）
 
 - 当前分支为 `feature/invitation-share-reward`，修订前 HEAD 为 `5e50fe073bdf20010681b6803381623de1221151`，工作区干净。本阶段只修订产品、架构和状态文档。
