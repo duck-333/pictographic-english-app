@@ -18,6 +18,7 @@ function cloneState(state) {
 const committed = { identities: new Set(), bonuses: new Set(), finals: new Set(), slots: new Set() }
 let working = null
 const lifecycle = []
+const explicitHookOrder = []
 const connection = {
   async beginTransaction() { lifecycle.push('begin'); working = cloneState(committed) },
   async commit() {
@@ -27,7 +28,10 @@ const connection = {
   },
   async rollback() { lifecycle.push('rollback'); working = null },
   async execute(sql, params) {
-    if (/SELECT id FROM users/u.test(sql)) return [params.map(id => ({ id })), []]
+    if (/SELECT id FROM users/u.test(sql)) {
+      explicitHookOrder.push('user-lock')
+      return [params.map(id => ({ id })), []]
+    }
     const [value] = params
     if (sql === 'TEST_BIND_IDENTITY') working.identities.add(value)
     else if (sql === 'TEST_ENSURE_REGISTER_BONUS') working.bonuses.add(value)
@@ -44,6 +48,7 @@ const identityStore = {
   async locateWechatPhoneIdentityParticipantsInTransaction() {
     return { userIds: ['20'] }
   },
+  async verifyWechatBindingOwnerInTransaction() { return true },
   async resolveWechatPhoneIdentityInTransaction(context) {
     contextsByAttempt.push([context])
     await context.execute('TEST_BIND_IDENTITY', ['phone-hash-1'])
@@ -74,7 +79,11 @@ const invitationStore = {
 const result = await withDatabaseTransaction(connection, context => completeInvitedPhoneRegistrationInTransaction(context, {
   preparedIdentity: Object.freeze({ testTrustedIdentity: true }),
   candidateReceipt: 'candidate-receipt', trustedCandidateSubject: 'server-session:subject-1'
-}, { identityStore, entitlementStore, invitationStore }))
+}, {
+  identityStore, entitlementStore, invitationStore,
+  enableTestHooks: true,
+  testHooks: { async beforeUnifiedUserLock() { explicitHookOrder.push('before-user-lock') } }
+}))
 
 assert.equal(attempts, 2)
 assert.deepEqual(lifecycle, ['begin', 'rollback', 'begin', 'commit'])
@@ -86,6 +95,8 @@ assert.equal(committed.bonuses.size, 1)
 assert.equal(committed.finals.size, 1)
 assert.equal(committed.slots.size, 1)
 assert.equal(result.invitation.rewardStatus, 'REWARD_PENDING')
+assert.deepEqual(explicitHookOrder,
+  ['before-user-lock', 'user-lock', 'before-user-lock', 'user-lock'])
 for (const context of contextsByAttempt.flat()) {
   await assert.rejects(() => context.execute('TEST_BIND_IDENTITY', ['late']),
     error => error.code === 'DATABASE_TRANSACTION_REQUIRED')
@@ -95,6 +106,7 @@ const phoneLifecycle = []
 const phoneContexts = []
 let phoneLocateRuns = 0
 let phoneResolveRuns = 0
+let disabledHookRuns = 0
 const phoneConnection = {
   async beginTransaction() { phoneLifecycle.push('begin') },
   async commit() { phoneLifecycle.push('commit') },
@@ -105,10 +117,12 @@ const phoneConnection = {
   }
 }
 const phoneDependencies = {
+  testHooks: { async beforeUnifiedUserLock() { disabledHookRuns += 1 } },
   identityStore: {
     async locateWechatPhoneIdentityParticipantsInTransaction(context) {
       phoneContexts.push(context); phoneLocateRuns += 1; return { userIds: ['20'] }
     },
+    async verifyWechatBindingOwnerInTransaction() { return true },
     async resolveWechatPhoneIdentityInTransaction() {
       phoneResolveRuns += 1
       if (phoneResolveRuns === 1) throw Object.assign(new Error('expected phone race'), {
@@ -132,6 +146,7 @@ const converged = await withInvitedPhoneRegistrationTransaction(phoneConnection,
 assert.equal(converged.identity.id, '20')
 assert.equal(phoneLocateRuns, 2)
 assert.equal(phoneResolveRuns, 2)
+assert.equal(disabledHookRuns, 0)
 assert.deepEqual(phoneLifecycle, ['begin', 'rollback', 'begin', 'commit'])
 assert.notEqual(phoneContexts[0], phoneContexts[1])
 for (const context of phoneContexts) {
@@ -150,6 +165,7 @@ for (const internalCode of ['IDENTITY_PHONE_BINDING_CONCURRENT_CONFLICT', 'IDENT
   const exhaustedDependencies = {
     identityStore: {
       async locateWechatPhoneIdentityParticipantsInTransaction() { return { userIds: ['20'] } },
+      async verifyWechatBindingOwnerInTransaction() { return true },
       async resolveWechatPhoneIdentityInTransaction() {
         exhaustedAttempts += 1
         const error = new Error('Duplicate entry for secret identity table constraint')
@@ -177,6 +193,7 @@ await assert.rejects(() => withInvitedPhoneRegistrationTransaction(phoneConnecti
   { preparedIdentity: {}, candidateReceipt: 'receipt', trustedCandidateSubject: 'subject' }, {
     identityStore: {
       async locateWechatPhoneIdentityParticipantsInTransaction() { return { userIds: ['20'] } },
+      async verifyWechatBindingOwnerInTransaction() { return true },
       async resolveWechatPhoneIdentityInTransaction() { unknownDuplicateAttempts += 1; throw unknownDuplicate }
     },
     entitlementStore: { async ensureRegistrationBonusInTransaction() {} },
@@ -258,6 +275,7 @@ const missingInviterResult = await withDatabaseTransaction(missingInviterConnect
   }, {
     identityStore: {
       async locateWechatPhoneIdentityParticipantsInTransaction() { return { userIds: [] } },
+      async verifyWechatBindingOwnerInTransaction() { return true },
       async resolveWechatPhoneIdentityInTransaction(transactionContext) {
         const id = await insertDatabaseUserInTransaction(transactionContext, { values: { status: 'active' } })
         await transactionContext.execute('TEST_BIND_NEW_PHONE_IDENTITY', [id])

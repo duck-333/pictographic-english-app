@@ -9,21 +9,44 @@ import {
   withInvitedPhoneRegistrationTransaction
 } from '../server/invitation-registration-transaction.mjs'
 import { createUserEntitlementStore } from '../server/user-entitlement-store.mjs'
-import { cleanupInvitationMysqlTest, throwInvitationMysqlTestErrors } from './invitation-mysql-cleanup.mjs'
+import { runInvitationFormalHttpMysqlScenarios } from './invitation-http-mysql-scenarios.mjs'
+import {
+  cleanupInvitationMysqlTest,
+  throwInvitationMysqlTestErrors
+} from './invitation-mysql-cleanup.mjs'
+import {
+  INVITATION_MIGRATION_FILES,
+  runInvitationRepositoryMigrations
+} from './invitation-mysql-migrations.mjs'
+import { resolveInvitationMysqlClientHost } from './invitation-mysql-client-host.mjs'
+import {
+  createDatabaseResource,
+  createMysqlResource
+} from './invitation-mysql-resource-lifecycle.mjs'
+import {
+  createInvitationMysqlTestUserResources,
+  provisionInvitationMysqlTestUsers
+} from './invitation-mysql-test-users.mjs'
+import { assertRuntimeDdlDeniedAndAbsent } from './invitation-mysql-runtime-ddl-guard.mjs'
+import {
+  parseDatabaseInsertId,
+  parseDatabaseSafeInteger,
+} from './invitation-test-database-integers.mjs'
 import { createTwoPartyBarrier } from './invitation-test-barrier.mjs'
 
 const EXPECTED_HOST = '127.0.0.1'
 const EXPECTED_PORT = 3309
 const EXPECTED_CONFIRMATION = 'local-docker-invitation-only'
 const SAFE_DATABASE = /^invitation_test_[a-f0-9]{12}$/u
+const SAFE_TEST_USER = /^invitation_[mr]_[a-f0-9]{12}$/u
+const SAFE_TEST_PASSWORD = /^[a-f0-9]{64}$/u
+const EXPECTED_011_LF_SHA256 = '9ce82a0c87d2bdad877c326aa6ef52d34983af648a78a49968447e2bd1d0eb1b'
 const migrationUrl = new URL('../database/migrations/011_create_invitation_reward_foundation.sql', import.meta.url)
 const releaseMigrationUrl = new URL('../server/migrations/011_create_invitation_reward_foundation.sql', import.meta.url)
-const phoneMigrationUrl = new URL('../database/migrations/001_create_user_phone_bindings.sql', import.meta.url)
-const entitlementMigrationUrl = new URL('../database/migrations/004_create_user_entitlements.sql', import.meta.url)
-const transactionMigrationUrl = new URL('../database/migrations/005_create_entitlement_transactions.sql', import.meta.url)
 
 function readConfig(env = process.env) {
-  const value = { host: String(env.INVITATION_TEST_DB_HOST || ''), port: Number(env.INVITATION_TEST_DB_PORT || 0),
+  const value = { host: String(env.INVITATION_TEST_DB_HOST || ''),
+    port: parseDatabaseSafeInteger(String(env.INVITATION_TEST_DB_PORT || ''), 'invitation test DB port'),
     user: String(env.INVITATION_TEST_DB_USER || ''), password: String(env.INVITATION_TEST_DB_PASSWORD || ''),
     confirmation: String(env.INVITATION_TEST_ALLOW_DESTRUCTIVE || '') }
   assert.equal(value.host, EXPECTED_HOST)
@@ -34,6 +57,17 @@ function readConfig(env = process.env) {
 }
 
 function quoteDatabase(name) { assert.match(name, SAFE_DATABASE); return `\`${name}\`` }
+let testUserHost = null
+function quoteTestAccount(name, host) {
+  assert.match(name, SAFE_TEST_USER)
+  assert.equal(typeof testUserHost, 'string')
+  assert.equal(host, testUserHost)
+  return `'${name}'@'${host}'`
+}
+
+function canonicalLfSha256(value) {
+  return crypto.createHash('sha256').update(String(value).replace(/\r\n?/gu, '\n'), 'utf8').digest('hex')
+}
 
 async function runBarrierParticipant(barrier, operation) {
   try {
@@ -54,63 +88,97 @@ async function inTransaction(pool, work) {
   return await withDatabasePoolTransaction(pool, work)
 }
 
+function databaseSafeInteger(value, label) {
+  return parseDatabaseSafeInteger(value, label)
+}
+
 const dbConfig = readConfig()
 const databaseName = `invitation_test_${crypto.randomBytes(6).toString('hex')}`
+const migrationUserName = `invitation_m_${crypto.randomBytes(6).toString('hex')}`
+const runtimeUserName = `invitation_r_${crypto.randomBytes(6).toString('hex')}`
+const runtimeDdlProbeTableName = `invitation_runtime_ddl_${crypto.randomBytes(6).toString('hex')}`
+const migrationUserPassword = crypto.randomBytes(32).toString('hex')
+const runtimeUserPassword = crypto.randomBytes(32).toString('hex')
+assert.match(migrationUserPassword, SAFE_TEST_PASSWORD)
+assert.match(runtimeUserPassword, SAFE_TEST_PASSWORD)
 const mysqlOptions = { host: dbConfig.host, port: dbConfig.port, user: dbConfig.user, password: dbConfig.password }
 const root = await mysql.createConnection({ ...mysqlOptions, multipleStatements: true, timezone: 'Z' })
+const databaseResource = createMysqlResource(databaseName)
+let migrationUserResource = null
+let runtimeUserResource = null
+let migrationPool = null
 let pool = null
-let owned = false
 let testError = null
 try {
-  await root.query(`CREATE DATABASE ${quoteDatabase(databaseName)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
-  owned = true
-  pool = mysql.createPool({ ...mysqlOptions, database: databaseName, multipleStatements: true,
+  testUserHost = await resolveInvitationMysqlClientHost(root)
+  ;({ migrationUserResource, runtimeUserResource } = createInvitationMysqlTestUserResources({
+    clientHost: testUserHost,
+    migrationUserName,
+    runtimeUserName
+  }))
+  await createDatabaseResource(root, databaseResource, { quoteDatabase })
+  await provisionInvitationMysqlTestUsers({
+    root,
+    databaseName,
+    migrationUserResource,
+    runtimeUserResource,
+    migrationUserPassword,
+    runtimeUserPassword,
+    quoteDatabase,
+    quoteTestAccount
+  })
+
+  migrationPool = mysql.createPool({ host: EXPECTED_HOST, port: EXPECTED_PORT, user: migrationUserName,
+    password: migrationUserPassword, database: databaseName, multipleStatements: true,
     connectionLimit: 6, supportBigNumbers: true, bigNumberStrings: true, timezone: 'Z' })
-  await pool.query(`CREATE TABLE users (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    status VARCHAR(32) NOT NULL DEFAULT 'active',
-    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    last_login_at DATETIME(3) NULL DEFAULT NULL
-  ) ENGINE=InnoDB`)
-  await pool.query(`CREATE TABLE wechat_user_bindings (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    user_id BIGINT UNSIGNED NOT NULL,
-    openid VARCHAR(191) NOT NULL,
-    unionid VARCHAR(191) NULL,
-    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-    UNIQUE KEY uk_wechat_user_bindings_openid (openid),
-    KEY idx_wechat_user_bindings_user_id (user_id)
-  ) ENGINE=InnoDB`)
-  await pool.query(`INSERT INTO users (id) VALUES
-    (100),(110),(201),(202),(203),(204),(205),(206),(207),(208),(209),(210),(211),(212),
-    (501),(502),(503),(504),(505),(506),(507),(508)`)
-  const [phoneMigration, entitlementMigration, transactionMigration, canonicalMigration, releaseMigration] = await Promise.all([
-    readFile(phoneMigrationUrl, 'utf8'), readFile(entitlementMigrationUrl, 'utf8'),
-    readFile(transactionMigrationUrl, 'utf8'), readFile(migrationUrl, 'utf8'), readFile(releaseMigrationUrl, 'utf8')
+  const executedMigrations = await runInvitationRepositoryMigrations(migrationPool)
+  assert.deepEqual(executedMigrations, INVITATION_MIGRATION_FILES)
+  await migrationPool.end()
+  migrationPool = null
+
+  const [canonicalMigration, releaseMigration] = await Promise.all([
+    readFile(migrationUrl, 'utf8'), readFile(releaseMigrationUrl, 'utf8')
   ])
   assert.equal(releaseMigration, canonicalMigration)
-  await pool.query(phoneMigration)
-  await pool.query(`ALTER TABLE user_phone_bindings
-    ADD COLUMN campaign_phone_identity_hash BINARY(32) NULL DEFAULT NULL,
-    ADD COLUMN campaign_phone_hash_version VARCHAR(16) NULL DEFAULT NULL,
-    ADD KEY idx_user_phone_bindings_campaign_identity (campaign_phone_identity_hash)`)
-  await pool.query(entitlementMigration)
-  await pool.query(transactionMigration)
-  await pool.query(canonicalMigration)
-  await pool.query(releaseMigration)
+  assert.equal(canonicalLfSha256(canonicalMigration), EXPECTED_011_LF_SHA256)
+  assert.equal(canonicalLfSha256(releaseMigration), EXPECTED_011_LF_SHA256)
+
+  pool = mysql.createPool({ host: EXPECTED_HOST, port: EXPECTED_PORT, user: runtimeUserName,
+    password: runtimeUserPassword, database: databaseName, multipleStatements: true,
+    connectionLimit: 6, supportBigNumbers: true, bigNumberStrings: true, timezone: 'Z' })
+  await assertRuntimeDdlDeniedAndAbsent({
+    runtimePool: pool,
+    inspectionConnection: root,
+    databaseName,
+    tableName: runtimeDdlProbeTableName
+  })
+  const [seedUsers] = await pool.query(`INSERT INTO users (id) VALUES
+    (100),(110),(201),(202),(203),(204),(205),(206),(207),(208),(209),(210),(211),(212),
+    (501),(502),(503),(504),(505),(506),(507),(508)`)
+  assert.equal(parseDatabaseSafeInteger(seedUsers.affectedRows, 'seed users affectedRows'), 22)
 
   const [tables] = await pool.execute(`SELECT TABLE_NAME, ENGINE FROM INFORMATION_SCHEMA.TABLES
     WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN ('invitation_share_credentials', 'invitation_registration_relations')`, [databaseName])
   assert.equal(tables.length, 2)
   assert(tables.every((row) => row.ENGINE === 'InnoDB'))
 
-  const store = createInvitationStore({ env: {
-    INVITATION_TOKEN_HMAC_SECRET: 'mysql-invitation-token-secret-0123456789abcdef',
-    INVITATION_CANDIDATE_HMAC_SECRET: 'mysql-candidate-receipt-secret-0123456789abcdef'
-  } })
+  const formalSecrets = Object.freeze({
+    appid: 'wx-mysql-formal-http-app',
+    jwtSecret: crypto.randomBytes(32).toString('hex'),
+    phoneHashSecret: crypto.randomBytes(32).toString('hex'),
+    campaignPhoneIdentityHashSecret: crypto.randomBytes(32).toString('hex'),
+    tokenSecret: crypto.randomBytes(32).toString('hex'),
+    candidateSecret: crypto.randomBytes(32).toString('hex')
+  })
+  await runInvitationFormalHttpMysqlScenarios({ pool, ...formalSecrets, now: new Date() })
+
+  const directTokenSecret = crypto.randomBytes(32).toString('hex')
+  const directCandidateSecret = crypto.randomBytes(32).toString('hex')
+  const directPhoneSecret = crypto.randomBytes(32).toString('hex')
+  const store = createInvitationStore({ tokenSecret: directTokenSecret, candidateSecret: directCandidateSecret })
   let activePhoneInsertBarrier = null
   let activeWechatInsertBarrier = null
+  let activeBeforeUnifiedUserLockBarrier = null
   const identityStore = createIdentityStore({
     pool,
     enableTestHooks: true,
@@ -118,14 +186,24 @@ try {
       async beforePhoneBindingInsert() { if (activePhoneInsertBarrier) await activePhoneInsertBarrier.wait() },
       async beforeWechatBindingInsert() { if (activeWechatInsertBarrier) await activeWechatInsertBarrier.wait() }
     },
-    phoneHashSecret: 'mysql-phone-hash-secret-0123456789abcdef',
+    phoneHashSecret: directPhoneSecret,
     campaignPhoneIdentityFactory: async normalizedPhone => ({
       campaignPhoneIdentityHash: crypto.createHash('sha256').update(`campaign:${normalizedPhone}`).digest(),
       campaignPhoneHashVersion: 'v1'
     })
   })
   const entitlementStore = createUserEntitlementStore({ pool })
-  const registrationDependencies = { identityStore, entitlementStore, invitationStore: store }
+  const registrationDependencies = {
+    identityStore,
+    entitlementStore,
+    invitationStore: store,
+    enableTestHooks: true,
+    testHooks: {
+      async beforeUnifiedUserLock() {
+        if (activeBeforeUnifiedUserLockBarrier) await activeBeforeUnifiedUserLockBarrier.wait()
+      }
+    }
+  }
   async function completeRegistration(input) {
     const connection = await pool.getConnection()
     try {
@@ -144,16 +222,40 @@ try {
       trustedCandidateSubject: missingInviterSubject
     }))
   const [missingInviterDelete] = await pool.execute('DELETE FROM users WHERE id=508')
-  assert.equal(missingInviterDelete.affectedRows, 1)
+  assert.equal(databaseSafeInteger(missingInviterDelete.affectedRows, 'missing inviter delete affectedRows'), 1)
+  const missingInviteeOpenid = 'openid-missing-inviter-new-user'
+  const [missingInviteeUserInsert] = await pool.execute(
+    'INSERT INTO users (status, created_at) VALUES (?, UTC_TIMESTAMP(3))',
+    ['active']
+  )
+  assert.equal(parseDatabaseSafeInteger(
+    missingInviteeUserInsert.affectedRows,
+    'missing inviter invitee user affectedRows'
+  ), 1)
+  const missingInviteeUserId = parseDatabaseInsertId(
+    missingInviteeUserInsert.insertId,
+    'missing inviter invitee user insertId'
+  ).toString()
+  const [missingInviteeWechatInsert] = await pool.execute(`INSERT INTO wechat_user_bindings
+    (user_id, openid, unionid, created_at, updated_at)
+    VALUES (?, ?, NULL, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))`,
+  [missingInviteeUserId, missingInviteeOpenid])
+  assert.equal(parseDatabaseSafeInteger(
+    missingInviteeWechatInsert.affectedRows,
+    'missing inviter invitee WeChat affectedRows'
+  ), 1)
   const preparedMissingInviter = await identityStore.prepareWechatPhoneIdentityForTransaction({
-    openid: 'openid-missing-inviter-new-user',
+    openid: missingInviteeOpenid,
     phone: { phoneNumber: '13600000508', countryCode: '86' }
   })
   const missingInviterRegistration = await completeRegistration({
     preparedIdentity: preparedMissingInviter,
     candidateReceipt: missingInviterCandidate.candidateReceipt,
-    trustedCandidateSubject: missingInviterSubject
+    trustedCandidateSubject: missingInviterSubject,
+    candidateSessionUserId: missingInviteeUserId,
+    candidateOpenid: missingInviteeOpenid
   })
+  assert.equal(missingInviterRegistration.identity.id, missingInviteeUserId)
   assert.equal(missingInviterRegistration.identity.isFirstPhoneRegistration, true)
   assert.equal(missingInviterRegistration.registrationBonus.transaction.transactionType, 'REGISTER_BONUS')
   assert.equal(missingInviterRegistration.invitation.relationStatus, 'FINAL')
@@ -171,8 +273,10 @@ try {
   [missingInviterRegistration.identity.id, missingInviterRegistration.identity.id,
     missingInviterCandidate.invitationId, missingInviterRegistration.identity.id])
   assert.deepEqual([
-    Number(missingInviterFacts.phone_count), Number(missingInviterFacts.bonus_count),
-    Number(missingInviterFacts.final_count), Number(missingInviterFacts.share_reward_count)
+    databaseSafeInteger(missingInviterFacts.phone_count, 'missing inviter phone COUNT'),
+    databaseSafeInteger(missingInviterFacts.bonus_count, 'missing inviter bonus COUNT'),
+    databaseSafeInteger(missingInviterFacts.final_count, 'missing inviter FINAL COUNT'),
+    databaseSafeInteger(missingInviterFacts.share_reward_count, 'missing inviter SHARE_REWARD COUNT')
   ], [1, 1, 1, 0])
 
   const share = await inTransaction(pool, (context) => store.createShareCredentialInTransaction(context, { inviterUserId: '100' }))
@@ -263,29 +367,54 @@ try {
   const preparedCrossB = await identityStore.prepareWechatPhoneIdentityForTransaction({
     openid: 'openid-cross-b', phone: { phoneNumber: '13800000502', countryCode: '86' }
   })
-  const crossFullResults = await Promise.all([
-    completeRegistration({ preparedIdentity: preparedCrossA, candidateReceipt: crossCandidateA.candidateReceipt,
-      trustedCandidateSubject: crossSubjectA }),
-    completeRegistration({ preparedIdentity: preparedCrossB, candidateReceipt: crossCandidateB.candidateReceipt,
-      trustedCandidateSubject: crossSubjectB })
-  ])
+  const crossPreLockBarrier = createTwoPartyBarrier({ timeoutMs: 5000 })
+  activeBeforeUnifiedUserLockBarrier = crossPreLockBarrier
+  let crossFullResults
+  try {
+    crossFullResults = await Promise.all([
+      runBarrierParticipant(crossPreLockBarrier, () => completeRegistration({
+        preparedIdentity: preparedCrossA, candidateReceipt: crossCandidateA.candidateReceipt,
+        trustedCandidateSubject: crossSubjectA, candidateSessionUserId: '501', candidateOpenid: 'openid-cross-a'
+      })),
+      runBarrierParticipant(crossPreLockBarrier, () => completeRegistration({
+        preparedIdentity: preparedCrossB, candidateReceipt: crossCandidateB.candidateReceipt,
+        trustedCandidateSubject: crossSubjectB, candidateSessionUserId: '502', candidateOpenid: 'openid-cross-b'
+      }))
+    ])
+  } finally {
+    crossPreLockBarrier.abort(new Error('Cross registration finished before the pre-lock barrier settled.'))
+    activeBeforeUnifiedUserLockBarrier = null
+  }
+  assert.equal(crossPreLockBarrier.arrivals, 2)
+  assert.equal(crossPreLockBarrier.settled, true)
+  assert.equal(crossPreLockBarrier.timeoutActive, false)
   assert.deepEqual(crossFullResults.map(result => result.identity.id).sort(), ['501', '502'])
   assert(crossFullResults.every(result => result.registrationBonus.transaction.transactionType === 'REGISTER_BONUS'))
-  assert(crossFullResults.every(result => result.invitation.rewardStatus === 'REWARD_PENDING'))
+  assert.deepEqual(crossFullResults.map(result => result.invitation.rewardStatus).sort(),
+    ['NO_REWARD', 'REWARD_PENDING'])
+  const crossNoReward = crossFullResults.find(result => result.invitation.rewardStatus === 'NO_REWARD').invitation
+  assert.equal(crossNoReward.noRewardReason, 'INVITER_PHONE_REGISTRATION_REQUIRED')
   const [[crossFullFacts]] = await pool.execute(`SELECT
     (SELECT COUNT(*) FROM user_phone_bindings WHERE user_id IN (501,502)) AS phone_count,
     (SELECT COUNT(*) FROM entitlement_transactions WHERE user_id IN (501,502) AND transaction_type='REGISTER_BONUS') AS bonus_count,
     (SELECT COUNT(*) FROM invitation_registration_relations WHERE invitee_user_id IN (501,502) AND relation_status='FINAL') AS final_count,
-    (SELECT COUNT(*) FROM invitation_registration_relations WHERE invitee_user_id IN (501,502) AND reward_slot IS NOT NULL) AS slot_count`)
+    (SELECT COUNT(*) FROM invitation_registration_relations
+      WHERE invitee_user_id IN (501,502) AND reward_status='REWARD_PENDING' AND reward_slot IS NOT NULL) AS pending_slot_count,
+    (SELECT COUNT(*) FROM invitation_registration_relations
+      WHERE invitee_user_id IN (501,502) AND reward_status='NO_REWARD'
+        AND no_reward_reason='INVITER_PHONE_REGISTRATION_REQUIRED' AND reward_slot IS NULL) AS phone_required_count`)
   assert.deepEqual([
-    Number(crossFullFacts.phone_count), Number(crossFullFacts.bonus_count),
-    Number(crossFullFacts.final_count), Number(crossFullFacts.slot_count)
-  ], [2, 2, 2, 2])
+    databaseSafeInteger(crossFullFacts.phone_count, 'cross phone COUNT'),
+    databaseSafeInteger(crossFullFacts.bonus_count, 'cross bonus COUNT'),
+    databaseSafeInteger(crossFullFacts.final_count, 'cross FINAL COUNT'),
+    databaseSafeInteger(crossFullFacts.pending_slot_count, 'cross pending slot COUNT'),
+    databaseSafeInteger(crossFullFacts.phone_required_count, 'cross phone-required COUNT')
+  ], [2, 2, 2, 1, 1])
 
   const raceShareA = await inTransaction(pool, context =>
-    store.createShareCredentialInTransaction(context, { inviterUserId: '505' }))
+    store.createShareCredentialInTransaction(context, { inviterUserId: '501' }))
   const raceShareB = await inTransaction(pool, context =>
-    store.createShareCredentialInTransaction(context, { inviterUserId: '506' }))
+    store.createShareCredentialInTransaction(context, { inviterUserId: '502' }))
   const raceSubjectA = 'server-session:full-phone-race-a'
   const raceSubjectB = 'server-session:full-phone-race-b'
   const raceCandidateA = await inTransaction(pool, context => store.captureNewValidCandidateInTransaction(context, {
@@ -307,11 +436,13 @@ try {
     phoneRaceResults = await Promise.allSettled([
       runBarrierParticipant(phoneInsertBarrier, () => completeRegistration({
         preparedIdentity: preparedRaceA, candidateReceipt: raceCandidateA.candidateReceipt,
-        trustedCandidateSubject: raceSubjectA
+        trustedCandidateSubject: raceSubjectA,
+        candidateSessionUserId: '503', candidateOpenid: 'openid-phone-race-a'
       })),
       runBarrierParticipant(phoneInsertBarrier, () => completeRegistration({
         preparedIdentity: preparedRaceB, candidateReceipt: raceCandidateB.candidateReceipt,
-        trustedCandidateSubject: raceSubjectB
+        trustedCandidateSubject: raceSubjectB,
+        candidateSessionUserId: '504', candidateOpenid: 'openid-phone-race-b'
       }))
     ])
   } finally {
@@ -326,14 +457,20 @@ try {
   const phoneRaceFailure = phoneRaceResults.find(result => result.status === 'rejected').reason
   assert.equal(phoneRaceFailure.code, 'IDENTITY_CONFLICT')
   assert.notEqual(phoneRaceFailure.code, 'ER_DUP_ENTRY')
+  const fulfilledPhoneRace = phoneRaceResults.find(result => result.status === 'fulfilled').value
+  assert.equal(fulfilledPhoneRace.invitation.relationStatus, 'FINAL')
+  assert.equal(fulfilledPhoneRace.invitation.rewardStatus, 'REWARD_PENDING')
+  assert.equal(fulfilledPhoneRace.invitation.rewardReserved, true)
   const [[phoneRaceFacts]] = await pool.execute(`SELECT
     (SELECT COUNT(*) FROM user_phone_bindings WHERE user_id IN (503,504)) AS phone_count,
     (SELECT COUNT(*) FROM entitlement_transactions WHERE user_id IN (503,504) AND transaction_type='REGISTER_BONUS') AS bonus_count,
     (SELECT COUNT(*) FROM invitation_registration_relations WHERE invitee_user_id IN (503,504) AND relation_status='FINAL') AS final_count,
     (SELECT COUNT(*) FROM invitation_registration_relations WHERE invitee_user_id IN (503,504) AND reward_slot IS NOT NULL) AS slot_count`)
   assert.deepEqual([
-    Number(phoneRaceFacts.phone_count), Number(phoneRaceFacts.bonus_count),
-    Number(phoneRaceFacts.final_count), Number(phoneRaceFacts.slot_count)
+    databaseSafeInteger(phoneRaceFacts.phone_count, 'phone race phone COUNT'),
+    databaseSafeInteger(phoneRaceFacts.bonus_count, 'phone race bonus COUNT'),
+    databaseSafeInteger(phoneRaceFacts.final_count, 'phone race FINAL COUNT'),
+    databaseSafeInteger(phoneRaceFacts.slot_count, 'phone race slot COUNT')
   ], [1, 1, 1, 1])
 
   const [registrationBonusWindows] = await pool.execute(`SELECT user_id,
@@ -342,10 +479,11 @@ try {
       MICROSECOND(expires_at) AS expires_microseconds
     FROM entitlement_transactions WHERE transaction_type='REGISTER_BONUS' AND user_id IN (501,502,503,504)`)
   assert(registrationBonusWindows.length === 3)
-  assert(registrationBonusWindows.every(row => Number(row.exact_year) === 1))
-  assert(registrationBonusWindows.every(row => Number(row.created_microseconds) === 0 && Number(row.expires_microseconds) === 0))
+  assert(registrationBonusWindows.every(row => databaseSafeInteger(row.exact_year, 'exact year result') === 1))
+  assert(registrationBonusWindows.every(row =>
+    databaseSafeInteger(row.created_microseconds, 'created microseconds') === 0 &&
+    databaseSafeInteger(row.expires_microseconds, 'expires microseconds') === 0))
 
-  const fulfilledPhoneRace = phoneRaceResults.find(result => result.status === 'fulfilled').value
   await inTransaction(pool, context =>
     entitlementStore.ensureRegistrationBonusInTransaction(context, fulfilledPhoneRace.identity.id))
   await pool.execute(`UPDATE entitlement_transactions SET expires_at=DATE_SUB(expires_at, INTERVAL 1 SECOND)
@@ -371,25 +509,17 @@ try {
     VALUES (?,507,'REGISTER_BONUS',30,30,'registration','507','2025-02-28 12:34:56',
      'registration_bonus:507','system','auth-registration','Registration bonus complete-content access quota.',
      '2024-02-29 12:34:56')`, [crypto.randomUUID()])
-  await pool.execute('UPDATE user_entitlements SET last_transaction_id=? WHERE user_id=507', [leapInsert.insertId])
+  assert.equal(databaseSafeInteger(leapInsert.affectedRows, 'leap insert affectedRows'), 1)
+  const leapInsertId = parseDatabaseInsertId(leapInsert.insertId, 'entitlement transaction insertId').toString()
+  const [leapSnapshotUpdate] = await pool.execute(
+    'UPDATE user_entitlements SET last_transaction_id=? WHERE user_id=507', [leapInsertId])
+  assert.equal(databaseSafeInteger(leapSnapshotUpdate.affectedRows, 'leap snapshot affectedRows'), 1)
   const leapReplay = await inTransaction(pool, context =>
     entitlementStore.ensureRegistrationBonusInTransaction(context, '507'))
   assert.equal(leapReplay.idempotent, true)
   assert.equal(leapReplay.transaction.createdAt, '2024-02-29T12:34:56.000Z')
   assert.equal(leapReplay.transaction.expiresAt, '2025-02-28T12:34:56.000Z')
 
-  const sameOpenidShareA = await inTransaction(pool, context =>
-    store.createShareCredentialInTransaction(context, { inviterUserId: '505' }))
-  const sameOpenidShareB = await inTransaction(pool, context =>
-    store.createShareCredentialInTransaction(context, { inviterUserId: '506' }))
-  const sameOpenidSubjectA = 'server-session:same-new-openid-a'
-  const sameOpenidSubjectB = 'server-session:same-new-openid-b'
-  const sameOpenidCandidateA = await inTransaction(pool, context => store.captureNewValidCandidateInTransaction(context, {
-    token: sameOpenidShareA.token, trustedCandidateSubject: sameOpenidSubjectA
-  }))
-  const sameOpenidCandidateB = await inTransaction(pool, context => store.captureNewValidCandidateInTransaction(context, {
-    token: sameOpenidShareB.token, trustedCandidateSubject: sameOpenidSubjectB
-  }))
   const sameOpenidPreparedA = await identityStore.prepareWechatPhoneIdentityForTransaction({
     openid: 'openid-new-concurrent', phone: { phoneNumber: '13700000999', countryCode: '86' }
   })
@@ -402,12 +532,10 @@ try {
   try {
     sameOpenidResults = await Promise.allSettled([
       runBarrierParticipant(wechatInsertBarrier, () => completeRegistration({
-        preparedIdentity: sameOpenidPreparedA,
-        candidateReceipt: sameOpenidCandidateA.candidateReceipt, trustedCandidateSubject: sameOpenidSubjectA
+        preparedIdentity: sameOpenidPreparedA
       })),
       runBarrierParticipant(wechatInsertBarrier, () => completeRegistration({
-        preparedIdentity: sameOpenidPreparedB,
-        candidateReceipt: sameOpenidCandidateB.candidateReceipt, trustedCandidateSubject: sameOpenidSubjectB
+        preparedIdentity: sameOpenidPreparedB
       }))
     ])
   } finally {
@@ -418,6 +546,7 @@ try {
     'WeChat insert race failed before reaching its expected concurrent result.')
   assert.equal(wechatInsertBarrier.arrivals, 2)
   assert(sameOpenidResults.every(result => result.status === 'fulfilled'))
+  assert(sameOpenidResults.every(result => result.value.invitation.relationStatus === null))
   const sameOpenidUserIds = sameOpenidResults.map(result => result.value.identity.id)
   assert.equal(new Set(sameOpenidUserIds).size, 1)
   const sameOpenidUserId = sameOpenidUserIds[0]
@@ -429,12 +558,16 @@ try {
     (SELECT COUNT(*) FROM invitation_registration_relations WHERE invitee_user_id=? AND reward_slot IS NOT NULL) AS slot_count`,
   [sameOpenidUserId, sameOpenidUserId, sameOpenidUserId, sameOpenidUserId])
   assert.deepEqual([
-    Number(sameOpenidFacts.wechat_count), Number(sameOpenidFacts.phone_count), Number(sameOpenidFacts.bonus_count),
-    Number(sameOpenidFacts.final_count), Number(sameOpenidFacts.slot_count)
-  ], [1, 1, 1, 1, 1])
+    databaseSafeInteger(sameOpenidFacts.wechat_count, 'same openid WeChat COUNT'),
+    databaseSafeInteger(sameOpenidFacts.phone_count, 'same openid phone COUNT'),
+    databaseSafeInteger(sameOpenidFacts.bonus_count, 'same openid bonus COUNT'),
+    databaseSafeInteger(sameOpenidFacts.final_count, 'same openid FINAL COUNT'),
+    databaseSafeInteger(sameOpenidFacts.slot_count, 'same openid slot COUNT')
+  ], [1, 1, 1, 0, 0])
 
   async function expectConstraint(action) {
-    await assert.rejects(action, (error) => error && (error.code === 'ER_CHECK_CONSTRAINT_VIOLATED' || Number(error.errno) === 3819))
+    await assert.rejects(action, (error) => error && (error.code === 'ER_CHECK_CONSTRAINT_VIOLATED' ||
+      databaseSafeInteger(error.errno, 'constraint errno') === 3819))
   }
   async function insertGranted(inviterId, inviteeId, grantedAt, expiresAt) {
     return pool.execute(`INSERT INTO invitation_registration_relations
@@ -446,6 +579,20 @@ try {
        ?, ?, ?, ?, ?, ?)`, [crypto.randomUUID(), inviterId, inviteeId, crypto.randomBytes(32), crypto.randomBytes(32),
       grantedAt, grantedAt, expiresAt, crypto.randomUUID(), grantedAt, grantedAt])
   }
+  await pool.execute(`INSERT INTO invitation_registration_relations
+    (invitation_id, share_credential_id, inviter_user_id, invitee_user_id, candidate_subject_digest,
+     candidate_receipt_digest, candidate_key_version, relation_status, qualification_status, reward_status,
+     no_reward_reason, candidate_captured_at, relation_locked_at)
+    VALUES (?, 1, 307, 407, ?, ?, 'v1', 'FINAL', 'INELIGIBLE', 'NO_REWARD',
+     'INVITER_PHONE_REGISTRATION_REQUIRED', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))`,
+  [crypto.randomUUID(), crypto.randomBytes(32), crypto.randomBytes(32)])
+  await expectConstraint(() => pool.execute(`INSERT INTO invitation_registration_relations
+    (invitation_id, share_credential_id, inviter_user_id, invitee_user_id, candidate_subject_digest,
+     candidate_receipt_digest, candidate_key_version, relation_status, qualification_status, reward_status,
+     no_reward_reason, reward_slot, reward_amount, reward_reserved_at, candidate_captured_at, relation_locked_at)
+    VALUES (?, 1, 308, 408, ?, ?, 'v1', 'FINAL', 'INELIGIBLE', 'NO_REWARD',
+     'INVITER_PHONE_REGISTRATION_REQUIRED', 1, 30, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))`,
+  [crypto.randomUUID(), crypto.randomBytes(32), crypto.randomBytes(32)]))
   await insertGranted(301, 401, '2024-02-29 12:34:56.789', '2025-02-28 12:34:56.789')
   await insertGranted(302, 402, '2026-09-24 01:02:03.456', '2027-09-24 01:02:03.456')
   await expectConstraint(() => insertGranted(303, 403, '2026-09-24 01:02:03.456', '2027-09-24 01:02:03.455'))
@@ -464,6 +611,31 @@ try {
     VALUES (?, 1, 306, 406, ?, ?, 'v1', 'FINAL', 'ELIGIBLE', 'MANUAL_REVIEW',
      1, 30, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))`,
   [crypto.randomUUID(), crypto.randomBytes(32), crypto.randomBytes(32)]))
+
+  const qualifiedDirectInviterIds = Object.freeze(['100', '110', '208', '210'])
+  async function insertQualifiedDirectInviterPhoneFixture(userId) {
+    assert(qualifiedDirectInviterIds.includes(userId), 'direct inviter phone fixture user is not allowed')
+    const phoneHash = crypto.createHash('sha256').update(`qualified-direct-inviter:${userId}`).digest('hex')
+    assert.match(phoneHash, /^[a-f0-9]{64}$/u)
+    const [insert] = await pool.execute(`INSERT INTO user_phone_bindings
+      (user_id, phone_hash, phone_masked, hash_version, country_code, status)
+      VALUES (?, ?, ?, 'v1', '86', 'active')`,
+    [userId, phoneHash, `138****${userId.padStart(4, '0')}`])
+    assert.equal(parseDatabaseSafeInteger(
+      insert.affectedRows,
+      `qualified direct inviter ${userId} phone affectedRows`
+    ), 1)
+  }
+  for (const userId of qualifiedDirectInviterIds) {
+    await insertQualifiedDirectInviterPhoneFixture(userId)
+  }
+  const [qualifiedDirectInviterRows] = await pool.execute(`SELECT user_id, COUNT(*) AS active_count
+    FROM user_phone_bindings
+    WHERE user_id IN (100,110,208,210) AND status='active'
+    GROUP BY user_id ORDER BY user_id`)
+  assert.deepEqual(qualifiedDirectInviterRows.map(row => String(row.user_id)), qualifiedDirectInviterIds)
+  assert(qualifiedDirectInviterRows.every(row =>
+    parseDatabaseSafeInteger(row.active_count, `qualified direct inviter ${row.user_id} active COUNT`) === 1))
 
   let subjectSequence = 0
   const candidate = (subject = `server-session:${++subjectSequence}`) => inTransaction(pool, (context) =>
@@ -484,8 +656,8 @@ try {
   assert.equal(concurrentReplayResults[0].invitationId, concurrentReplayResults[1].invitationId)
   const [[replayCounts]] = await pool.execute(`SELECT COUNT(*) AS final_count, COUNT(DISTINCT reward_slot) AS slot_count
     FROM invitation_registration_relations WHERE invitee_user_id=212 AND relation_status='FINAL'`)
-  assert.equal(Number(replayCounts.final_count), 1)
-  assert.equal(Number(replayCounts.slot_count), 1)
+  assert.equal(databaseSafeInteger(replayCounts.final_count, 'replay FINAL COUNT'), 1)
+  assert.equal(databaseSafeInteger(replayCounts.slot_count, 'replay slot COUNT'), 1)
 
   const firstSubject = 'server-session:first'
   const first = { ...(await candidate(firstSubject)), subject: firstSubject }
@@ -526,8 +698,8 @@ try {
   const [[counts]] = await pool.query(`SELECT SUM(reward_status = 'REWARD_PENDING') AS pending_count,
     SUM(no_reward_reason = 'INVITER_REWARD_LIMIT_REACHED') AS capped_count
     FROM invitation_registration_relations WHERE inviter_user_id = 100`)
-  assert.equal(Number(counts.pending_count), 4)
-  assert.equal(Number(counts.capped_count), 1)
+  assert.equal(databaseSafeInteger(counts.pending_count, 'pending SUM'), 4)
+  assert.equal(databaseSafeInteger(counts.capped_count, 'capped SUM'), 1)
 
   const duplicate = { ...(await candidate('server-session:duplicate')), subject: 'server-session:duplicate' }
   const duplicateReplay = await reserve(duplicate, '201')
@@ -557,11 +729,22 @@ try {
      candidate_key_version, relation_status, qualification_status, reward_status, candidate_captured_at, relation_locked_at)
     VALUES (?, 1, 100, 209, ?, ?, 'v1', 'FINAL', 'ELIGIBLE', 'REWARD_PENDING', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))`,
   [crypto.randomUUID(), crypto.randomBytes(32), crypto.randomBytes(32)]),
-  (error) => error && (error.code === 'ER_CHECK_CONSTRAINT_VIOLATED' || Number(error.errno) === 3819))
+  (error) => error && (error.code === 'ER_CHECK_CONSTRAINT_VIOLATED' ||
+    databaseSafeInteger(error.errno, 'constraint errno') === 3819))
 
 } catch (error) {
   testError = error
 }
-const cleanupErrors = await cleanupInvitationMysqlTest({ pool, root, owned, databaseName, quoteDatabase })
+const cleanupErrors = await cleanupInvitationMysqlTest({
+  pools: [
+    { stage: 'runtime pool.end', pool },
+    { stage: 'migration pool.end', pool: migrationPool }
+  ],
+  root,
+  databaseResource,
+  userResources: [migrationUserResource, runtimeUserResource],
+  quoteDatabase,
+  quoteTestAccount
+})
 throwInvitationMysqlTestErrors(testError, cleanupErrors)
 console.log('invitation isolated MySQL integration tests passed')

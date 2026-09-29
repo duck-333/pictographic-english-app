@@ -148,6 +148,10 @@ function createFakeConnection(sharedState, options = {}) {
       const compactSql = sql.replace(/\s+/g, ' ').trim()
       const state = activeState()
 
+      if (/^SELECT id FROM `users` WHERE id IN/i.test(compactSql)) {
+        return [values.map(id => ({ id }))]
+      }
+
       if (/SELECT user_id, openid, unionid FROM `wechat_user_bindings`/i.test(compactSql)) {
         const row = state.wechatBindings.find((binding) => binding.openid === values[0])
         return [row ? [cloneRecord(row)] : []]

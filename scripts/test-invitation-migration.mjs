@@ -10,6 +10,7 @@ for (const value of [
   "ENUM('CANDIDATE', 'SUPERSEDED', 'FINAL')",
   'uk_invitation_relation_active_subject', 'uk_invitation_relation_invitee',
   'uk_invitation_relation_reward_slot', 'chk_invitation_relation_compensation',
+  'INVITER_PHONE_REGISTRATION_REQUIRED',
   "reward_expires_at\` = DATE_ADD(\`reward_granted_at\`, INTERVAL 1 YEAR)",
   'reward_expires_at\` IS NOT NULL', 'reward_amount\` IS NOT NULL',
   "reward_status\` = 'MANUAL_REVIEW'", 'last_error_code\` IS NOT NULL'
