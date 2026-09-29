@@ -20,6 +20,7 @@
       <text v-if="discoveryFailed" class="message">暂未完整获取历史购买记录，可稍后重试。</text>
       <button v-if="discoveryFailed" class="secondary" :disabled="busy || !queryAllowed" @tap="discover()">重新查找购买记录</button>
       <button v-if="nextCursor" class="secondary" :disabled="busy || !queryAllowed" @tap="discover(nextCursor)">加载更多</button>
+      <button class="secondary" open-type="share">分享给好友</button>
       <button class="secondary" @tap="backToLearning">返回学习</button>
     </view>
     <view v-if="records.length" class="card">
@@ -48,6 +49,12 @@ export default {
   computed: {
     pendingRecord() { return this.records.find((r) => !['granted', 'delivered', 'manual_review', 'closed', 'failed'].includes(r.hint)) || null },
     expiryText() { return String((this.entitlement && this.entitlement.membershipExpireAt) || '').slice(0, 10) }
+  },
+  onShareAppMessage() {
+    return {
+      title: '象形英语｜以形释义解码单词',
+      path: '/pages/index/index'
+    }
   },
   onShow() {
     if (this.pageDisposed) return
