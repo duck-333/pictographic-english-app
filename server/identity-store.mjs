@@ -30,6 +30,21 @@ function normalizeString(value) {
   return String(value || '').trim()
 }
 
+function isValidWechatIdentityValue(value) {
+  return typeof value === 'string' &&
+    Buffer.byteLength(value, 'utf8') >= 1 &&
+    Buffer.byteLength(value, 'utf8') <= 128 &&
+    value === value.trim() &&
+    !/[\s\u0000-\u001f\u007f]/u.test(value)
+}
+
+function requireWechatIdentityValue(value, label, code) {
+  if (!isValidWechatIdentityValue(value)) {
+    throw createIdentityStoreError(`${label} is invalid.`, { code, statusCode: 400 })
+  }
+  return value
+}
+
 function createIdentityStoreError(message, options = {}) {
   const error = new Error(message)
   error.code = options.code || 'IDENTITY_STORE_ERROR'
@@ -462,6 +477,32 @@ export async function findIdentityBinding(connection, identity = {}) {
   }
 }
 
+async function lockIdentityParticipantsOnRawConnection(connection, identity = {}) {
+  const bindings = await findIdentityBinding(connection, identity)
+  const userIds = [...new Set([
+    bindings.wechatBinding?.userId,
+    bindings.phoneBinding?.userId
+  ].filter(Boolean))].sort((left, right) => {
+    if (!/^[1-9]\d{0,19}$/u.test(left) || !/^[1-9]\d{0,19}$/u.test(right)) {
+      throw createIdentityConflictError()
+    }
+    const a = BigInt(left)
+    const b = BigInt(right)
+    if (a > 18446744073709551615n || b > 18446744073709551615n) throw createIdentityConflictError()
+    return a < b ? -1 : a > b ? 1 : 0
+  })
+  if (!userIds.length) return
+  const placeholders = userIds.map(() => '?').join(', ')
+  const [rows] = await connection.execute(
+    `SELECT id FROM ${quoteIdentifier(USERS_TABLE)} WHERE id IN (${placeholders}) ORDER BY id FOR UPDATE`,
+    userIds
+  )
+  if (!Array.isArray(rows) || rows.length !== userIds.length ||
+      rows.some((row, index) => String(row.id) !== userIds[index])) {
+    throw createIdentityConflictError()
+  }
+}
+
 async function updateUserLogin(connection, userId, timestamp) {
   const userColumns = await getTableColumns(connection, USERS_TABLE)
   const userUpdate = buildUpdate(
@@ -691,7 +732,7 @@ export function createIdentityStore(options = {}) {
   }
 
   async function findWechatBindingForPayment(openidValue) {
-    if (typeof openidValue !== 'string' || !openidValue || !openidValue.trim()) {
+    if (!isValidWechatIdentityValue(openidValue)) {
       throw createPaymentIdentityAmbiguousError()
     }
     const openid = openidValue
@@ -759,8 +800,7 @@ export function createIdentityStore(options = {}) {
         result = null
       } else if (
         rows.length !== 1 || !rows[0] || typeof rows[0] !== 'object' ||
-        typeof rows[0].openid !== 'string' || !rows[0].openid ||
-        rows[0].openid.length > 128 || /[\s\u0000-\u001f\u007f]/u.test(rows[0].openid)
+        !isValidWechatIdentityValue(rows[0].openid)
       ) {
         throw createPaymentIdentityAmbiguousError()
       } else {
@@ -784,14 +824,11 @@ export function createIdentityStore(options = {}) {
   }
 
   async function prepareWechatPhoneIdentity(identity = {}) {
-    const openid = normalizeString(identity.openid)
+    const openid = requireWechatIdentityValue(identity.openid, 'Wechat openid', 'WECHAT_OPENID_REQUIRED')
     const unionid = normalizeString(identity.unionid)
-    if (!openid) {
-      throw createIdentityStoreError('Wechat openid is required.', {
-        code: 'WECHAT_OPENID_REQUIRED',
-        statusCode: 400
-      })
-    }
+    const appid = identity.appid === undefined || identity.appid === null || identity.appid === ''
+      ? ''
+      : requireWechatIdentityValue(identity.appid, 'Wechat app id', 'WECHAT_APPID_INVALID')
 
     const trustedPhone = identity.phone
     const normalizedPhone = normalizePhone(trustedPhone, {
@@ -819,7 +856,7 @@ export function createIdentityStore(options = {}) {
       ...campaignPhoneIdentity
     }
 
-    const prepared = Object.freeze({ openid, unionid, phoneIdentity: Object.freeze(phoneIdentity) })
+    const prepared = Object.freeze({ openid, unionid, appid, phoneIdentity: Object.freeze(phoneIdentity) })
     preparedPhoneIdentities.add(prepared)
     return prepared
   }
@@ -848,6 +885,15 @@ export function createIdentityStore(options = {}) {
     })
   }
 
+  async function verifyWechatBindingOwnerInTransaction(transactionContext, input = {}) {
+    const connection = requireDatabaseTransactionContext(transactionContext)
+    const userId = normalizeString(input.userId)
+    const openid = input.openid
+    if (!userId || !isValidWechatIdentityValue(openid)) return false
+    const binding = await findWechatBinding(connection, openid)
+    return Boolean(binding && binding.userId === userId)
+  }
+
   async function resolveWechatPhoneIdentityInTransaction(transactionContext, preparedIdentity) {
     const connection = requireDatabaseTransactionContext(transactionContext)
     const prepared = requirePreparedPhoneIdentity(preparedIdentity)
@@ -872,6 +918,10 @@ export function createIdentityStore(options = {}) {
     let connectionDisposed = false
     try {
       await connection.beginTransaction()
+      await lockIdentityParticipantsOnRawConnection(connection, {
+        openid,
+        phoneHash: phoneIdentity.phoneHash
+      })
       const result = await resolveIdentityInTransaction(connection, {
         openid,
         unionid,
@@ -987,6 +1037,10 @@ export function createIdentityStore(options = {}) {
       let retryConnectionDisposed = false
       try {
         await retryConnection.beginTransaction()
+        await lockIdentityParticipantsOnRawConnection(retryConnection, {
+          openid: options.openid,
+          phoneHash: options.phoneIdentity.phoneHash
+        })
         const result = await resolveIdentityInTransaction(retryConnection, {
           openid: options.openid,
           unionid: options.unionid,
@@ -1033,6 +1087,7 @@ export function createIdentityStore(options = {}) {
     resolveWechatPhoneIdentity,
     prepareWechatPhoneIdentityForTransaction: prepareWechatPhoneIdentity,
     locateWechatPhoneIdentityParticipantsInTransaction,
+    verifyWechatBindingOwnerInTransaction,
     resolveWechatPhoneIdentityInTransaction
   }
 }

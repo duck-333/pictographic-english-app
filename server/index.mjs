@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { assertUserAuthConfig, createUserSessionToken, requireAdminAuth, requireUserAuth } from './auth.mjs'
 import { createBookBenefitStore } from './book-benefit-store.mjs'
 import { createIdentityStore } from './identity-store.mjs'
+import { createInvitationRegistrationService } from './invitation-registration-service.mjs'
 import { createUserEntitlementStore, ENTITLEMENT_REASONS, ENTITLEMENT_TRANSACTION_TYPES } from './user-entitlement-store.mjs'
 import { createUserFavoritesStore } from './user-favorites-store.mjs'
 import { createUserRecentWordsStore } from './user-recent-words-store.mjs'
@@ -166,15 +167,6 @@ function createContentAccessIdempotencyKey(userId, wordId, clientRequestId) {
   return `content_access:${digest}`
 }
 
-async function ensureRegistrationBonusForUser(user, userEntitlementStore) {
-  if (!user || !userEntitlementStore) return null
-
-  const userId = String(user.id || '').trim()
-  if (!userId) return null
-
-  return await userEntitlementStore.ensureRegistrationBonus(userId)
-}
-
 const SAFE_PHONE_LOGIN_ERROR_MESSAGES = {
   WECHAT_CODE_REQUIRED: 'Login code is required.',
   WECHAT_PHONE_CODE_REQUIRED: 'Phone code is required.',
@@ -194,6 +186,7 @@ const SAFE_PHONE_LOGIN_ERROR_MESSAGES = {
   PHONE_REQUIRED: 'Phone number is required.',
   PHONE_INVALID: 'Phone number is invalid.',
   PHONE_HASH_SECRET_MISSING: 'Phone login is not configured.',
+  INVITATION_REQUEST_INVALID: 'Request is invalid.',
   USER_DB_CONFIG_MISSING: 'User database is not configured.',
   USER_DB_ERROR: 'User database is unavailable.',
   IDENTITY_CONFLICT: 'Identity binding conflict.',
@@ -269,12 +262,65 @@ function getPublicPhoneLoginError(error) {
 
 function sendPhoneLoginError(res, error) {
   const publicError = getPublicPhoneLoginError(error)
-  sendJson(res, publicError.statusCode, {
+  sendNoStoreJson(res, publicError.statusCode, {
     ok: false,
     code: publicError.code,
     message: SAFE_PHONE_LOGIN_ERROR_MESSAGES[publicError.code],
     ...(publicError.diagnosticMarker ? { diagnosticMarker: publicError.diagnosticMarker } : {})
-  })
+  }, true)
+}
+
+const INVITATION_PUBLIC_ERRORS = Object.freeze({
+  INVITATION_PHONE_REGISTRATION_REQUIRED: [409, 'Phone registration is required.'],
+  INVITATION_CREDENTIAL_INVALID: [400, 'Invitation credential is invalid.'],
+  INVITATION_CREDENTIAL_REVOKED: [400, 'Invitation credential is invalid.'],
+  INVITATION_CREDENTIAL_EXPIRED: [400, 'Invitation credential is invalid.'],
+  INVITATION_TOKEN_INVALID: [400, 'Invitation credential is invalid.'],
+  INVITATION_WECHAT_SUBJECT_INVALID: [400, 'Invitation request is invalid.']
+})
+
+function invitationRequestError(message = 'Invitation request is invalid.') {
+  const error = new Error(message)
+  error.code = 'INVITATION_REQUEST_INVALID'
+  error.statusCode = 400
+  return error
+}
+
+function isInvitationSessionUserId(value) {
+  const text = typeof value === 'string' ? value : ''
+  return /^[1-9]\d{0,19}$/u.test(text) && BigInt(text) <= 18446744073709551615n
+}
+
+function requireExactBodyFields(body, allowedFields, requiredFields = []) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw invitationRequestError()
+  if (Object.keys(body).some(field => !allowedFields.has(field))) throw invitationRequestError()
+  if (requiredFields.some(field => typeof body[field] !== 'string' || !body[field])) throw invitationRequestError()
+  return body
+}
+
+function sendInvitationError(res, error) {
+  const rawCode = error && error.code ? String(error.code) : ''
+  const configured = INVITATION_PUBLIC_ERRORS[rawCode]
+  const requestFailure = rawCode === 'INVITATION_REQUEST_INVALID'
+  const statusCode = configured ? configured[0] : requestFailure ? 400 : 503
+  const credentialFailure = [
+    'INVITATION_CREDENTIAL_INVALID',
+    'INVITATION_CREDENTIAL_REVOKED',
+    'INVITATION_CREDENTIAL_EXPIRED',
+    'INVITATION_TOKEN_INVALID'
+  ].includes(rawCode)
+  const code = credentialFailure
+    ? 'INVITATION_CREDENTIAL_INVALID'
+    : configured ? rawCode : requestFailure ? rawCode : 'INVITATION_SERVICE_UNAVAILABLE'
+  const message = configured ? configured[1] : requestFailure
+    ? 'Invitation request is invalid.'
+    : 'Invitation service is unavailable.'
+  sendNoStoreJson(res, statusCode, { ok: false, code, message }, true)
+}
+
+function logInvitationError(operation, error) {
+  const rawCode = error && error.code ? String(error.code) : 'INTERNAL_SERVER_ERROR'
+  console.warn(`invitation-${operation} failed code=${rawCode}`)
 }
 
 function logPhoneLoginError(error, context = {}) {
@@ -837,10 +883,10 @@ async function getOrInitializeUserEntitlement(userId, userEntitlementStore) {
   const existingEntitlement = await userEntitlementStore.getUserEntitlement(userId)
   if (existingEntitlement) return existingEntitlement
 
-  const registrationBonusResult = await userEntitlementStore.ensureRegistrationBonus(userId)
-  const initializedEntitlement = registrationBonusResult && registrationBonusResult.entitlement
-    ? registrationBonusResult.entitlement
-    : await userEntitlementStore.getUserEntitlement(userId)
+  const initializedResult = await userEntitlementStore.ensureUserEntitlement(userId)
+  const initializedEntitlement = initializedResult && initializedResult.entitlement
+    ? initializedResult.entitlement
+    : initializedResult || await userEntitlementStore.getUserEntitlement(userId)
 
   if (!initializedEntitlement) {
     throw createUserEntitlementRequestError('User entitlement initialization failed.', {
@@ -1030,6 +1076,8 @@ export function createApiHandler(options = {}) {
   const userFavoritesStore = options.userFavoritesStore || createUserFavoritesStore(options)
   const userRecentWordsStore = options.userRecentWordsStore || createUserRecentWordsStore(options)
   const identityStore = options.identityStore || createIdentityStore(options)
+  const invitationRegistrationService = options.invitationRegistrationService ||
+    createInvitationRegistrationService(options)
   const bookBenefitStore = options.bookBenefitStore || createBookBenefitStore({
     ...options,
     entitlementStore: userEntitlementStore || undefined
@@ -1272,7 +1320,6 @@ export function createApiHandler(options = {}) {
             return
           }
 
-          await userEntitlementStore.ensureRegistrationBonus(authResult.userId)
           const quotaResult = await userEntitlementStore.consumeQuota({
             userId: authResult.userId,
             amount: 1,
@@ -1338,10 +1385,9 @@ export function createApiHandler(options = {}) {
           const body = await readJsonBody(req)
           const wechatIdentity = await wechatLoginClient.code2Session(body.code)
           const user = await userStore.findOrCreateWechatUser(wechatIdentity)
-          await ensureRegistrationBonusForUser(user, userEntitlementStore)
           const session = createUserSessionToken(user.id, userAuthOptions)
 
-          sendJson(res, 200, {
+          sendNoStoreJson(res, 200, {
             ok: true,
             token: session.token,
             tokenType: 'Bearer',
@@ -1351,7 +1397,7 @@ export function createApiHandler(options = {}) {
               hasWechatBinding: true,
               isNew: Boolean(user.isNew)
             }
-          })
+          }, true)
         } catch (error) {
           const statusCode = Number(error && error.statusCode) || 500
           sendJson(res, statusCode, {
@@ -1369,18 +1415,34 @@ export function createApiHandler(options = {}) {
         let requestId = ''
         try {
           const body = await readJsonBody(req)
+          requireExactBodyFields(body, new Set(['loginCode', 'phoneCode', 'requestId', 'candidateReceipt']))
           requestId = normalizeRequestId(body.requestId)
           const wechatIdentity = await wechatLoginClient.code2Session(body.loginCode)
           const phoneIdentity = await wechatLoginClient.phoneCode2Number(body.phoneCode)
-          const user = await identityStore.resolveWechatPhoneIdentity({
+          let authenticatedUserId = ''
+          if (typeof body.candidateReceipt === 'string' && body.candidateReceipt) {
+            const authResult = requireUserAuth(req, userAuthOptions)
+            if (authResult.ok && isInvitationSessionUserId(authResult.userId)) {
+              authenticatedUserId = authResult.userId
+            }
+          }
+          const preparedIdentity = await invitationRegistrationService.prepareWechatPhoneIdentity({
             openid: wechatIdentity.openid,
             unionid: wechatIdentity.unionid,
             phone: phoneIdentity
           })
-          await ensureRegistrationBonusForUser(user, userEntitlementStore)
+          const registration = await invitationRegistrationService.completePhoneRegistration({
+            preparedIdentity,
+            openid: wechatIdentity.openid,
+            authenticatedUserId,
+            candidateReceipt: authenticatedUserId && typeof body.candidateReceipt === 'string'
+              ? body.candidateReceipt
+              : ''
+          })
+          const user = registration.identity
           const session = createUserSessionToken(user.id, userAuthOptions)
 
-          sendJson(res, 200, {
+          sendNoStoreJson(res, 200, {
             ok: true,
             token: session.token,
             tokenType: 'Bearer',
@@ -1392,12 +1454,61 @@ export function createApiHandler(options = {}) {
               phoneMasked: user.phoneMasked,
               isNew: Boolean(user.isNew)
             }
-          })
+          }, true)
         } catch (error) {
           logPhoneLoginError(error, {
             requestId
           })
           sendPhoneLoginError(res, error)
+        }
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/user/invitations/share-credentials') {
+        const authResult = requireUserAuth(req, userAuthOptions)
+        if (!authResult.ok) {
+          sendNoStoreJson(res, authResult.statusCode, { ok: false, code: 'UNAUTHORIZED', message: 'Unauthorized' }, true)
+          return
+        }
+        try {
+          requireExactBodyFields(await readJsonBody(req), new Set())
+          const result = await invitationRegistrationService.createShareCredential({
+            authenticatedUserId: authResult.userId
+          }, true)
+          sendNoStoreJson(res, 200, {
+            ok: true,
+            token: result.token,
+            expiresAt: result.expiresAt instanceof Date ? result.expiresAt.toISOString() : String(result.expiresAt)
+          }, true)
+        } catch (error) {
+          logInvitationError('share-credential', error)
+          sendInvitationError(res, error)
+        }
+        return
+      }
+
+      if (req.method === 'POST' && pathname === '/api/user/invitations/candidates') {
+        const authResult = requireUserAuth(req, userAuthOptions)
+        if (!authResult.ok) {
+          sendNoStoreJson(res, authResult.statusCode, { ok: false, code: 'UNAUTHORIZED', message: 'Unauthorized' }, true)
+          return
+        }
+        try {
+          const body = requireExactBodyFields(await readJsonBody(req), new Set(['token']), ['token'])
+          const result = await invitationRegistrationService.captureCandidate({
+            authenticatedUserId: authResult.userId,
+            token: body.token
+          })
+          sendNoStoreJson(res, 200, {
+            ok: true,
+            candidateReceipt: result.candidateReceipt,
+            candidateCapturedAt: result.candidateCapturedAt instanceof Date
+              ? result.candidateCapturedAt.toISOString()
+              : String(result.candidateCapturedAt)
+          }, true)
+        } catch (error) {
+          logInvitationError('candidate', error)
+          sendInvitationError(res, error)
         }
         return
       }

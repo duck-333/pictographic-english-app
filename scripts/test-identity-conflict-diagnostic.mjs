@@ -7,8 +7,8 @@ import {
 import { createIdentityStore, resolveIdentityConflict } from '../server/identity-store.mjs'
 
 const MARKER = '123e4567-e89b-42d3-a456-426614174000'
-const A_ID = 'user-a-private-sentinel'
-const B_ID = 'user-b-private-sentinel'
+const A_ID = '9000000000000001'
+const B_ID = '9000000000000002'
 const A_UNIONID = 'union-a-private-sentinel'
 const B_UNIONID = 'union-b-private-sentinel'
 const OPENID_REQUEST = 'openid-request-private-sentinel'
@@ -463,6 +463,9 @@ function createIdentityConnection(options = {}) {
     },
     async execute(sql, values) {
       events.push(sql.includes('a_wechat_binding_count') || sql.includes('entitlement_row_count') || sql.includes('SELECT unionid') ? 'diagnostic-select' : 'identity-select')
+      if (sql.includes('SELECT id FROM `users` WHERE id IN')) {
+        return [values.map(id => ({ id }))]
+      }
       if (sql.includes('WHERE openid = ?')) {
         return [[{
           user_id: A_ID,
@@ -556,7 +559,8 @@ function createDuplicateTriggerConnection() {
       }
       return [[]]
     },
-    async execute(sql) {
+    async execute(sql, values = []) {
+      if (sql.includes('SELECT id FROM `users` WHERE id IN')) return [values.map(id => ({ id }))]
       if (sql.includes('WHERE openid = ?')) {
         return [[{ user_id: A_ID, openid: OPENID_DATABASE, unionid: A_UNIONID }]]
       }

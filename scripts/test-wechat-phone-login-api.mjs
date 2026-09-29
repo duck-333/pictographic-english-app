@@ -22,10 +22,20 @@ function createTestStore() {
 }
 
 async function startTestServer(options = {}) {
+  const invitationRegistrationService = options.invitationRegistrationService || {
+    async prepareWechatPhoneIdentity(identity) {
+      return identity
+    },
+    async completePhoneRegistration(input) {
+      const identity = await options.identityStore.resolveWechatPhoneIdentity(input.preparedIdentity)
+      return { identity, registrationBonus: null, invitation: null }
+    }
+  }
   const server = http.createServer(createApiHandler({
     store: createTestStore(),
     userStore: options.userStore,
     identityStore: options.identityStore,
+    invitationRegistrationService,
     wechatLoginClient: options.wechatLoginClient,
     jwtSecret: 'test-user-session-secret',
     now: () => new Date('2026-07-10T00:00:00.000Z')

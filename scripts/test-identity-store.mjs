@@ -130,10 +130,52 @@ async function testPaymentOpenidReverseLookup() {
   assert.equal(releases, 1)
 }
 
+async function testPaymentOpenidReverseLookupRejectsAmbiguousFacts() {
+  for (const bindingRows of [
+    [{ openid: 'openid-a' }, { openid: 'openid-b' }],
+    [{ openid: '' }],
+    [{ openid: 'openid with space' }],
+    [{ openid: 'a'.repeat(129) }],
+    [{ openid: '界'.repeat(43) }],
+    [{ openid: '😀'.repeat(33) }]
+  ]) {
+    const store = createIdentityStore({
+      pool: {
+        async getConnection() {
+          return {
+            async execute() { return [bindingRows, []] },
+            release() {}
+          }
+        }
+      }
+    })
+    await assert.rejects(() => store.findWechatOpenidByUserIdForPayment('42'),
+      error => error.code === 'WECHAT_IDENTITY_AMBIGUOUS')
+  }
+}
+
+async function testPaymentOpenidReverseLookupAcceptsUtf8ByteBoundary() {
+  for (const openid of ['a'.repeat(128), '界'.repeat(42), '😀'.repeat(32)]) {
+    const store = createIdentityStore({
+      pool: {
+        async getConnection() {
+          return {
+            async execute() { return [[{ openid }], []] },
+            release() {}
+          }
+        }
+      }
+    })
+    assert.equal(await store.findWechatOpenidByUserIdForPayment('42'), openid)
+  }
+}
+
 testNormalizePhone()
 testHashPhone()
 testMaskPhone()
 testResolveIdentityConflict()
 await testPaymentOpenidReverseLookup()
+await testPaymentOpenidReverseLookupRejectsAmbiguousFacts()
+await testPaymentOpenidReverseLookupAcceptsUtf8ByteBoundary()
 
 console.log('identity-store tests passed')

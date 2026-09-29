@@ -173,6 +173,8 @@ const current = scripted([
   { match: /^SELECT id, inviter_user_id, credential_status/u, result: resultRows([share]) },
   { match: /^SELECT id, invitation_id, share_credential_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },
   { match: /^SELECT invitation_id, reward_status[\s\S]*FOR UPDATE$/u, result: resultRows([]) },
+  { match: /^SELECT user_id FROM user_phone_bindings[\s\S]*LIMIT 2 FOR UPDATE$/u,
+    result: resultRows([{ user_id: '10' }]) },
   { match: /^SELECT reward_slot/u, result: resultRows([]) },
   { match: /^UPDATE invitation_registration_relations/u, result: [{ affectedRows: 1 }, []] }
 ])
@@ -180,6 +182,53 @@ const finalized = await withInvitationTransaction(current, context => store.rese
   { inviteeUserId: '20', candidateReceipt: receipt, trustedCandidateSubject: 'server-session:abc', isFirstPhoneRegistration: true }))
 assert.equal(finalized.invitationId, 'B')
 assert.equal(finalized.rewardStatus, 'REWARD_PENDING')
+
+const inviterPhoneRevoked = scripted([
+  { match: /^SELECT id, share_credential_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },
+  { match: /^SELECT id FROM users/u, result: resultRows([{ id: '10' }, { id: '20' }]) },
+  { match: /^SELECT invitation_id, reward_status/u, result: resultRows([]) },
+  { match: /^SELECT id, inviter_user_id, credential_status/u, result: resultRows([share]) },
+  { match: /^SELECT id, invitation_id, share_credential_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },
+  { match: /^SELECT invitation_id, reward_status[\s\S]*FOR UPDATE$/u, result: resultRows([]) },
+  { match: /^SELECT user_id FROM user_phone_bindings[\s\S]*LIMIT 2 FOR UPDATE$/u, result: resultRows([]) },
+  { match: /^UPDATE invitation_registration_relations/u, result: params => {
+    assert.equal(params[1], 'INVITER_PHONE_REGISTRATION_REQUIRED')
+    return [{ affectedRows: 1 }, []]
+  } }
+])
+const noPhoneReward = await withInvitationTransaction(inviterPhoneRevoked, context =>
+  store.reserveRegistrationRewardInTransaction(context, {
+    inviteeUserId: '20', candidateReceipt: receipt,
+    trustedCandidateSubject: 'server-session:abc', isFirstPhoneRegistration: true
+  }))
+assert.equal(noPhoneReward.relationStatus, 'FINAL')
+assert.equal(noPhoneReward.rewardStatus, 'NO_REWARD')
+assert.equal(noPhoneReward.noRewardReason, 'INVITER_PHONE_REGISTRATION_REQUIRED')
+assert.equal(noPhoneReward.rewardReserved, false)
+
+const inviterPhoneAmbiguous = scripted([
+  { match: /^SELECT id, share_credential_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },
+  { match: /^SELECT id FROM users/u, result: resultRows([{ id: '10' }, { id: '20' }]) },
+  { match: /^SELECT invitation_id, reward_status/u, result: resultRows([]) },
+  { match: /^SELECT id, inviter_user_id, credential_status/u, result: resultRows([share]) },
+  { match: /^SELECT id, invitation_id, share_credential_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },
+  { match: /^SELECT invitation_id, reward_status[\s\S]*FOR UPDATE$/u, result: resultRows([]) },
+  { match: /^SELECT user_id FROM user_phone_bindings[\s\S]*LIMIT 2 FOR UPDATE$/u,
+    result: resultRows([{ user_id: '10' }, { user_id: '10' }]) },
+  { match: /^UPDATE invitation_registration_relations/u, result: params => {
+    assert.equal(params[1], 'INVITER_PHONE_REGISTRATION_REQUIRED')
+    return [{ affectedRows: 1 }, []]
+  } }
+])
+const ambiguousPhoneReward = await withInvitationTransaction(inviterPhoneAmbiguous, context =>
+  store.reserveRegistrationRewardInTransaction(context, {
+    inviteeUserId: '20', candidateReceipt: receipt,
+    trustedCandidateSubject: 'server-session:abc', isFirstPhoneRegistration: true
+  }))
+assert.equal(ambiguousPhoneReward.relationStatus, 'FINAL')
+assert.equal(ambiguousPhoneReward.rewardStatus, 'NO_REWARD')
+assert.equal(ambiguousPhoneReward.noRewardReason, 'INVITER_PHONE_REGISTRATION_REQUIRED')
+assert.equal(ambiguousPhoneReward.rewardReserved, false)
 
 const replay = scripted([
   { match: /^SELECT id, share_credential_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },

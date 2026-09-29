@@ -214,11 +214,17 @@ export function createInvitationStore(options = {}) {
     if (!reason) {
       if (!lockedUserIds.has(inviter)) reason = 'INVITER_NOT_FOUND'
       else {
-        const slots = rows(await connection.execute(`SELECT reward_slot FROM ${RELATION}
-          WHERE inviter_user_id = ? AND reward_status IN ('REWARD_PENDING','REWARD_GRANTED','MANUAL_REVIEW')
-          ORDER BY reward_slot FOR UPDATE`, [inviter]))
-        slot = chooseInvitationRewardSlot(slots.map(item => item.reward_slot))
-        if (slot === null) reason = 'INVITER_REWARD_LIMIT_REACHED'
+        const activePhoneBindings = rows(await connection.execute(`SELECT user_id FROM user_phone_bindings
+          WHERE user_id = ? AND status = 'active' LIMIT 2 FOR UPDATE`, [inviter]))
+        if (activePhoneBindings.length !== 1 || String(activePhoneBindings[0].user_id) !== inviter) {
+          reason = 'INVITER_PHONE_REGISTRATION_REQUIRED'
+        } else {
+          const slots = rows(await connection.execute(`SELECT reward_slot FROM ${RELATION}
+            WHERE inviter_user_id = ? AND reward_status IN ('REWARD_PENDING','REWARD_GRANTED','MANUAL_REVIEW')
+            ORDER BY reward_slot FOR UPDATE`, [inviter]))
+          slot = chooseInvitationRewardSlot(slots.map(item => item.reward_slot))
+          if (slot === null) reason = 'INVITER_REWARD_LIMIT_REACHED'
+        }
       }
     }
     try {
