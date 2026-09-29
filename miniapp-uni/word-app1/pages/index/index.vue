@@ -263,6 +263,17 @@ export default {
     this.refreshUserData()
     this.loadTodayWord()
   },
+  onShareAppMessage() {
+    return {
+      title: '象形英语｜以形释义解码单词',
+      path: '/pages/index/index'
+    }
+  },
+  onShareTimeline() {
+    return {
+      title: '象形英语｜以形释义解码单词'
+    }
+  },
   onUnload() {
     this.clearSearchBlurTimer()
   },
