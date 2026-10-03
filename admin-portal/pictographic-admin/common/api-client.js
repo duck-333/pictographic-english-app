@@ -201,6 +201,27 @@ export function saveAdminWordToServer(word, options = {}) {
     })
 }
 
+export function listPublishedAdminWords(options = {}) {
+  if (typeof fetch !== 'function') {
+    return Promise.reject(new Error('Admin API is not available in this runtime.'))
+  }
+
+  return fetch(buildAdminApiUrl('/api/admin/words', options), {
+    method: 'GET',
+    headers: buildAdminHeaders(options)
+  })
+    .then((response) => response.json().catch(() => ({})).then((data) => ({ response, data })))
+    .then(({ response, data }) => {
+      if (!response.ok || data.ok === false) {
+        throw createAdminApiError(response, data)
+      }
+      if (!Array.isArray(data.words)) {
+        throw new Error('Admin word list response is invalid.')
+      }
+      return data
+    })
+}
+
 export function getPublicWordFromServer(idOrWord, options = {}) {
   if (typeof fetch !== 'function') {
     return Promise.reject(new Error('Public API is not available in this runtime.'))

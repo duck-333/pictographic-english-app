@@ -1,5 +1,11 @@
 # Pictographic English Local API
 
+## Admin published-word refresh (2026-10-03)
+
+`GET /api/admin/words` requires the existing Admin API Token and returns every published word as a complete normalized record. It uses `publishedOnly: true` without the public 20-item limit. It does not return draft, unpublished, or archived records and does not mutate word data.
+
+The admin workbench uses this endpoint only when an administrator clicks `从服务器刷新`. Local drafts and pending imports stay local; the refresh does not publish, unpublish, archive, or delete server records.
+
 ## Invitation registration v14 verification status (2026-09-29)
 
 - The current-worktree invitation gate passed once, without a rerun, on MySQL 8.0.46 with Docker Client/Server 29.6.2. The fresh container was `pictographic-invitation-mysql-20260929-v14`, bound only to `127.0.0.1:3309`, with an anonymous MySQL data volume, a random root test password, and destructive gate `local-docker-invitation-only`. `npm.cmd run test:invitation-mysql-integration` printed `invitation isolated MySQL integration tests passed` and exited 0.
@@ -165,6 +171,16 @@ Wrong token:
 
 ```json
 { "ok": false, "message": "Unauthorized" }
+```
+
+### GET /api/admin/words
+
+Returns all published words as complete normalized records for the authenticated admin refresh workflow. Unlike the public list, this endpoint has no 20-item cap. It excludes draft, unpublished, archived, review, pending, unknown, and missing-status records.
+
+Requires:
+
+```text
+Authorization: Bearer <ADMIN_API_TOKEN>
 ```
 
 ### POST /api/admin/words

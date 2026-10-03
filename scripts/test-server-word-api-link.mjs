@@ -71,7 +71,7 @@ async function testAdminWordClientPreservesIllustrationPayload() {
   }
 
   try {
-    const { saveAdminWordToServer } = await import('../admin-portal/pictographic-admin/common/api-client.js')
+    const { listPublishedAdminWords, saveAdminWordToServer } = await import('../admin-portal/pictographic-admin/common/api-client.js')
     const illustrationImage = {
       url: 'https://cdn.baxiaota.com/images/admin-client.png',
       title: 'Admin client illustration',
@@ -123,6 +123,23 @@ async function testAdminWordClientPreservesIllustrationPayload() {
 
     const clearedPayload = JSON.parse(String(calls[2].options.body || '{}'))
     assert(Object.keys(clearedPayload.word.illustrationImage).length === 0, 'admin client payload should send an empty illustrationImage object when cleared')
+
+    globalThis.fetch = async (url, options = {}) => {
+      calls.push({ url: String(url), options })
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, count: 1, words: [{ id: 'word-adminclient', status: 'published' }] })
+      }
+    }
+    const listed = await listPublishedAdminWords({
+      apiBaseUrl: 'https://admin.invalid',
+      adminApiToken: 'test-admin-token'
+    })
+    assert(calls[3].url === 'https://admin.invalid/api/admin/words', 'admin client should read the admin word list endpoint')
+    assert(calls[3].options.method === 'GET', 'admin word list client should use GET')
+    assert(calls[3].options.headers.Authorization === 'Bearer test-admin-token', 'admin word list client should send the admin token')
+    assert(listed.words.length === 1, 'admin word list client should return words')
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -330,6 +347,10 @@ async function main() {
     assert(missingToken.body.ok === false, 'POST /api/admin/words without token should return ok=false')
     assert(missingToken.body.message === 'Unauthorized', 'POST /api/admin/words without token should return Unauthorized')
 
+    const missingReadToken = await readJson(await fetch(`${baseUrl}/api/admin/words`))
+    assert(missingReadToken.status === 401, 'GET /api/admin/words without token should return 401')
+    assert(missingReadToken.body.ok === false, 'GET /api/admin/words without token should return ok=false')
+
     const wrongToken = await readJson(await fetch(`${baseUrl}/api/admin/words`, {
       method: 'POST',
       headers: {
@@ -341,6 +362,11 @@ async function main() {
     assert(wrongToken.status === 403, 'POST /api/admin/words with wrong token should return 403')
     assert(wrongToken.body.ok === false, 'POST /api/admin/words with wrong token should return ok=false')
     assert(wrongToken.body.message === 'Unauthorized', 'POST /api/admin/words with wrong token should return Unauthorized')
+
+    const wrongReadToken = await readJson(await fetch(`${baseUrl}/api/admin/words`, {
+      headers: { Authorization: 'Bearer wrong-admin-token' }
+    }))
+    assert(wrongReadToken.status === 403, 'GET /api/admin/words with wrong token should return 403')
 
     const optionsResponse = await fetch(`${baseUrl}/api/admin/words`, {
       method: 'OPTIONS'
@@ -643,6 +669,41 @@ async function main() {
     const publicEmptyFeatured = await readJson(await fetch(`${baseUrl}/api/homepage/featured-word`))
     assert(publicEmptyFeatured.body.word === null, 'empty homepage featured pool should return word=null')
     assert(publicEmptyFeatured.body.source === 'empty', 'empty homepage featured pool should return source=empty')
+
+    const completePublishedWords = Array.from({ length: 26 }, (_, index) => ({
+      id: `complete-${index + 1}`,
+      word: `complete${index + 1}`,
+      status: 'published',
+      meaning: `complete meaning ${index + 1}`,
+      explanation: `complete explanation ${index + 1}`,
+      parts: index === 0 ? [{ text: 'com', meaning: 'together', targetId: 'com', color: '#112233', bgColor: '#ddeeff', borderColor: '#445566' }] : [],
+      videoClips: index === 0 ? [{ clipId: 'clip-a', videoUrl: 'https://cdn.baxiaota.com/videos/complete.mp4', startSec: 3, endSec: 9, targetPart: 'com', customClipField: 'preserve-me' }] : [],
+      pronunciationAudio: index === 0 ? { url: 'https://cdn.baxiaota.com/audio/complete.mp3', assetId: 'audio-complete', customAudioField: 'preserve-me' } : {},
+      examples: index === 0 ? [{ english: 'A complete example.', chinese: '一个完整示例。', customExampleField: 'preserve-me' }] : []
+    }))
+    await store.replaceWords(completePublishedWords.concat([{
+      id: 'server-draft-hidden',
+      word: 'serverdraft',
+      status: 'draft',
+      meaning: 'must not be returned'
+    }]))
+    const completeAdminListResponse = await fetch(`${baseUrl}/api/admin/words`, {
+      headers: { Authorization: `Bearer ${DEFAULT_DEV_ADMIN_API_TOKEN}` }
+    })
+    assert(completeAdminListResponse.headers.get('cache-control') === 'no-store', 'GET /api/admin/words must disable response caching')
+    const completeAdminList = await readJson(completeAdminListResponse)
+    assert(completeAdminList.status === 200, 'GET /api/admin/words with token should return 200')
+    assert(completeAdminList.body.count === 26, 'admin word list should return every published word without a 20-item cap')
+    assert(completeAdminList.body.words.length === 26, 'admin word list should contain every published word')
+    assert(!completeAdminList.body.words.some((item) => item.id === 'server-draft-hidden'), 'admin word list should exclude server drafts')
+    const completeAdminWord = completeAdminList.body.words.find((item) => item.id === 'complete-1')
+    assert(completeAdminWord.explanation === 'complete explanation 1', 'admin word list should return full explanation content')
+    assert(completeAdminWord.parts[0].color === '#112233', 'admin word list should return full part styling')
+    assert(completeAdminWord.videoClips[0].customClipField === 'preserve-me', 'admin word list should return full video metadata')
+    assert(completeAdminWord.pronunciationAudio.customAudioField === 'preserve-me', 'admin word list should return full audio metadata')
+    assert(completeAdminWord.examples[0].customExampleField === 'preserve-me', 'admin word list should return non-editor fields')
+    const cappedPublicList = await readJson(await fetch(`${baseUrl}/api/words`))
+    assert(cappedPublicList.body.words.length === 20, 'public word list should remain capped at 20')
 
     assert(
       getWordApiBaseUrl({ nodeEnv: 'development', apiBaseUrl: 'http://127.0.0.1:3001' }) === 'http://127.0.0.1:3001',

@@ -1975,6 +1975,28 @@ export function createApiHandler(options = {}) {
         return
       }
 
+      if (req.method === 'GET' && pathname === '/api/admin/words') {
+        const authResult = requireAdminAuth(req, adminAuthOptions)
+        if (!authResult.ok) {
+          sendJson(res, authResult.statusCode, {
+            ok: false,
+            message: 'Unauthorized'
+          })
+          return
+        }
+
+        const words = await store.listWords({
+          publishedOnly: true,
+          query: ''
+        })
+        sendNoStoreJson(res, 200, {
+          ok: true,
+          count: words.length,
+          words
+        })
+        return
+      }
+
       if (req.method === 'POST' && pathname === '/api/admin/words') {
         const authResult = requireAdminAuth(req, adminAuthOptions)
         if (!authResult.ok) {
