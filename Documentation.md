@@ -1,5 +1,20 @@
 # Documentation
 
+## 2026-10-03：后台词条刷新生产部署与验收
+
+- 证据来源：本节生产环境、部署操作及线上结果来自用户实际执行输出，两台电脑验收来自用户反馈；本次文档收尾未重新 SSH、调用生产接口、构建、测试或部署。
+- Git 合并版本：功能已通过独立复审，功能提交为 `a156f3b4544cfa46b43e03bd6e47be855f349c64`，已提交、推送并经 [PR #49](https://github.com/duck-333/pictographic-english-app/pull/49) 合入 `master`，合并提交为 `1f0e113be51d2e15bb30b92f9b4195a081974920`。此 SHA 标识 Git 合并版本，不表示服务器完整部署了该版本。
+- 实际生产最小补丁：生产文件与目录名对应的历史 Git 提交不完全一致，因此使用导出的真实生产文件及 SHA-256 确认基线，仅向生产 `server/index.mjs` 新增22行 `GET /api/admin/words` 路由，复用原有 `requireAdminAuth`、`sendNoStoreJson` 及 `listWords`。本次没有部署整份 `master`，没有修改 `word-store`、支付、邀请、配置或启动逻辑。
+- 实际运行环境：PM2 id 为 `0`，进程名为 `pictographic-english-api-book-benefit`，Node 为 `20.20.2`，fork 模式，API 端口为 `3002`。工作目录为 `/home/ubuntu/pictographic-english-app-release-5e50fe073bdf`，入口为该目录的 `runtime-server-entry.mjs`，导入 `./server/index.mjs`；`WORD_DATA_PATH` 为 `/home/ubuntu/pictographic-english-data/words.json`，位于代码发布目录外。正式后台为 [https://baxiaota.com/admin/#/](https://baxiaota.com/admin/#/)，静态目录为 `/var/www/pictographic-admin/`，Nginx `/api/` 转发至 `127.0.0.1:3002`。
+- 后端 SHA-256：原始生产 `server/index.mjs` 为 `60883b15e7be2060f51c6b0f316f97e14cbe6b1886b23fa5cd89f80588c70920`；部署后为 `b7c9144d6b357957438a2767f7bc9539342b034a7d35a04841b896eb867de00e`。未修改的生产 `server/word-store.mjs` 导出哈希为 `e40a32a911918a55a640a9d34f71c2f09ef75f5638ae4aeffea7d7985cf0d123`。
+- 后台生产包：用户通过 HBuilderX 独立后台项目发行，日志显示“编译成功、导出web成功”，实际输出为 `admin-portal/pictographic-admin/unpackage/dist/build/web`。本地发布目录为 `D:\english-app\release-artifacts\admin-word-refresh-1f0e113`，ZIP 为 `admin-word-refresh-h5.zip`，SHA-256 为 `0864d60f810f4d1566a285bce1e3d3579ccde8f53399fd8573af253aa6b1b9e4`。后台包共10个文件，ZIP 根目录直接包含 `index.html`、`assets/`、`static/`；资源路径适配 `/admin/`，使用 hash 路由和同源 API；无源码映射文件，未发现实际嵌入凭据。
+- 已完成后端部署：用户明确授权本次功能生产部署后，先备份后端和完整旧后台包；上传文件哈希匹配，在生产 Node `20.20.2` 下执行候选 `node --check` 并通过。仅替换生产 `server/index.mjs`，保留原权限和所有者；仅重启既有 PM2 进程 `0`，未改环境变量。健康检查返回 HTTP 200；`GET /api/admin/words` 未携带令牌返回 HTTP 401。
+- 已完成后台部署：后端检查通过后部署后台静态包，保留旧资源，最后替换 `index.html`；部署的10个文件逐一核对一致。公网后台首页返回 HTTP 200，内容与新发布文件一致；未重启或重载 Nginx。
+- 备份与回滚方案：备份目录为 `/home/ubuntu/admin-word-refresh-backup-20261003-2151`，后端备份为 `index-before.mjs`，完整旧后台备份为 `admin-before.tar.gz`（474926字节）。需要回滚时，恢复旧后台文件；将后端备份恢复至 `/home/ubuntu/pictographic-english-app-release-5e50fe073bdf/server/index.mjs` 并重启原 PM2 进程 `0`。回滚不覆盖词库数据或环境配置。备份目前保留，未执行回滚。
+- 线上验收及边界：用户在两台电脑加载新后台并点击“从服务器刷新”，核对此前更新的 `study`，反馈内容一致，跨电脑拉取已发布内容验收通过。本轮没有执行新的“修改 → 发布 → 另一台刷新”生产写入测试，不能据此宣称该完整链路已线上实测。成功鉴权响应的完整字段、超过20条读取及 `Cache-Control: no-store` 已在此前隔离测试中验证，本次线上终端没有重新读取成功鉴权响应；线上401、首页200与用户两台电脑反馈是独立的生产证据。
+- 使用方式：编辑前刷新，修改后发布，另一台电脑再刷新；真正的本地草稿和待导入内容仍各自保留，两台电脑总数量可能因本地草稿不同而不同。既有 JSON 并发写风险未改造，发布操作暂时错开。
+- 范围确认：本次未连接生产数据库、执行迁移、修改支付或邀请配置、发布小程序。用户原有 `miniapp-uni/word-app1/manifest.json` 未进入本次功能提交或部署，文档收尾同样保留该修改。
+
 ## 2026-10-03：管理员已发布词条完整回读与本地草稿保护
 
 - 新增Admin Token保护的`GET /api/admin/words`。接口调用现有word store的`listWords({ publishedOnly: true, query: '' })`，无20条上限，返回全部已发布完整规范记录；公开`GET /api/words`的20条基础投影和内容访问策略不变。
