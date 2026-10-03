@@ -1,5 +1,12 @@
 # Prompt
 
+## 2026-10-03：后台已发布词条跨电脑手动刷新
+
+- 本轮只同步服务器全部`published`词条的完整编辑内容；不读取服务器草稿、已撤下或已归档内容，不上传本机草稿或`pendingWords`，也不删除服务器列表中没有的本地记录。
+- 复用现有工作台按钮改为“从服务器刷新”。真实本地草稿同ID时保留并提示；默认seed不作为真实草稿；当前会话未保存编辑会阻止刷新；历史非草稿缓存与服务器不同时只进行一次明确确认，不做自动合并或复杂版本系统。
+- 新增受既有Admin Token保护的`GET /api/admin/words`，使用`publishedOnly: true`且不设置20条上限，返回完整记录。保持现有逐词发布接口、数据库、小程序和生产环境不变。
+- 本轮不得覆盖`miniapp-uni/word-app1/manifest.json`已有修改，不暂存、不提交、不推送、不连接生产、不部署；实现与离线测试完成后必须独立复审。
+
 ## 2026-09-29：v14当前工作区验证状态
 
 - v14使用MySQL 8.0.46、Docker Client/Server 29.6.2和全新容器`pictographic-invitation-mysql-20260929-v14`；只绑定`127.0.0.1:3309`，使用匿名MySQL数据卷、随机root测试密码及destructive gate `local-docker-invitation-only`。只执行一次`npm.cmd run test:invitation-mysql-integration`且没有重跑，输出`invitation isolated MySQL integration tests passed`，退出码0。

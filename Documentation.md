@@ -1,5 +1,13 @@
 # Documentation
 
+## 2026-10-03：管理员已发布词条完整回读与本地草稿保护
+
+- 新增Admin Token保护的`GET /api/admin/words`。接口调用现有word store的`listWords({ publishedOnly: true, query: '' })`，无20条上限，返回全部已发布完整规范记录；公开`GET /api/words`的20条基础投影和内容访问策略不变。
+- 后台工作台“同步服务器状态”改为“从服务器刷新”。刷新只读服务器：不上传本机内容，不同步服务器非发布状态，不删除服务器未返回的本地记录，也不触发发布、撤下或归档。
+- 刷新前比较当前表单、内存词库和localStorage，当前会话未保存编辑会被阻止并提示先保存为草稿。真实本地草稿同ID时覆盖服务器版本留在本机并显示提示；默认seed不算真实草稿。历史非草稿缓存与服务器不同且无法判断来源时，使用一次“采用服务器版本/取消并先保存草稿”确认。
+- 后台服务器回读时以拆解节点`text/meaning`和视频片段`videoUrl/segmentTitle`为规范字段；表单编辑和发布时按`label/title`、`url/title`字段是否存在取值，使主动清空不会被旧别名恢复。发布前，主视频表单只同步到首片段，片段编辑只同步到其目标索引；保留已测试的节点颜色/扩展字段、视频顺序/时间点/关联字段、图片、音频及明确列入用例的顶层扩展字段，发布时删除本机`localPreviewUrl`。这不代表所有未来或未知字段均已逐项验证。
+- 离线测试覆盖管理员读取鉴权、`Cache-Control: no-store`、超过20条、只返回published、seed替换、真实草稿保留、会话未保存编辑阻断、历史缓存确认、服务器新增/更新、服务器缺失本地记录保留、pending与archived处理、失败/取消/持久化失败回滚，以及节点和视频实际表单入口经`publishCurrent`形成POST payload。字段往返结论仅限测试中明确断言的拆解节点、颜色、图片、音频、视频片段及既有扩展字段；未连接生产数据，未处理JSON文件并发写风险。
+
 ## 2026-09-29：v14当前工作区完整真实MySQL门禁通过（一次运行，已清理）
 
 - 2026-09-29在MySQL 8.0.46、Docker Client/Server 29.6.2中创建全新的`pictographic-invitation-mysql-20260929-v14`容器，仅绑定`127.0.0.1:3309`，使用匿名MySQL数据卷、随机root测试密码及destructive gate `local-docker-invitation-only`。只执行一次`npm.cmd run test:invitation-mysql-integration`，没有重跑；输出为`invitation isolated MySQL integration tests passed`，退出码为0。

@@ -1,5 +1,12 @@
 # Plan
 
+## 2026-10-03：后台跨电脑刷新已发布完整词条
+
+- 管理员手动刷新通过受保护的`GET /api/admin/words`一次读取全部已发布完整词条，不受公开列表20条限制，不扩展为全状态同步。
+- 刷新采用服务器已发布内容更新无草稿冲突的同ID记录并加入服务器新增记录；保留真实本地草稿、`pendingWords`和服务器未返回的本地记录。默认示例不阻塞服务器版本。
+- 复用现有本地存储和规范化方法检测当前表单/内存未保存编辑；历史`published`缓存差异使用一次确认。拆解节点双字段、颜色、媒体元数据和后台不可编辑顶层字段必须经“读取后再次发布”验证不丢失。
+- 不增加实时推送、锁、版本历史、自动文本合并、数据库迁移或小程序改动。完成离线门禁和独立复审前保持未暂存、未提交、未推送、未部署。
+
 ## 2026-09-29：v14当前工作区真实MySQL完整门禁通过（待最终独立复审）
 
 - 使用MySQL 8.0.46与Docker Client/Server 29.6.2，在全新容器`pictographic-invitation-mysql-20260929-v14`中仅绑定`127.0.0.1:3309`，配合匿名数据卷、随机root测试密码和`local-docker-invitation-only` destructive gate。`npm.cmd run test:invitation-mysql-integration`只执行一次、没有重跑，输出`invitation isolated MySQL integration tests passed`，退出码0。

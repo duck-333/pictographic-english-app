@@ -45,8 +45,8 @@
 				</view>
 				<button v-if="activeAdminView === 'workbench'" class="ghost-button" @click="resetDraft">恢复示例数据</button>
 				<button v-if="activeAdminView === 'workbench'" class="outline-button" @click="saveDraft">保存全部本地草稿</button>
-				<button v-if="activeAdminView === 'workbench'" class="outline-button" :disabled="serverSync.busy" @click="syncPublishedStatusesFromServer">
-					{{ serverSync.busy ? '同步中...' : '同步服务器状态' }}
+				<button v-if="activeAdminView === 'workbench'" class="outline-button" :disabled="serverSync.busy" @click="refreshPublishedWordsFromServer">
+					{{ serverSync.busy ? '刷新中...' : '从服务器刷新' }}
 				</button>
 				<button v-if="activeAdminView === 'workbench'" class="publish-all-button" :disabled="serverSync.busy" @click="publishAllDrafts">
 					{{ serverSync.busy ? '发布中...' : '发布全部本地草稿到服务器' }}
@@ -1141,6 +1141,7 @@ import {
 	grantAdminUserMembership,
 	grantAdminUserQuota,
 	issueBookBenefitCode,
+	listPublishedAdminWords,
 	listAdminUserEntitlementTransactions,
 	getPublicWordFromServer,
 	saveAdminApiToken,
@@ -1432,6 +1433,7 @@ export default {
 				busy: false,
 				message: 'Server API not synced'
 			},
+			wordDataSource: 'seed',
 			adminUnlocked: false,
 			adminAuthChecking: false,
 			adminApiTokenDraft: '',
@@ -2515,7 +2517,9 @@ export default {
 		loadDraft() {
 			const saved = uni.getStorageSync(STORAGE_KEY)
 			const savedPending = uni.getStorageSync(PENDING_STORAGE_KEY)
-			const source = saved && saved.length ? saved : seedWords
+			const hasSavedWords = Array.isArray(saved) && saved.length > 0
+			const source = hasSavedWords ? saved : seedWords
+			this.wordDataSource = hasSavedWords ? 'local' : 'seed'
 			this.words = clone(source).map((item) => this.normalizeWord(item))
 			this.pendingWords = savedPending && savedPending.length ? clone(savedPending).map((item) => this.normalizePendingWord(item)) : []
 			const initialUploadedWords = this.words.filter((item) => item.status !== 'archived' && item.status !== 'draft')
@@ -2526,7 +2530,7 @@ export default {
 			this.selectedId = initialWords[0] ? initialWords[0].id : ''
 			this.form = initialWords[0] ? clone(initialWords[0]) : clone(seedWords[0])
 			this.illustrationImagePreviewError = false
-			this.saveState = saved ? '已读取本地草稿' : '使用示例数据'
+			this.saveState = hasSavedWords ? '已读取本地草稿' : '使用示例数据'
 			this.expandedLetters = this.defaultExpandedLetters(initialWords)
 			this.syncVideoUploadStateFromForm()
 		},
@@ -2728,6 +2732,7 @@ export default {
 			if (!this.validateAllWords()) return
 			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
 			uni.setStorageSync(PENDING_STORAGE_KEY, this.stripRuntimeVideoFields(this.pendingWords))
+			this.wordDataSource = 'local'
 			this.saveState = '已保存全部本地草稿'
 			uni.showToast({ title: '已保存全部草稿', icon: 'success' })
 		},
@@ -2744,6 +2749,7 @@ export default {
 			this.persistFormToList()
 			if (!this.validateAllWords()) return
 			uni.setStorageSync(STORAGE_KEY, this.stripRuntimeVideoFields(this.words))
+			this.wordDataSource = 'local'
 			this.activeBucket = 'draft'
 			this.ensureLetterExpanded(this.getFirstLetter(this.form) || '#')
 			this.saveState = '当前词条已保存为草稿'
@@ -3411,65 +3417,186 @@ export default {
 				this.serverSync.busy = false
 			}
 		},
-		async syncPublishedStatusesFromServer() {
+		stableComparableValue(value) {
+			if (Array.isArray(value)) return value.map((item) => this.stableComparableValue(item))
+			if (!value || typeof value !== 'object') return value
+			return Object.keys(value).sort().reduce((result, key) => {
+				result[key] = this.stableComparableValue(value[key])
+				return result
+			}, {})
+		},
+		wordComparisonValue(word) {
+			return this.stableComparableValue(this.stripRuntimeVideoFields(this.normalizeWord(word || {})))
+		},
+		wordRecordsEqual(left, right) {
+			return JSON.stringify(this.wordComparisonValue(left)) === JSON.stringify(this.wordComparisonValue(right))
+		},
+		wordListsEqual(left, right) {
+			const normalizeList = (list) => (Array.isArray(list) ? list : [])
+				.map((item) => this.wordComparisonValue(item))
+				.sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')))
+			return JSON.stringify(normalizeList(left)) === JSON.stringify(normalizeList(right))
+		},
+		isDefaultSeedWord(word) {
+			const id = String(word && word.id || '').trim()
+			const seed = seedWords.find((item) => String(item.id || '').trim() === id)
+			return !!seed && this.wordRecordsEqual(word, seed)
+		},
+		isRealLocalDraft(word) {
+			return !!word && word.status === 'draft' && !this.isDefaultSeedWord(word)
+		},
+		hasUnsafeRefreshEdits() {
+			if (this.selectedSource !== 'pending') {
+				const selected = this.words.find((item) => item.id === this.selectedId)
+				if (selected && !this.wordRecordsEqual(this.form, selected)) return true
+			}
+			const saved = uni.getStorageSync(STORAGE_KEY)
+			const baseline = Array.isArray(saved) && saved.length ? saved : seedWords
+			return !this.wordListsEqual(this.words, baseline)
+		},
+		showUnsafeRefreshEditWarning() {
+			uni.showModal({
+				title: '请先保存本机编辑',
+				content: '检测到当前表单或此前切换词条留下的修改尚未保存。请先打开相关词条并点击“保存为草稿”，再从服务器刷新。',
+				showCancel: false
+			})
+		},
+		async confirmPublishedCacheReplacement(conflicts) {
+			if (!conflicts.length) return true
+			const names = conflicts.slice(0, 6).map((item) => item.word || item.id).join('、')
+			const suffix = conflicts.length > 6 ? ` 等 ${conflicts.length} 个词条` : ''
+			return this.confirmServerAction(
+				'发现本机已发布缓存差异',
+				`本机的 ${names}${suffix} 与服务器最新内容不同，无法判断是旧缓存还是未发布修改。继续将采用服务器版本；如需保留本机内容，请取消并先保存为草稿。`,
+				'采用服务器版本'
+			)
+		},
+		async refreshPublishedWordsFromServer() {
 			if (this.serverSync.busy) return
-			if (!this.validateCurrent()) return
-			this.persistFormToList()
-
-			const draftWords = this.words.filter((item) => item.status === 'draft').map((item) => clone(item))
-			if (!draftWords.length) {
-				uni.showToast({ title: '当前没有本地草稿需要同步', icon: 'none' })
+			if (!this.adminUnlocked) {
+				this.handleAdminUnauthorized()
+				return
+			}
+			if (this.hasUnsafeRefreshEdits()) {
+				this.showUnsafeRefreshEditWarning()
 				return
 			}
 
 			this.serverSync.busy = true
-			this.serverSync.message = `正在校准 ${draftWords.length} 个本地草稿的服务器状态...`
+			this.serverSync.message = '正在读取服务器已发布词条...'
 			this.saveState = this.serverSync.message
-			const summary = {
-				synced: 0,
-				unchanged: 0,
-				failed: []
+			const previousState = {
+				words: clone(this.words),
+				form: clone(this.form),
+				activeBucket: this.activeBucket,
+				selectedSource: this.selectedSource,
+				selectedId: this.selectedId,
+				expandedLetters: clone(this.expandedLetters),
+				wordDataSource: this.wordDataSource
 			}
-
+			let mergeApplied = false
 			try {
-				for (let index = 0; index < draftWords.length; index += 1) {
-					const word = draftWords[index]
-					this.serverSync.message = `正在校准 ${index + 1}/${draftWords.length}：${word.word || word.id}`
-					const result = await this.findPublishedWordOnServer(word)
-					if (result.found) {
-						this.markLocalWordPublished(word, result.word, { persist: false })
-						summary.synced += 1
-					} else if (result.error) {
-						summary.failed.push({
-							id: word.id || word.word || `第 ${index + 1} 条`,
-							reason: this.getErrorMessage(result.error)
-						})
-					} else {
-						summary.unchanged += 1
-					}
+				const result = await listPublishedAdminWords({
+					adminApiToken: this.adminApiTokenDraft
+				})
+				if (!result || !Array.isArray(result.words)) {
+					throw new Error('服务器返回的已发布词条格式无效')
 				}
 
-				this.syncSelectedWordFromLocalList()
+				const serverWords = result.words.map((item) => this.normalizeServerWord(item))
+				const serverById = {}
+				serverWords.forEach((word) => {
+					if (!word.id || word.status !== 'published') {
+						throw new Error('服务器返回了无效或非已发布词条')
+					}
+					if (serverById[word.id]) {
+						throw new Error(`服务器返回了重复词条 ID：${word.id}`)
+					}
+					serverById[word.id] = word
+				})
+
+				const publishedCacheConflicts = this.words.filter((localWord) => {
+					const serverWord = serverById[localWord.id]
+					return serverWord &&
+						localWord.status !== 'draft' &&
+						!this.isDefaultSeedWord(localWord) &&
+						!this.wordRecordsEqual(localWord, serverWord)
+				})
+				const confirmed = await this.confirmPublishedCacheReplacement(publishedCacheConflicts)
+				if (!confirmed) {
+					this.serverSync.message = '已取消刷新，本机内容保持不变'
+					this.saveState = this.serverSync.message
+					return
+				}
+
+				const draftConflicts = []
+				const localIds = {}
+				const mergedWords = this.words.map((localWord) => {
+					localIds[localWord.id] = true
+					const serverWord = serverById[localWord.id]
+					if (!serverWord) return clone(localWord)
+					if (this.isRealLocalDraft(localWord)) {
+						draftConflicts.push(localWord)
+						return clone(localWord)
+					}
+					return clone(serverWord)
+				})
+				serverWords.forEach((serverWord) => {
+					if (!localIds[serverWord.id]) mergedWords.push(clone(serverWord))
+				})
+
+				this.words = mergedWords
+				mergeApplied = true
 				this.persistWordsToStorage()
-				const failedLines = summary.failed.map((item) => `${item.id}：${item.reason}`)
+				this.wordDataSource = 'server-merged'
+				if (this.selectedSource !== 'pending') {
+					const selected = this.words.find((item) => item.id === this.selectedId)
+					if (selected) {
+						this.activeBucket = selected.status === 'archived'
+							? 'archived'
+							: (selected.status === 'draft' ? 'draft' : 'uploaded')
+						this.form = clone(selected)
+						this.syncVideoUploadStateFromForm()
+					}
+				}
+				this.expandedLetters = this.defaultExpandedLetters(this.activeWords)
+				const draftNames = draftConflicts.map((item) => item.word || item.id)
 				const content = [
-					`已同步为已发布 ${summary.synced} 个`,
-					`服务器未发布或不存在 ${summary.unchanged} 个`,
-					`查询失败 ${summary.failed.length} 个`
-				].concat(failedLines.length ? ['查询失败词条：'].concat(failedLines) : []).join('\n')
-				this.serverSync.message = `服务器状态校准完成：同步 ${summary.synced}，未变 ${summary.unchanged}，失败 ${summary.failed.length}`
+					`服务器已发布词条 ${serverWords.length} 个`,
+					`新增到本机 ${serverWords.filter((item) => !localIds[item.id]).length} 个`,
+					`本地草稿保留 ${draftConflicts.length} 个`
+				].concat(draftNames.length ? [`未覆盖本地草稿：${draftNames.join('、')}`] : []).join('\n')
+				this.serverSync.message = `服务器刷新完成：已读取 ${serverWords.length} 个已发布词条`
 				this.saveState = this.serverSync.message
 				uni.showModal({
-					title: '服务器状态同步完成',
+					title: '从服务器刷新完成',
 					content,
 					showCancel: false
 				})
 			} catch (error) {
+				if (mergeApplied) {
+					this.words = previousState.words
+					this.form = previousState.form
+					this.activeBucket = previousState.activeBucket
+					this.selectedSource = previousState.selectedSource
+					this.selectedId = previousState.selectedId
+					this.expandedLetters = previousState.expandedLetters
+					this.wordDataSource = previousState.wordDataSource
+					try {
+						this.persistWordsToStorage()
+					} catch (storageError) {
+						// The in-memory rollback remains authoritative when browser storage is unavailable.
+					}
+				}
+				if (error && (error.code === 'UNAUTHORIZED' || error.isAuthError)) {
+					this.handleAdminUnauthorized()
+					return
+				}
 				const message = this.getErrorMessage(error)
 				this.serverSync.message = message
-				this.saveState = '服务器状态同步失败'
+				this.saveState = '从服务器刷新失败，本机内容未改变'
 				uni.showModal({
-					title: '服务器状态同步失败',
+					title: '从服务器刷新失败',
 					content: message,
 					showCancel: false
 				})
@@ -3750,6 +3877,18 @@ export default {
 				}
 			}
 			if (!options.skipVideoClipFlush && !this.flushEditingVideoClip()) return false
+			if (!options.skipVideoClipFlush && this.shouldSyncCurrentVideoDraftToPrimary()) {
+				if (this.form.videoClips.length && !this.hasVideoClipPayload(this.form.video || {})) {
+					uni.showToast({ title: '请先选择视频或填写播放地址', icon: 'none' })
+					return false
+				}
+				const primaryVideoResult = this.validateVideoTime({ videoClips: [this.form.video || {}] }, 1)
+				if (!primaryVideoResult.ok) {
+					uni.showToast({ title: primaryVideoResult.message, icon: 'none' })
+					return false
+				}
+				this.syncCurrentVideoDraftToPrimary()
+			}
 			const id = String(this.form.id).trim()
 			const word = String(this.form.word).trim()
 			if (!this.startsWithEnglish(id) || !this.startsWithEnglish(word)) {
@@ -3821,6 +3960,7 @@ export default {
 			this.clearAllBatchSelections()
 			this.words = clone(seedWords)
 			this.pendingWords = []
+			this.wordDataSource = 'seed'
 			const initialUploadedWords = this.words.filter((item) => item.status !== 'archived' && item.status !== 'draft')
 			const initialDraftWords = this.words.filter((item) => item.status === 'draft')
 			const initialWords = initialUploadedWords.length ? initialUploadedWords : initialDraftWords
@@ -3948,6 +4088,30 @@ export default {
 		hasVideoClipPayload(video) {
 			return !!(video && (video.url || video.assetId || video.storagePath || video.localPreviewUrl))
 		},
+		shouldSyncCurrentVideoDraftToPrimary() {
+			this.ensureVideoClipsArray()
+			const current = this.form.video || {}
+			const first = this.form.videoClips[0]
+			if (!first) return this.hasVideoClipPayload(current)
+			const currentClipId = String(current.clipId || '').trim()
+			const firstClipId = String(first.clipId || '').trim()
+			return !currentClipId || !firstClipId || currentClipId === firstClipId
+		},
+		syncCurrentVideoDraftToPrimary() {
+			if (!this.shouldSyncCurrentVideoDraftToPrimary()) return true
+			const current = this.form.video || {}
+			const first = this.form.videoClips[0]
+			const clip = this.normalizeVideoClip(Object.assign({}, first || {}, current, {
+				clipId: (first && first.clipId) || current.clipId || this.buildVideoClipId()
+			}), 0)
+			if (first) {
+				this.form.videoClips.splice(0, 1, clip)
+			} else {
+				this.form.videoClips.push(clip)
+			}
+			this.form.video = clone(clip)
+			return true
+		},
 		getDefaultClipTitle(video) {
 			const word = String(this.form.word || this.form.id || '当前词条').trim()
 			const focus = String(video && video.focus ? video.focus : '').trim()
@@ -3999,9 +4163,10 @@ export default {
 				uni.showToast({ title: '请设置有效的开始秒和结束秒', icon: 'none' })
 				return null
 			}
+			const hasOwnTitle = Object.prototype.hasOwnProperty.call(video, 'title')
 			const clip = this.normalizeVideoClip(Object.assign({}, video, {
 				clipId: existingClip && existingClip.clipId ? existingClip.clipId : this.buildVideoClipId(),
-				title: video.title || this.getDefaultClipTitle(video)
+				title: hasOwnTitle ? video.title : this.getDefaultClipTitle(video)
 			}), 0)
 			if (existingClip && existingClip.localPreviewUrl) {
 				clip.localPreviewUrl = existingClip.localPreviewUrl
@@ -4244,7 +4409,7 @@ export default {
 		},
 		syncPrimaryVideoFromClips(target) {
 			if (!target || !Array.isArray(target.videoClips) || !target.videoClips.length) return target
-			target.video = Object.assign({}, target.video || {}, target.videoClips[0])
+			target.video = clone(target.videoClips[0])
 			return target
 		},
 		syncVideoUploadStateFromForm() {
@@ -4911,13 +5076,26 @@ export default {
 		},
 		normalizeVideoClip(raw, index) {
 			const source = raw || {}
+			const hasOwn = (key) => Object.prototype.hasOwnProperty.call(source, key)
 			const startSec = Number(source.startSec !== undefined ? source.startSec : source.start_sec)
 			const endSec = Number(source.endSec !== undefined ? source.endSec : source.end_sec)
 			const videoSize = Number(source.size)
+			const rawUrl = hasOwn('url')
+				? source.url
+				: (hasOwn('videoUrl') ? source.videoUrl : (hasOwn('video_url') ? source.video_url : ''))
+			const rawTitle = hasOwn('title')
+				? source.title
+				: (hasOwn('segmentTitle')
+					? source.segmentTitle
+					: (hasOwn('segment_title') ? source.segment_title : (hasOwn('videoTitle') ? source.videoTitle : source.video_title)))
+			const url = String(rawUrl === undefined || rawUrl === null ? '' : rawUrl).trim()
+			const title = String(rawTitle === undefined || rawTitle === null ? '' : rawTitle).trim()
 			return {
+				...source,
 				clipId: String(source.clipId || source.clip_id || source.id || `clip-${(index || 0) + 1}`).trim(),
-				url: String(source.url || source.videoUrl || source.video_url || '').trim(),
-				title: String(source.title || source.segmentTitle || source.segment_title || source.videoTitle || source.video_title || '').trim(),
+				url,
+				videoUrl: url,
+				title,
 				focus: String(source.focus || source.topic || source.clipFocus || source.clip_focus || source.learningPoint || source.learning_point || '').trim(),
 				targetPart: String(source.targetPart || source.target_part || source.part || source.partLabel || source.part_label || source.node || source.nodeId || source.node_id || '').trim(),
 				note: String(source.note || source.description || source.summary || source.clipNote || source.clip_note || '').trim(),
@@ -4929,7 +5107,7 @@ export default {
 				provider: String(source.provider || '').trim(),
 				assetId: String(source.assetId || source.asset_id || source.videoId || source.video_id || '').trim(),
 				wordId: String(source.wordId || source.word_id || '').trim(),
-				segmentTitle: String(source.segmentTitle || source.segment_title || source.title || '').trim(),
+				segmentTitle: title,
 				storagePath: String(source.storagePath || source.storage_path || '').trim(),
 				fileName: String(source.fileName || source.file_name || '').trim(),
 				mimeType: String(source.mimeType || source.mime_type || '').trim(),
@@ -4944,6 +5122,7 @@ export default {
 			const durationSec = Number(source.durationSec !== undefined ? source.durationSec : source.duration_sec)
 			const url = String(source.url || source.audioUrl || source.audio_url || '').trim()
 			const next = {
+				...source,
 				url,
 				audioUrl: url,
 				provider: String(source.provider || '').trim(),
@@ -5041,6 +5220,39 @@ export default {
 			}
 			return { ok: true }
 		},
+		normalizeServerWord(item) {
+			const source = clone(item || {})
+			if (Array.isArray(source.parts)) {
+				source.parts = source.parts.map((part) => {
+					const next = part && typeof part === 'object' ? part : {}
+					const text = Object.prototype.hasOwnProperty.call(next, 'text') ? next.text : next.label
+					const meaning = Object.prototype.hasOwnProperty.call(next, 'meaning') ? next.meaning : next.title
+					return {
+						...next,
+						label: String(text === undefined || text === null ? '' : text).trim(),
+						title: String(meaning === undefined || meaning === null ? '' : meaning).trim()
+					}
+				})
+			}
+			if (Array.isArray(source.videoClips)) {
+				source.videoClips = source.videoClips.map((clip) => {
+					const next = clip && typeof clip === 'object' ? clip : {}
+					const videoUrl = Object.prototype.hasOwnProperty.call(next, 'videoUrl')
+						? next.videoUrl
+						: (Object.prototype.hasOwnProperty.call(next, 'video_url') ? next.video_url : next.url)
+					const segmentTitle = Object.prototype.hasOwnProperty.call(next, 'segmentTitle')
+						? next.segmentTitle
+						: (Object.prototype.hasOwnProperty.call(next, 'segment_title') ? next.segment_title : next.title)
+					return {
+						...next,
+						url: String(videoUrl === undefined || videoUrl === null ? '' : videoUrl).trim(),
+						title: String(segmentTitle === undefined || segmentTitle === null ? '' : segmentTitle).trim()
+					}
+				})
+				if (source.videoClips.length) source.video = clone(source.videoClips[0])
+			}
+			return this.normalizeWord(source)
+		},
 		normalizeWord(item) {
 			const next = clone(item)
 			next.id = String(next.id || '').trim()
@@ -5054,11 +5266,24 @@ export default {
 					{}
 			)
 			next.status = normalizeAdminStatus(next.status)
-			next.parts = Array.isArray(next.parts) ? next.parts.map((part) => ({
-				label: String(part.label || '').trim(),
-				title: String(part.title || '').trim(),
-				targetId: String(part.targetId || '').trim()
-			})) : []
+			next.parts = Array.isArray(next.parts) ? next.parts.map((part) => {
+				const source = part && typeof part === 'object' ? part : {}
+				const labelValue = Object.prototype.hasOwnProperty.call(source, 'label') ? source.label : source.text
+				const titleValue = Object.prototype.hasOwnProperty.call(source, 'title') ? source.title : source.meaning
+				const label = String(labelValue === undefined || labelValue === null ? '' : labelValue).trim()
+				const title = String(titleValue === undefined || titleValue === null ? '' : titleValue).trim()
+				return {
+					...source,
+					label,
+					text: label,
+					title,
+					meaning: title,
+					targetId: String(source.targetId || '').trim(),
+					color: String(source.color || '').trim(),
+					bgColor: String(source.bgColor || '').trim(),
+					borderColor: String(source.borderColor || '').trim()
+				}
+			}) : []
 			const video = this.normalizeVideoClip(next.video || {}, 0)
 			const explicitClips = Array.isArray(next.videoClips)
 			const rawClips = explicitClips
@@ -5073,7 +5298,7 @@ export default {
 				}))
 			}
 			next.videoClips = videoClips
-			next.video = videoClips.length ? Object.assign({}, video, videoClips[0]) : video
+			next.video = videoClips.length ? clone(videoClips[0]) : video
 			next.pronunciationAudio = this.normalizePronunciationAudio(
 				next.pronunciationAudio ||
 					next.pronunciation_audio ||
@@ -5092,7 +5317,7 @@ export default {
 			return next
 		},
 		getEntryType(item) {
-			const rawType = String(item.entryType || '').trim().toLowerCase()
+			const rawType = String(item.entryType || item.kind || '').trim().toLowerCase()
 			if (rawType === 'letter' || rawType === '字母') {
 				return 'letter'
 			}
