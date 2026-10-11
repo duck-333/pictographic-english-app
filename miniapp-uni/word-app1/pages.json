@@ -45,6 +45,21 @@
       }
     }
   ],
+  "subPackages": [
+    {
+      "root": "game-baxiaota",
+      "pages": [
+        {
+          "path": "pages/index",
+          "style": {
+            "navigationBarTitleText": "巴小塔 · 象形探索",
+            "navigationBarBackgroundColor": "#f0f9ff",
+            "navigationBarTextStyle": "black"
+          }
+        }
+      ]
+    }
+  ],
   "globalStyle": {
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "象形英语",

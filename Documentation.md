@@ -1174,3 +1174,24 @@ IDENTITY_STORE_ERROR
 - 小程序production仅允许release包与正式API域名，支付参数必须为Env=0和¥30；sandbox继续保留development、develop/trial、Env=1及¥1/¥30行为。本地恢复记录键包含环境，production不读取sandbox订单记录。
 - production readiness在虚拟支付启用时额外校验production/Env=0/¥30、独立Offer/Product/AppKey、禁用¥1以及JSON AES消息配置；错误不输出秘密，检查不加入 `/api/health`。本节仅记录代码和本地测试工作，不代表production已部署、已配置微信后台或已完成真实支付验收。
 - 离线验证：虚拟支付config、session、signing、client、Service、Store、reconciliation、delivery、message及小程序购买测试均通过，`check:server:delivery` 与 `check:miniapp` 通过；修改的JS/MJS语法、`package.json`解析和Git空白检查通过。已在本地Docker的MySQL `8.0.46`临时容器中执行隔离测试，容器仅绑定`127.0.0.1:3308`且未配置持久卷；基础schema/约束、Order Store、Reconciliation、Entitlement、Delivery、Message六套MySQL集成测试均真实执行并以退出码0通过，覆盖production/Env=0订单写入、production ¥1拒绝、恢复环境隔离，以及共用Store路径上的真实InnoDB并发与锁、重复事件、事务回滚、会员顺延和消息/备用发货竞争。所有随机测试数据库均已删除，最终`SHOW DATABASES`检查退出码为0且未发现六种命名格式的测试库残留；临时容器已删除，3308端口已释放，临时测试环境变量和随机密码变量已清除。测试未连接真实沙箱数据库、生产数据库、服务器或微信接口。完整`check:server`仍被既有membership revoke缩进敏感断言阻断，`check:production`仍被既有learning-benefits页面文案发布策略门禁阻断；当前不能宣称production-ready，且未进行真实production/Env=0配置、微信后台配置、真实生产回调或真实生产支付验收，不允许据此部署生产。
+
+
+### 2026-10-11：巴小塔入口与容器（待独立审查）
+
+- 分支 codex/baxiaota-entry-container，HEAD b12509e8695514189df03af4d8caf7222152a336 未变。初始仅 manifest.json 标为修改，保留原内容；本批最终仅增量加入 mp-weixin.optimization.subPackages=true。
+- 首页挂载独立 BaxiaotaEntry.vue，以实际 BottomNav 顶部和页面窗口限制80×110px浮窗；保留原 onShow 刷新。活动区动态样式采用 CSS 字符串，原生区域布局完成后再挂载 movable-view，修正首次定位尺寸问题。
+- 新增 game-baxiaota 普通分包，navigateTo 进入；返回复用栈内首页，否则 reLaunch 固定首页。没有迁移完整游戏、教学或暂停。
+- 原透明图未变，发布副本212×264、32,603 bytes，较928,418 bytes原图减少约96.5%。发行编译分包4,672 bytes（目录文件统计，非上传包大小）。
+- 开发/发行编译、专项测试、静态检查、模拟器原生事件和桌面鼠标进入返回通过。原生词卡点击使用仅内存夹具；未更改词库 API。长页面程序化滚动到200px后拖浮窗仍保持200px，真实手指页面滑动与真机键盘/安全区尚待人工补验。
+- 未暂存、提交、推送、上传或部署；独立审查未执行。文件清单、配置差异、产物体积和逐项验收见 docs/development/BAXIAOTA_ENTRY_BATCH1_2026-10-11.md。
+
+### 2026-10-11：巴小塔独立审查 P2 最小修复
+
+当前第一批状态更新：**源码复审及真机验收通过，待版本提交**。用户最终确认 iPhone 12 上页面正常滚动、浮窗保持屏幕位置、不误打开游戏及其他本轮真机项目均通过；对应北京时间2026-10-11 23:02:03含P2修复的最终预览版本，iOS/微信版本未提供。以下待复审/未暂存描述保留为此前阶段记录。本轮仅按明确路径暂存已审查的12个文件，manifest文本差异仅为分包优化三行，其余原配置保留；不提交/推送/正式上传/审核/发布/部署，不进入完整游戏迁移。详见开发记录最终验收章节。
+
+- 后续用户真机验收：北京时间23:02:03编译的最终 P2 预览版本，iPhone 12 的拖动吸边、防误开、浮窗外滑动、搜索与键盘显隐、进入返回、双指触摸与切后台恢复均由用户确认无问题。iOS/微信版本未提供，其他设备与单独冷启动定位不据此认定通过；保持待针对性复审、未暂存/提交，未正式上传/审核/发布，仅生成预览包。具体反馈见开发记录。
+
+- 按用户指定审查项修复首页 BottomNav 测量乱序；序号在 nextTick 前捕获，onHide/onUnload 失效，结果只写入最新有效首页。保持实际测量、边界夹持和首页业务方法。
+- 专项测试执行实际页面方法，以回调队列控制新旧返回与 nextTick 顺序；实际 visible/active watcher、聚焦/失焦与键盘监听方法、多触点两个事件序列通过。该证据不替代 Vue/native 调度及真机操作。
+- AGENTS.md 静态/内容检查通过；开发22:47:48、发行22:48:30重新编译成功，dev/build 产物含修复，原AppID与分包配置保留。未进行新一轮模拟器/真机验收。
+- 本轮仅首页代码、专项测试及文档变更，保持当前分支和未暂存/提交/推送/上传/部署。停在待针对性复审，完整证据及未验行为见开发记录 P2 章节。

@@ -201,12 +201,14 @@
       </view>
     </view>
 
-    <bottom-nav current="/pages/index/index" />
+    <baxiaota-entry :active="gameEntryActive" :search-focused="focused" :bounds="gameEntryBounds" />
+    <bottom-nav ref="bottomNav" current="/pages/index/index" />
   </view>
 </template>
 
 <script>
 import BottomNav from '../../components/BottomNav.vue'
+import BaxiaotaEntry from '../../components/BaxiaotaEntry.vue'
 import {
   fetchWordById,
   fetchHomepageFeaturedWord,
@@ -236,10 +238,15 @@ import {
 
 export default {
   components: {
-    BottomNav
+    BottomNav,
+    BaxiaotaEntry
   },
   data() {
     return {
+      gameEntryActive: false,
+      gameEntryMeasureRequestId: 0,
+      gameEntryUnloaded: false,
+      gameEntryBounds: { width: 0, bottom: 0 },
       query: '',
       focused: false,
       searchPanelOpen: false,
@@ -260,8 +267,16 @@ export default {
     }
   },
   onShow() {
+    this.gameEntryActive = true
+    this.measureGameEntryBounds()
     this.refreshUserData()
     this.loadTodayWord()
+  },
+  onReady() { this.measureGameEntryBounds() },
+  onResize() { this.measureGameEntryBounds() },
+  onHide() {
+    this.gameEntryActive = false
+    this.gameEntryMeasureRequestId++
   },
   onShareAppMessage() {
     return {
@@ -275,6 +290,9 @@ export default {
     }
   },
   onUnload() {
+    this.gameEntryActive = false
+    this.gameEntryUnloaded = true
+    this.gameEntryMeasureRequestId++
     this.clearSearchBlurTimer()
   },
   computed: {
@@ -324,6 +342,20 @@ export default {
     }
   },
   methods: {
+    measureGameEntryBounds() {
+      // Capture before nextTick: a delayed older task must keep its own id.
+      const requestId = ++this.gameEntryMeasureRequestId
+      const isCurrent = () => requestId === this.gameEntryMeasureRequestId &&
+        this.gameEntryActive && !this.gameEntryUnloaded
+      this.$nextTick(() => {
+        if (!isCurrent() || !this.$refs.bottomNav) return
+        const info = uni.getWindowInfo ? uni.getWindowInfo() : uni.getSystemInfoSync()
+        uni.createSelectorQuery().in(this.$refs.bottomNav).select('.bottom-nav').boundingClientRect(rect => {
+          if (!isCurrent() || !rect) return
+          this.gameEntryBounds = { width: info.windowWidth, bottom: Math.min(info.windowHeight, rect.top) }
+        }).exec()
+      })
+    },
     refreshUserData() {
       this.userState = getUserState()
       const session = getAuthSession()
