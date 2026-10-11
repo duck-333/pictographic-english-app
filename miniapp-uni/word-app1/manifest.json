@@ -13,6 +13,9 @@
             "postcss" : true,
             "minified" : false
         },
+        "optimization" : {
+            "subPackages" : true
+        },
         "usingComponents" : true,
         "lazyCodeLoading" : "requiredComponents"
     }
