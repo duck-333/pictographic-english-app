@@ -352,7 +352,11 @@ export default {
         const info = uni.getWindowInfo ? uni.getWindowInfo() : uni.getSystemInfoSync()
         uni.createSelectorQuery().in(this.$refs.bottomNav).select('.bottom-nav').boundingClientRect(rect => {
           if (!isCurrent() || !rect) return
-          this.gameEntryBounds = { width: info.windowWidth, bottom: Math.min(info.windowHeight, rect.top) }
+          // BottomNav is fixed to the viewport bottom; its measured height
+          // already includes its safe inset. Do not subtract that inset twice.
+          const fixedTop = Number.isFinite(rect.height) && rect.height > 0 ? info.windowHeight - rect.height : rect.top
+          this.gameEntryMeasurement = { window: info, nav: rect }
+          this.gameEntryBounds = { width: info.windowWidth, bottom: Math.max(0, Math.min(info.windowHeight, rect.top, fixedTop)) }
         }).exec()
       })
     },
