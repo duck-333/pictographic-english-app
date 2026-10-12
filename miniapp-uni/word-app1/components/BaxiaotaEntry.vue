@@ -31,14 +31,18 @@ export default {
   data() {
     return {
       x: 0, y: 0, currentX: 0, currentY: 0,
-      side: 'right', ratio: 1, keyboardHeight: 0,
+      side: 'right', ratio: 1, keyboardHeight: 0, areaGeometry: null,
       positionReady: false, opening: false, settling: false, moved: false,
       touching: false, startPoint: null
     }
   },
   computed: {
-    maxX() { return Math.max(0, this.bounds.width - 24 - 80) },
-    maxY() { return Math.max(0, this.bounds.bottom - 16 - 110) },
+    maxX() { return Math.max(0, Math.min(this.bounds.width - 24, this.areaGeometry ? this.areaGeometry.width : Infinity) - 80) },
+    maxY() {
+      const area = this.areaGeometry
+      const height = area ? Math.min(area.height, this.bounds.bottom - 16 - area.top) : this.bounds.bottom - 16
+      return Math.max(0, height - 110)
+    },
     visible() {
       return this.active && !this.searchFocused && !this.keyboardHeight &&
         this.bounds.width >= 104 && this.bounds.bottom >= 126
@@ -58,6 +62,7 @@ export default {
     }
   },
   mounted() {
+    this.positionRequestId = 0
     try {
       const saved = uni.getStorageSync(POSITION_KEY)
       if (saved && (saved.side === 'left' || saved.side === 'right') && Number.isFinite(saved.ratio)) {
@@ -77,19 +82,28 @@ export default {
   methods: {
     restorePosition() {
       this.cancelGesture()
+      const ticket = this.positionRequestId, valid = () => !this.disposed && this.visible && ticket === this.positionRequestId
+      this.areaGeometry = null
+      this.ratio = Number.isFinite(this.ratio) ? clamp(this.ratio, 1) : 1
       this.positionReady = false
       this.x = this.currentX = this.side === 'left' ? 0 : this.maxX
       this.y = this.currentY = this.ratio * this.maxY
       // Native movable-view clamps initial x/y against its area's measured
       // dimensions. Mount it only after that area has completed native layout.
       this.$nextTick(() => {
-        if (this.disposed || !this.visible) return
+        if (!valid()) return
         uni.createSelectorQuery().in(this).select('.bxt-area').boundingClientRect(rect => {
-          if (!this.disposed && this.visible && rect && rect.width > 0 && rect.height > 0) this.positionReady = true
+          if (!valid() || !rect || !Number.isFinite(rect.top) || rect.width <= 0 || rect.height <= 0) return
+          this.areaGeometry = rect
+          // x/y are local to the native movable-area, not the page viewport.
+          this.x = this.currentX = this.side === 'left' ? 0 : this.maxX
+          this.y = this.currentY = clamp(this.ratio * this.maxY, this.maxY)
+          this.positionReady = true
         }).exec()
       })
     },
     cancelGesture() {
+      this.positionRequestId = (this.positionRequestId || 0) + 1
       clearTimeout(this.settleTimer)
       this.touching = false
       this.startPoint = null
@@ -136,6 +150,7 @@ export default {
       this.snapToEdge(true)
     },
     snapToEdge(save) {
+      const ticket = this.positionRequestId
       this.side = this.currentX + 40 <= (this.bounds.width - 24) / 2 ? 'left' : 'right'
       this.ratio = this.maxY ? clamp(this.currentY, this.maxY) / this.maxY : 0
       // First sync Vue with the native dragged position, then set the target.
@@ -143,11 +158,12 @@ export default {
       this.y = this.currentY
       this.settling = save
       this.$nextTick(() => {
-        if (this.disposed || !this.visible) return
+        if (this.disposed || !this.visible || ticket !== this.positionRequestId) return
         this.x = this.currentX = this.side === 'left' ? 0 : this.maxX
         this.y = this.currentY = this.ratio * this.maxY
         if (!save) return
         this.settleTimer = setTimeout(() => {
+          if (this.disposed || !this.visible || ticket !== this.positionRequestId) return
           this.settling = false
           try { uni.setStorageSync(POSITION_KEY, { side: this.side, ratio: this.ratio }) } catch (error) { /* Position is optional. */ }
         }, 80)

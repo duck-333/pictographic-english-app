@@ -38,7 +38,7 @@ function harness(saved) {
   component.mounted.call(instance)
   const flush = () => {
     while (ticks.length) ticks.shift()()
-    while (measurements.length) measurements.shift()({ width: 366, height: 664 })
+    while (measurements.length) measurements.shift()({ top: 0, left: 12, width: instance.bounds.width - 24, height: instance.bounds.bottom - 16 })
     for (const [id, fn] of timers) { timers.delete(id); fn() }
   }
   // Model Vue watcher dispatch explicitly; no Vue runtime or native layout is simulated.
@@ -50,7 +50,7 @@ function harness(saved) {
   }
   flush()
   return { instance, calls, keyboard: height => update(() => keyboard({ height })),
-    update, flush,
+    update, flush, ticks, measurements,
     destroy: () => { component.beforeDestroy.call(instance); assert.equal(removed, true) },
     changeBounds: bounds => { instance.bounds = bounds; component.watch.bounds.call(instance) }
   }
@@ -90,6 +90,7 @@ h.flush()
 
 const restored = harness(h.calls.writes[0][1])
 restored.changeBounds({ width: 320, bottom: 500 })
+restored.flush()
 assert.equal(restored.instance.x, 0)
 assert.ok(Math.abs(restored.instance.y - 424 / 554 * 374) < 0.001)
 gesture(restored, 9999, 9999); restored.flush()
@@ -144,6 +145,25 @@ assert.equal(disposed.calls.writes.length, 0, 'destroy before nextTick must canc
 const malformed = harness({ side: 'left', ratio: 'bad' })
 assert.equal(malformed.instance.x, 286)
 
+// Controlled asynchronous movable-area replies use the real restore/watchers.
+const areaRace = harness({side:'right',ratio:1})
+areaRace.changeBounds({width:390,bottom:600});areaRace.ticks.shift()()
+const oldArea=areaRace.measurements.shift()
+areaRace.changeBounds({width:320,bottom:500});areaRace.ticks.shift()()
+const newArea=areaRace.measurements.shift()
+newArea({top:20,left:12,width:296,height:484})
+assert.equal(areaRace.instance.y,354,'whole 110px entry ends 16px above navigation with area origin included')
+oldArea({top:0,left:12,width:366,height:584})
+assert.equal(areaRace.instance.y,354,'old area response cannot overwrite resized/restored position')
+areaRace.instance.restorePosition();areaRace.ticks.shift()();const preHide=areaRace.measurements.shift()
+areaRace.update(()=>{areaRace.instance.active=false});areaRace.update(()=>{areaRace.instance.active=true})
+while(areaRace.ticks.length)areaRace.ticks.shift()()
+areaRace.measurements.shift()({top:0,left:12,width:296,height:484})
+preHide({top:100,left:12,width:296,height:484});assert.equal(areaRace.instance.y,374)
+areaRace.instance.restorePosition();areaRace.ticks.shift()();const lateArea=areaRace.measurements.shift()
+areaRace.destroy();lateArea({top:100,left:12,width:296,height:484})
+assert.equal(areaRace.instance.areaGeometry,null,'destroy invalidates pending geometry')
+
 // Actual homepage methods/lifecycle; selector exec only queues callbacks.
 // Tests choose nextTick execution and native response order independently.
 const pageSource = readFileSync(new URL('../miniapp-uni/word-app1/pages/index/index.vue', import.meta.url), 'utf8')
@@ -176,7 +196,7 @@ function pageHarness() {
     lifecycle: name => page[name].call(instance),
     window: value => { info = value },
     tick: (index = 0) => ticks.splice(index, 1)[0](),
-    reply: (index, top) => responses[index]({ top }) }
+    reply: (index, top) => responses[index](typeof top==='number'?{ top }:top) }
 }
 const race = pageHarness()
 race.lifecycle('onShow'); race.tick()
@@ -209,6 +229,9 @@ for (const lifecycle of ['onHide', 'onUnload']) {
 const clamped = pageHarness()
 clamped.lifecycle('onShow'); clamped.tick(); clamped.reply(0, 999)
 assert.equal(clamped.instance.gameEntryBounds.bottom, 700, 'window clamp preserved')
+const navOrigin = pageHarness()
+navOrigin.lifecycle('onShow');navOrigin.tick();navOrigin.reply(0,{top:720,height:90})
+assert.equal(navOrigin.instance.gameEntryBounds.bottom,610,'fixed nav height corrects screen/viewport origin and already includes safe inset')
 clamped.instance.handleSearchFocus()
 assert.equal(clamped.instance.focused, true)
 const searchEntry = harness()
