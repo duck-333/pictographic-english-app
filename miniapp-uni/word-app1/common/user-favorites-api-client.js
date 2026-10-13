@@ -1,5 +1,5 @@
 import { getWordApiBaseUrl } from './api-config.js'
-import { getAuthSession } from './auth-store.js'
+import { getAuthSession, captureAuthSession, invalidateAuthSession } from './auth-store.js'
 
 export const USER_FAVORITES_API_TIMEOUT_MS = 7000
 
@@ -59,6 +59,7 @@ function requestJson(path, options = {}) {
     return Promise.reject(error)
   }
 
+  const snapshot = captureAuthSession()
   const timeout = Number(options.timeout || USER_FAVORITES_API_TIMEOUT_MS)
   return new Promise((resolve, reject) => {
     let settled = false
@@ -88,12 +89,14 @@ function requestJson(path, options = {}) {
         Authorization: authorization
       },
       success: (response) => {
+        if (settled) return
         const statusCode = Number(response.statusCode || 0)
         const data = response.data && typeof response.data === 'object' ? response.data : {}
         if (statusCode >= 200 && statusCode < 300 && data.ok !== false) {
           finish(resolve, data)
           return
         }
+        if (statusCode === 401 || statusCode === 403) invalidateAuthSession(snapshot, authorization.slice(7))
         finish(reject, createUserFavoritesApiError(data.message || `User favorites API request failed with ${statusCode}`, {
           code: data.code || 'USER_FAVORITES_API_RESPONSE_ERROR',
           statusCode

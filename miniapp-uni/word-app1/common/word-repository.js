@@ -3,7 +3,13 @@ import {
   NAV_ITEMS as LOCAL_NAV_ITEMS,
   WORDS as LOCAL_WORDS
 } from './mock-data.js'
-import { DEV_PREVIEW_WORDS } from './dev-preview-data.js'
+// webpack removes this development-only dependency from the release graph.
+let DEV_PREVIEW_WORDS = []
+if (process.env.NODE_ENV === 'development' && typeof require === 'function') {
+  DEV_PREVIEW_WORDS = require('./dev-preview-data.js').DEV_PREVIEW_WORDS
+}
+import { toPublicWord } from './public-word.js'
+import { subscribeAuthSession } from './auth-store.js'
 import { getWordApiBaseUrl } from './api-config.js'
 import {
   createWordDraft,
@@ -139,6 +145,7 @@ export function isPlayableMediaUrl(url, options = {}) {
 const ACTIVE_DEV_PREVIEW_WORDS = selectDevPreviewWordsForRuntime(DEV_PREVIEW_WORDS)
 const SOURCE_WORDS = mergePreviewWords(LOCAL_WORDS, ACTIVE_DEV_PREVIEW_WORDS)
 let REMOTE_WORD_RECORDS = []
+subscribeAuthSession(() => { REMOTE_WORD_RECORDS = [] })
 
 export const WORD_REPOSITORY_CACHE_VERSION = 2
 export const WORD_REPOSITORY_CACHE_VERSION_KEY = 'pictographic:wordRepositoryCacheVersion'
@@ -202,28 +209,30 @@ const PUBLISHED_WORD_RECORDS = SOURCE_WORDS
 
 function getPublishedWordRecords() {
   return mergePreviewWords(PUBLISHED_WORD_RECORDS, REMOTE_WORD_RECORDS)
-    .map((item) => normalizeWordRecord(item))
+    .map((item) => toPublicWord(normalizeWordRecord(toPublicWord(item))))
     .filter((item) => item.status === 'published')
 }
 
 function getAllWordRecords() {
-  return mergePreviewWords(WORD_RECORDS, REMOTE_WORD_RECORDS).map((item) => normalizeWordRecord(item))
+  return mergePreviewWords(WORD_RECORDS, REMOTE_WORD_RECORDS).map((item) => toPublicWord(normalizeWordRecord(toPublicWord(item))))
 }
 
 function normalizeRemoteDisplayWord(word) {
   const source = word && typeof word === 'object' && !Array.isArray(word) ? word : {}
-  const normalized = normalizeWordRecord(source)
+  const isFull = source.access && source.access.canAccessFull === true
+  const normalized = normalizeWordRecord(isFull ? source : toPublicWord(source))
   const rawId = String(source.id || '').trim()
   const rawWord = String(source.word || '').trim()
   const access = source.access && typeof source.access === 'object' && !Array.isArray(source.access)
     ? { ...source.access }
     : null
-  return {
+  const result = {
     ...normalized,
     id: rawId || normalized.id,
     word: rawWord || normalized.word,
     ...(access ? { access } : {})
   }
+  return isFull ? result : toPublicWord(result)
 }
 
 function normalizePublishedRemoteWords(words) {
@@ -236,10 +245,10 @@ function normalizePublishedRemoteWords(words) {
 function cacheRemoteWords(words) {
   const publishedWords = normalizePublishedRemoteWords(words)
   if (!publishedWords.length) return []
-  REMOTE_WORD_RECORDS = mergePreviewWords(REMOTE_WORD_RECORDS, publishedWords)
-    .map((item) => normalizeRemoteDisplayWord(item))
+  REMOTE_WORD_RECORDS = mergePreviewWords(REMOTE_WORD_RECORDS, publishedWords.map(toPublicWord))
+    .map((item) => toPublicWord(item))
     .filter((item) => item.status === 'published')
-  return publishedWords.map((item) => cloneWord(item))
+  return publishedWords.map((item) => cloneWord(toPublicWord(item)))
 }
 
 function createRemoteFailure(error, fallback) {
@@ -302,6 +311,7 @@ function cloneIllustrationImage(image) {
 
 function cloneWord(word) {
   if (!word) return null
+  if (!word.access || word.access.canAccessFull !== true) return toPublicWord(word)
   return {
     ...word,
     parts: Array.isArray(word.parts) ? word.parts.map((part) => clonePart(part)) : [],

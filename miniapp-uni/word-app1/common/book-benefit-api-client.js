@@ -1,5 +1,5 @@
 import { getWordApiBaseUrl } from './api-config.js'
-import { clearAuthSession, getAuthSession } from './auth-store.js'
+import { getAuthSession, captureAuthSession, invalidateAuthSession } from './auth-store.js'
 
 export const BOOK_BENEFIT_API_TIMEOUT_MS = 7000
 
@@ -42,6 +42,7 @@ export function redeemBookBenefitCode(input, options = {}) {
     return Promise.reject(createBookBenefitApiError('BOOK_BENEFIT_API_UNAVAILABLE'))
   }
 
+  const snapshot = captureAuthSession()
   const timeout = Number(options.timeout || BOOK_BENEFIT_API_TIMEOUT_MS)
   return new Promise((resolve, reject) => {
     let settled = false
@@ -67,13 +68,14 @@ export function redeemBookBenefitCode(input, options = {}) {
         Authorization: authorization
       },
       success: (response) => {
+        if (settled) return
         const statusCode = Number(response.statusCode || 0)
         const data = response.data && typeof response.data === 'object' ? response.data : {}
         if (statusCode >= 200 && statusCode < 300 && data.ok !== false) {
           finish(resolve, data)
           return
         }
-        if (statusCode === 401 || statusCode === 403) clearAuthSession()
+        if (statusCode === 401 || statusCode === 403) invalidateAuthSession(snapshot, authorization.slice(7))
         finish(reject, createBookBenefitApiError(data.code || 'BOOK_BENEFIT_API_RESPONSE_ERROR', statusCode))
       },
       fail: (requestError) => {
