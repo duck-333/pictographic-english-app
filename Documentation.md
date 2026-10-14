@@ -1,5 +1,12 @@
 # Documentation
 
+## 2026-10-14：最终提交补审P2最小修正
+
+- 基线d5085c42a2c00709f804629fb5ffc21ee9293be3，feature/content-api-security。仅修改发行核验脚本、增加scripts/test-content-security-release-verifier.mjs并更新核验用法/状态文档；不改业务、不读取docs/competition/、不暂存/提交/推送或生产操作。
+- 依赖清单改为必需输入，读取/JSON/非空模块结构校验失败均非零退出；产物扫描及实际依赖图检查均通过后才输出完整成功。沿用现有模块清单字段和禁止开发依赖规则，没有新增hash或SHA门禁。
+- 21组本机子进程退出码/结论专项通过；测试覆盖缺参、不存在/读取失败、格式错误、禁止模块、合法干净清单、明文及转义私有样例残留。真实旧产物与清单可作辅助扫描，不证明对应目标SHA。使用说明见docs/CONTENT_API_SECURITY_BATCH1.md末节。
+- 独立针对性复审结论以本轮项目外报告为准；发行产物提交绑定及生产/线上/真机事项继续待验证。
+
 ## 2026-10-13：内容接口安全批次①本地记录
 
 - 分支feature/content-api-security，基线9ab54e25a824b89d532e9953be47a54bc6e1b2e7；保留未跟踪docs/competition/且不读取其内容；没有暂存、提交、推送、部署或生产DB/服务器/云端操作。
