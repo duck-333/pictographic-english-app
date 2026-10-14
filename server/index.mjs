@@ -14,6 +14,7 @@ import { createVirtualPaymentRoutes } from './virtual-payment-routes.mjs'
 import { createVirtualPaymentMessageRoutes } from './virtual-payment-message-routes.mjs'
 import { createWechatLoginClient } from './wechat-login.mjs'
 import { toBasicWord, toFullWord } from './word-access-policy.mjs'
+import { createLocalContentRateLimiter, getDirectPeerIp } from './content-rate-limit.mjs'
 import { createRuntimeWordStore } from './word-store.mjs'
 import { checkVirtualPaymentDeliverySchema } from '../scripts/check-virtual-payment-delivery-schema.mjs'
 
@@ -1109,6 +1110,9 @@ export function createApiHandler(options = {}) {
   return async function handleApiRequest(req, res) {
     const requestUrl = new URL(req.url || '/', 'http://127.0.0.1')
     const pathname = normalizePathname(requestUrl.pathname)
+    const contentDetail = pathname.startsWith('/api/words/')
+    const adminContent = pathname === '/api/admin/words' || pathname === '/api/admin/homepage-featured'
+    if (contentDetail || adminContent) res.setHeader('Cache-Control', 'private, no-store')
 
     // The public WeChat callback has its own method policy and must not inherit
     // the JWT API's generic CORS preflight success response.
@@ -1119,6 +1123,18 @@ export function createApiHandler(options = {}) {
     }
 
     try {
+      const limiter = options.contentRateLimiter
+      const contentRoute = req.method === 'GET' && (contentDetail || pathname === '/api/words' || pathname === '/api/homepage/featured-word')
+      if (limiter && contentRoute) {
+        const group = contentDetail && hasAuthorizationHeader(req) ? 'fullIp' : 'basicIp'
+        const result = await limiter.consume(group, getDirectPeerIp(req))
+        if (!result.allowed) {
+          sendJson(res, 429, { ok: false, code: 'CONTENT_RATE_LIMITED', message: '访问过于频繁，请稍后重试。' }, {
+            'Cache-Control': 'private, no-store', 'Retry-After': String(result.retryAfter || 1)
+          })
+          return
+        }
+      }
       if (req.method === 'GET' && pathname === '/api/health') {
         sendJson(res, 200, {
           ok: true,
@@ -1294,6 +1310,15 @@ export function createApiHandler(options = {}) {
         }
 
         try {
+          if (limiter) {
+            const result = await limiter.consume('account', authResult.userId)
+            if (!result.allowed) {
+              sendJson(res, 429, { ok: false, code: 'CONTENT_RATE_LIMITED', message: '访问过于频繁，请稍后重试。' }, {
+                'Cache-Control': 'private, no-store', 'Retry-After': String(result.retryAfter || 1)
+              })
+              return
+            }
+          }
           if (!userEntitlementStore) {
             throw createUserEntitlementRequestError('User entitlement store is not available.', {
               code: 'USER_ENTITLEMENT_STORE_UNAVAILABLE'
@@ -2062,6 +2087,9 @@ export function startServer(options = {}) {
   })
   const server = http.createServer(createApiHandler({
     ...options,
+    contentRateLimiter: options.contentRateLimiter || (
+      (options.nodeEnv || process.env.NODE_ENV) === 'development' ? createLocalContentRateLimiter() : null
+    ),
     store
   }))
 

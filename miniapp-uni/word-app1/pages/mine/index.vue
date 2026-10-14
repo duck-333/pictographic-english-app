@@ -176,7 +176,7 @@
 import BottomNav from '../../components/BottomNav.vue'
 import { loginWithWechatPhone } from '../../common/auth-api-client.js'
 import { redeemBookBenefitCode } from '../../common/book-benefit-api-client.js'
-import { clearAuthSession, getAuthSession } from '../../common/auth-store.js'
+import { clearAuthSession, getAuthSession, captureAuthSession, isAuthSessionCurrent, invalidateAuthSession } from '../../common/auth-store.js'
 import { getUserEntitlements } from '../../common/user-entitlements-api-client.js'
 import { listUserFavorites } from '../../common/user-favorites-api-client.js'
 import { listUserRecentWords } from '../../common/user-recent-words-api-client.js'
@@ -559,6 +559,8 @@ export default {
       if (!this.bookBenefitOperationId) this.bookBenefitOperationId = this.createBookBenefitOperationId()
       this.bookBenefitRedeeming = true
       this.bookBenefitMessage = ''
+      const requestSession = captureAuthSession()
+      const requestToken = this.authSession.token
       try {
         const result = await redeemBookBenefitCode({
           code,
@@ -566,6 +568,7 @@ export default {
         }, {
           session: this.authSession
         })
+        if (!isAuthSessionCurrent(requestSession)) return
         this.bookBenefitSuccess = {
           membershipExpireAt: result.membershipExpireAt || ''
         }
@@ -579,13 +582,16 @@ export default {
       } catch (error) {
         const authInvalid = error && (error.code === 'UNAUTHORIZED' || Number(error.statusCode) === 401 || Number(error.statusCode) === 403)
         if (authInvalid) {
-          clearAuthSession()
+          const current = getAuthSession()
+          if (current && (!isAuthSessionCurrent(requestSession) || current.token !== requestToken)) return
+          invalidateAuthSession(requestSession, requestToken)
           this.authSession = null
           this.entitlement = null
           this.clearBookBenefitRedemptionState()
           this.bookBenefitMessage = '登录状态已失效，请重新登录。'
           return
         }
+        if (!isAuthSessionCurrent(requestSession)) return
         if (this.isBookBenefitNetworkUncertain(error)) {
           this.bookBenefitPending = true
           this.bookBenefitMessage = '网络结果待确认，请保留福利码并使用同一操作再次确认。'

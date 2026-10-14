@@ -397,7 +397,7 @@ async function main() {
     assert(saved.status === 200, 'POST /api/admin/words should return 200')
     assert(saved.body.ok === true, 'POST /api/admin/words should return ok=true')
     assert(saved.body.word.id === word.id, 'POST /api/admin/words should return the saved word')
-    assert(saved.body.word.illustrationImage.url === word.illustrationImage.url, 'POST /api/admin/words should preserve illustrationImage')
+    assert(saved.body.word.illustrationImage.url === word.illustrationImage.url, 'POST /api/admin/words must omit protected illustrationImage')
     const persistedAfterSave = JSON.parse(await readFile(testDataUrl, 'utf8'))
     const persistedSavedWord = persistedAfterSave.words.find((item) => item.id === word.id)
     assert(
@@ -430,14 +430,14 @@ async function main() {
     assert(Array.isArray(list.body.words), 'GET /api/words should return a words array')
     assert(list.body.words.some((item) => item.id === word.id), 'GET /api/words should include the saved published word')
     assert(
-      list.body.words.find((item) => item.id === word.id).illustrationImage.url === word.illustrationImage.url,
-      'GET /api/words should return illustrationImage for published words'
+      !Object.prototype.hasOwnProperty.call(list.body.words.find((item) => item.id === word.id), 'illustrationImage'),
+      'GET /api/words must omit protected illustrationImage'
     )
 
     const detail = await readJson(await fetch(`${baseUrl}/api/words/${word.id}`))
     assert(detail.status === 200, 'GET /api/words/:id should return 200 for saved word')
     assert(detail.body.word.word === word.word, 'GET /api/words/:id should return the saved word payload')
-    assert(detail.body.word.illustrationImage.url === word.illustrationImage.url, 'GET /api/words/:id should return illustrationImage')
+    assert(!Object.prototype.hasOwnProperty.call(detail.body.word, 'illustrationImage'), 'GET /api/words/:id must omit protected illustrationImage')
 
     const storedStudentWord = {
       id: 'student',
@@ -474,15 +474,15 @@ async function main() {
     const storedStudentDetail = await readJson(await fetch(`${baseUrl}/api/words/student`))
     assert(storedStudentDetail.status === 200, 'GET /api/words/student should read an existing words.json record')
     assert(
-      storedStudentDetail.body.word.illustrationImage.url === storedStudentWord.illustrationImage.url,
-      'GET /api/words/student should expose a stored production illustrationImage'
+      !Object.prototype.hasOwnProperty.call(storedStudentDetail.body.word, 'illustrationImage'),
+      'GET /api/words/student must omit a stored protected illustrationImage'
     )
 
     const storedStudentSearch = await readJson(await fetch(`${baseUrl}/api/words?q=student`))
     assert(storedStudentSearch.status === 200, 'GET /api/words?q=student should return 200')
     assert(
-      storedStudentSearch.body.words[0].illustrationImage.url === storedStudentWord.illustrationImage.url,
-      'GET /api/words?q=student should expose a stored production illustrationImage'
+      !Object.prototype.hasOwnProperty.call(storedStudentSearch.body.words[0], 'illustrationImage'),
+      'GET /api/words?q=student must omit a stored protected illustrationImage'
     )
 
     for (const unsafeWord of storedUnsafeWords) {
@@ -569,8 +569,8 @@ async function main() {
     const publicSingleFeatured = await readJson(await fetch(`${baseUrl}/api/homepage/featured-word`))
     assert(publicSingleFeatured.body.word.id === 'tud', 'single-word homepage featured pool should return tud')
     assert(
-      publicSingleFeatured.body.word.illustrationImage.url === 'https://cdn.baxiaota.com/images/tud.png',
-      'homepage featured API should preserve illustrationImage'
+      !Object.prototype.hasOwnProperty.call(publicSingleFeatured.body.word, 'illustrationImage'),
+      'homepage featured API must omit protected illustrationImage'
     )
 
     const dailyFeaturedSave = await readJson(await fetch(`${baseUrl}/api/admin/homepage-featured`, {

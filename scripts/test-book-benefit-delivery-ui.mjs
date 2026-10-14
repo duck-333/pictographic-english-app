@@ -91,6 +91,7 @@ async function testAdminApiClient() {
 async function testMiniappApiClient() {
   const requests = []
   let removedAuthSessions = 0
+  let storedSession = null
   const originalUni = globalThis.uni
   globalThis.uni = {
     request(options) {
@@ -105,12 +106,13 @@ async function testMiniappApiClient() {
       } }))
       return { abort() {} }
     },
-    removeStorageSync() { removedAuthSessions += 1 },
-    getStorageSync() { return null }
+    removeStorageSync() { removedAuthSessions += 1; storedSession = null },
+    getStorageSync() { return storedSession }
   }
   try {
     const client = await import(MINI_CLIENT_PATH)
-    const session = { token: 'FAKE_USER_JWT', user: { id: '42' } }
+    const session = { token: 'FAKE_USER_JWT', user: { id: '42' }, expiresAt: '2099-01-01T00:00:00.000Z' }
+    storedSession = session
     await client.redeemBookBenefitCode({
       code: 'BOOK-FAKE-CODE',
       operationId: 'redeem-ui-1',
@@ -323,6 +325,9 @@ async function testMiniappPageBehavior() {
     getUserState: () => ({ streakDays: 0 }),
     getAuthSession: () => session,
     clearAuthSession() { clearAuthCount += 1 },
+    captureAuthSession: () => ({ userId: session.user.id, version: 0 }),
+    isAuthSessionCurrent: () => true,
+    invalidateAuthSession() { clearAuthCount += 1 },
     loginWithWechatPhone: async () => session,
     redeemBookBenefitCode: async (payload) => { api.calls.push(payload); return api.impl(payload) },
     getUserEntitlements: async () => ({

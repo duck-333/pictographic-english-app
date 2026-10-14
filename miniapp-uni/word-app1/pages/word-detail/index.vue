@@ -316,7 +316,8 @@ import {
   getPartFallbackStyle as resolvePartFallbackStyle,
   getPartVisualStyle as resolvePartVisualStyle
 } from '../../common/part-visual-style.js'
-import { getAuthSession } from '../../common/auth-store.js'
+import { getAuthSession, subscribeAuthSession, captureAuthSession, isAuthSessionCurrent } from '../../common/auth-store.js'
+import { toPublicWord } from '../../common/public-word.js'
 import { addUserFavorite, listUserFavorites, removeUserFavorite } from '../../common/user-favorites-api-client.js'
 import { recordUserRecentWord } from '../../common/user-recent-words-api-client.js'
 import { addRecentWord, getPendingWordId, recordLearningActivity, savePendingWordId } from '../../common/user-store.js'
@@ -418,14 +419,26 @@ export default {
     }
   },
   onLoad(options) {
+    this.contentLoadSequence = 0
+    this.unsubscribeContentSession = subscribeAuthSession(() => {
+      this.contentLoadSequence += 1
+      this.wordAccessClientRequestId = createWordDetailClientRequestId()
+      if (this.word) this.word = toPublicWord(this.word)
+      this.relatedWords = []
+      this.loading = false
+      this.resetWordViewState()
+    })
     this.wordAccessClientRequestId = createWordDetailClientRequestId()
     this.loadWord(options)
   },
   onUnload() {
+    this.contentLoadSequence += 1
+    if (this.unsubscribeContentSession) this.unsubscribeContentSession()
     this.clearClipPlaybackTimer()
     this.destroyPronunciationAudio()
   },
   onShow() {
+    getAuthSession() // Expiry follows the same invalidation path as logout.
     if (this.refreshAccessOnReturn) {
       this.refreshAccessOnReturn = false
       this.loadWord({ id: this.word && this.word.id || this.notFoundQuery })
@@ -721,6 +734,9 @@ export default {
   },
   methods: {
     async loadWord(options) {
+      const snapshot = captureAuthSession()
+      const sequence = ++this.contentLoadSequence
+      const stillCurrent = () => sequence === this.contentLoadSequence && isAuthSessionCurrent(snapshot)
       this.stopPronunciationAudio()
       const optionValue = options && (options.id || options.word) ? options.id || options.word : ''
       const fallbackValue = optionValue || getPendingWordId() || ''
@@ -749,6 +765,7 @@ export default {
           remote = await fetchWordByWord(raw)
         }
       } catch (error) {
+        if (!stillCurrent()) return
         if (isQuotaInsufficientError(error)) {
           this.quotaInsufficientFallback = true
           this.notFoundTitle = '剩余查词次数不足'
@@ -763,11 +780,14 @@ export default {
           return
         }
         this.notFoundTitle = '暂时无法加载词条'
-        this.notFoundDescription = '线上词库连接失败，请检查网络后重试。'
+        this.notFoundDescription = error.statusCode === 429
+          ? '访问过于频繁，请稍后重试。'
+          : '线上词库连接失败，请检查网络后重试。'
         this.loading = false
         return
       }
 
+      if (!stillCurrent()) return
       if (!remote || remote.status !== 'published') {
         this.loading = false
         return

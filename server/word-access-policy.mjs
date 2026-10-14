@@ -28,18 +28,6 @@ function setIfPresent(target, key, value) {
   target[key] = value
 }
 
-function normalizeBasicIllustrationImage(value) {
-  const source = isPlainObject(value) ? value : {}
-  const image = {}
-  setIfPresent(image, 'url', normalizeString(source.url))
-  setIfPresent(image, 'title', normalizeString(source.title))
-  setIfPresent(image, 'alt', normalizeString(source.alt))
-  setIfPresent(image, 'provider', normalizeString(source.provider))
-  setIfPresent(image, 'uploadStatus', normalizeString(source.uploadStatus || source.upload_status))
-  setIfPresent(image, 'uploadedAt', normalizeString(source.uploadedAt || source.uploaded_at))
-  return image
-}
-
 function normalizeBasicPronunciationAudio(value, word = {}) {
   const source = isPlainObject(value) ? value : {}
   const audioUrl = normalizeString(source.audioUrl || source.audio_url || source.url || word.audioUrl || word.audio_url)
@@ -79,7 +67,7 @@ export function toBasicWord(sourceWord, accessOptions = {}) {
   const word = {
     id: source.id,
     word: source.word,
-    meaning: source.meaning || source.basicMeaning || source.basic_meaning || '',
+    meaning: source.basicMeaning || source.basic_meaning || source.meaning || '',
     basicMeaning: source.basicMeaning || source.basic_meaning || source.meaning || '',
     phonetic: source.phonetic || '',
     level: source.level || '',
@@ -88,20 +76,19 @@ export function toBasicWord(sourceWord, accessOptions = {}) {
     cardType: source.cardType || source.card_type || '',
     bookPage: source.bookPage || source.book_page || '',
     image: normalizeString(source.image),
-    intro: source.intro || '',
     updatedAt: source.updatedAt || source.updated_at || '',
     access: createAccessPayload({
+      ...accessOptions,
       canAccessFull: false,
-      ...accessOptions
+      charged: false,
+      chargeAmount: 0
     })
   }
 
-  const illustrationImage = normalizeBasicIllustrationImage(source.illustrationImage || source.illustration_image)
   const pronunciationAudio = normalizeBasicPronunciationAudio(
     source.pronunciationAudio || source.pronunciation_audio || source.audio,
     source
   )
-  setIfPresent(word, 'illustrationImage', illustrationImage)
   setIfPresent(word, 'pronunciationAudio', pronunciationAudio)
   setIfPresent(word, 'audioUrl', pronunciationAudio.audioUrl)
 

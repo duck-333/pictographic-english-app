@@ -1,5 +1,6 @@
 import { getWordApiBaseUrl } from './api-config.js'
-import { getAuthSession } from './auth-store.js'
+import { getAuthSession, invalidateAuthSession, captureAuthSession, isAuthSessionCurrent } from './auth-store.js'
+import { toPublicWord } from './public-word.js'
 
 export const WORD_API_TIMEOUT_MS = 7000
 
@@ -17,6 +18,7 @@ function createWordApiError(message, options = {}) {
   const error = new Error(message)
   error.code = options.code || 'WORD_API_ERROR'
   error.statusCode = Number(options.statusCode || 0)
+  error.retryAfter = Number(options.retryAfter || 0)
   return error
 }
 
@@ -92,6 +94,7 @@ function requestJson(path, options = {}) {
       timeout,
       header: buildRequestHeaders(options),
       success: (response) => {
+        if (settled) return
         const statusCode = Number(response.statusCode || 0)
         const data = response.data && typeof response.data === 'object' ? response.data : {}
         if (statusCode >= 200 && statusCode < 300 && data.ok !== false) {
@@ -100,7 +103,8 @@ function requestJson(path, options = {}) {
         }
         finish(reject, createWordApiError(data.message || `Word API request failed with ${statusCode}`, {
           code: data.code || (statusCode === 404 ? 'WORD_NOT_FOUND' : 'WORD_API_RESPONSE_ERROR'),
-          statusCode
+          statusCode,
+          retryAfter: response.header && (response.header['Retry-After'] || response.header['retry-after'])
         }))
       },
       fail: (requestError) => {
@@ -119,13 +123,13 @@ export function fetchServerWords(query, options = {}) {
   const keyword = String(query || '').trim()
   const suffix = keyword ? `?q=${encodeURIComponent(keyword)}` : ''
   return requestJson(`/api/words${suffix}`, options).then((data) => {
-    return Array.isArray(data.words) ? data.words : []
+    return Array.isArray(data.words) ? data.words.map(toPublicWord) : []
   })
 }
 
 export function fetchServerHomepageFeaturedWord(options = {}) {
   return requestJson('/api/homepage/featured-word', options).then((data) => ({
-    word: data.word || null,
+    word: data.word ? toPublicWord(data.word) : null,
     source: String(data.source || 'empty')
   }))
 }
@@ -133,13 +137,18 @@ export function fetchServerHomepageFeaturedWord(options = {}) {
 export function fetchServerWordById(id, options = {}) {
   const wordId = String(id || '').trim()
   if (!wordId) return Promise.resolve(null)
+  const snapshot = captureAuthSession()
   const authorization = options.accessContent ? getOptionalAuthorization(options) : ''
   return requestJson(`/api/words/${encodeURIComponent(wordId)}`, {
     ...options,
     authorization
   })
     .then((data) => {
+      if (options.accessContent && !isAuthSessionCurrent(snapshot)) {
+        throw createWordApiError('Login session changed.', { code: 'AUTH_SESSION_CHANGED' })
+      }
       const word = data.word || null
+      if (word && !options.accessContent) return toPublicWord(word)
       if (word && data.access) {
         return {
           ...word,
@@ -149,6 +158,12 @@ export function fetchServerWordById(id, options = {}) {
       return word
     })
     .catch((error) => {
+      if (options.accessContent && !isAuthSessionCurrent(snapshot)) {
+        throw createWordApiError('Login session changed.', { code: 'AUTH_SESSION_CHANGED' })
+      }
+      if (options.accessContent && authorization && (error.statusCode === 401 || error.statusCode === 403)) {
+        invalidateAuthSession(snapshot, authorization.slice(7))
+      }
       if (error && error.code === 'WORD_NOT_FOUND') return null
       throw error
     })

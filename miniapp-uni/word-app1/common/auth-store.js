@@ -1,4 +1,46 @@
 export const AUTH_SESSION_KEY = 'pictographic:authSession'
+let sessionVersion = 0
+const sessionListeners = new Set()
+let expiryTimer = null
+let scheduledExpiry = ''
+
+function scheduleExpiry(session) {
+  if (scheduledExpiry === session.expiresAt && expiryTimer) return
+  clearTimeout(expiryTimer)
+  scheduledExpiry = session.expiresAt
+  expiryTimer = setTimeout(() => {
+    expiryTimer = null
+    getAuthSession() // Re-read storage; a renewed session must not be logged out.
+  }, Math.min(2147483647, Math.max(1, Date.parse(session.expiresAt) - Date.now())))
+  if (expiryTimer && typeof expiryTimer.unref === 'function') expiryTimer.unref()
+}
+
+function notifySessionChange() {
+  sessionVersion += 1
+  sessionListeners.forEach((listener) => {
+    try { listener() } catch (error) { console.warn('AUTH_SESSION_LISTENER_FAILED') }
+  })
+}
+
+export function subscribeAuthSession(listener) {
+  sessionListeners.add(listener)
+  return () => sessionListeners.delete(listener)
+}
+
+export function captureAuthSession() {
+  const session = getAuthSession()
+  return { userId: session ? session.user.id : '', version: sessionVersion }
+}
+
+export function isAuthSessionCurrent(snapshot) {
+  const current = captureAuthSession()
+  return Boolean(snapshot && snapshot.version === current.version && snapshot.userId === current.userId)
+}
+
+export function invalidateAuthSession(snapshot, token) {
+  const current = getAuthSession()
+  if (current && current.token === token && isAuthSessionCurrent(snapshot)) clearAuthSession()
+}
 
 function readStorage(key) {
   try {
@@ -39,18 +81,27 @@ export function getAuthSession(options = {}) {
     clearAuthSession()
     return null
   }
+  if (isAuthSessionValid(session)) scheduleExpiry(session)
   return session
 }
 
 export function saveAuthSession(value) {
   const session = normalizeSession(value)
   if (!session.token || !session.user.id) return null
+  const previous = getAuthSession()
   uni.setStorageSync(AUTH_SESSION_KEY, session)
+  if (isAuthSessionValid(session)) scheduleExpiry(session)
+  // A valid renewal for the same account preserves in-flight access and request IDs.
+  if (!previous || previous.user.id !== session.user.id) notifySessionChange()
   return session
 }
 
 export function clearAuthSession() {
+  clearTimeout(expiryTimer)
+  expiryTimer = null
+  scheduledExpiry = ''
   try {
     uni.removeStorageSync(AUTH_SESSION_KEY)
   } catch (error) {}
+  notifySessionChange()
 }
