@@ -1,5 +1,12 @@
 # Documentation
 
+## 2026-10-14：UI 集成第一轮审查不通过后的 P2/P3 修复
+
+- P2 根因为仅 onShow 请求、持续停留无刷新、请求期间保留旧卡片。现在可见期间每5分钟刷新（约每小时12次），上海午夜优先，首次/重新进入立即获取；重复 onShow 的在途请求合并。每次刷新先清空卡片，失败/空结果继续隐藏，按下个周期重试，不读取旧拆解/意象缓存。
+- 隐藏/销毁清定时器并递增已有请求序号；迟到回复不得更新或重新调度。跨上海日界的回复拒绝并在1ms后重新请求。客户端仅按日期调度，当前词始终由服务端决定，不授予免费完整详情/视频权益。
+- P3 专用新增字段只有 parts 与 explanation；parts 严格仅 text/meaning。label/title 仅作为既有后台格式输入别名并归一，targetId/color/bgColor/borderColor 不再输出。复用原basic信封是既有 cacheRemoteWords、最近历史及普通查词缓存的消费者需要，不复制/改变普通白名单。
+- 新测试使用独立显式字段预期；并补断言后台 fixture 保存成功，避免原测试保存失败却仍比较同记录的假通过。实际结果及沙箱失败均记录于集成文档。
+
 ## 2026-10-14：最终提交补审P2最小修正
 
 - 基线d5085c42a2c00709f804629fb5ffc21ee9293be3，feature/content-api-security。仅修改发行核验脚本、增加scripts/test-content-security-release-verifier.mjs并更新核验用法/状态文档；不改业务、不读取docs/competition/、不暂存/提交/推送或生产操作。

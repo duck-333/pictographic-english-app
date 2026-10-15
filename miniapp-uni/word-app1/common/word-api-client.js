@@ -1,6 +1,7 @@
 import { getWordApiBaseUrl } from './api-config.js'
 import { getAuthSession, invalidateAuthSession, captureAuthSession, isAuthSessionCurrent } from './auth-store.js'
 import { toPublicWord } from './public-word.js'
+import { toHomepageFeaturedWord } from './homepage-featured-word.js'
 
 export const WORD_API_TIMEOUT_MS = 7000
 
@@ -128,10 +129,16 @@ export function fetchServerWords(query, options = {}) {
 }
 
 export function fetchServerHomepageFeaturedWord(options = {}) {
-  return requestJson('/api/homepage/featured-word', options).then((data) => ({
-    word: data.word ? toPublicWord(data.word) : null,
-    source: String(data.source || 'empty')
-  }))
+  const snapshot = captureAuthSession()
+  return requestJson('/api/homepage/featured-word', options).then((data) => {
+    if (!isAuthSessionCurrent(snapshot)) {
+      throw createWordApiError('Login session changed.', { code: 'AUTH_SESSION_CHANGED' })
+    }
+    return {
+      word: data.word ? toHomepageFeaturedWord(data.word) : null,
+      source: String(data.source || 'empty')
+    }
+  })
 }
 
 export function fetchServerWordById(id, options = {}) {

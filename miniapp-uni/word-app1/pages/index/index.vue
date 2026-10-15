@@ -177,7 +177,7 @@
           <view class="today-card" hover-class="card-pressed" @tap="openTodayWord">
             <view class="word-row">
               <text class="today-word">{{ todayWord.word }}</text>
-              <text class="today-phonetic">{{ todayWord.phonetic }}</text>
+              <text v-if="todayWord.phonetic" class="today-phonetic">{{ todayWord.phonetic }}</text>
             </view>
 
             <view v-if="todayDisplayParts.length" class="parts-line">
@@ -190,11 +190,13 @@
               </block>
             </view>
 
-            <text v-if="todayWordSummary" class="tip">{{ todayWordSummary }}</text>
+            <view v-if="todayWordSummary" class="imagery">
+              <text class="imagery-label">完整意象</text>
+              <text class="tip">{{ todayWordSummary }}</text>
+            </view>
 
             <view class="card-foot">
-              <text v-if="todayWord.level || todayWord.cardType" class="level-badge">{{ todayWord.level || todayWord.cardType }}</text>
-              <text class="tap-tip">点击查看完整解析 -></text>
+              <text class="tap-tip">点击查看完整解析 →</text>
             </view>
           </view>
         </view>
@@ -220,10 +222,6 @@ import {
 import { getAuthSession } from '../../common/auth-store.js'
 import { recordUserRecentWord, listUserRecentWords } from '../../common/user-recent-words-api-client.js'
 import {
-  buildPartChipStyle,
-  buildPartTextStyle
-} from '../../common/part-visual-style.js'
-import {
   addRecentWord,
   clearRecentWords,
   getRecentWordIds,
@@ -235,6 +233,15 @@ import {
   replaceRecentWordId,
   savePendingWordId
 } from '../../common/user-store.js'
+
+// Softer surfaces for the dark homepage card; detail-page/content colors stay independent.
+const TODAY_PART_STYLES = [
+  { background: '#ddd8ed', border: '#bcb0d9', color: '#63419b' },
+  { background: '#eee0ba', border: '#d7bd7c', color: '#795719' },
+  { background: '#cbe3e8', border: '#91bcc7', color: '#1c6375' },
+  { background: '#d3e1f2', border: '#a5bfdf', color: '#315e95' },
+  { background: '#ecd5dd', border: '#d6a9b9', color: '#913f5c' }
+]
 
 export default {
   components: {
@@ -261,12 +268,15 @@ export default {
       todayWord: null,
       todayWordSource: 'empty',
       todayWordRequestId: 0,
+      todayWordActive: false,
+      todayWordPending: false,
+      todayWordRefreshTimer: null,
       recentWordsRequestId: 0,
-      todayParts: [],
       missingDescription: ''
     }
   },
   onShow() {
+    this.todayWordActive = true
     this.gameEntryActive = true
     this.measureGameEntryBounds()
     this.refreshUserData()
@@ -275,6 +285,7 @@ export default {
   onReady() { this.measureGameEntryBounds() },
   onResize() { this.measureGameEntryBounds() },
   onHide() {
+    this.stopTodayWordRefresh()
     this.gameEntryActive = false
     this.gameEntryMeasureRequestId++
   },
@@ -290,6 +301,7 @@ export default {
     }
   },
   onUnload() {
+    this.stopTodayWordRefresh()
     this.gameEntryActive = false
     this.gameEntryUnloaded = true
     this.gameEntryMeasureRequestId++
@@ -310,31 +322,23 @@ export default {
     },
     todayWordSummary() {
       if (!this.todayWord) return ''
-      return String(
-        this.todayWord.explanation ||
-        this.todayWord.tip ||
-        this.todayWord.pictograph ||
-        ''
-      ).trim()
+      const explanation = this.todayWord.explanation
+      return typeof explanation === 'string' ? explanation.trim() : ''
     },
     todayDisplayParts() {
-      if (!Array.isArray(this.todayParts) || !this.todayParts.length) return []
-      const normalizedParts = this.todayParts
+      const parts = this.todayWord && this.todayWord.parts
+      if (!Array.isArray(parts) || !parts.length) return []
+      const normalizedParts = parts
         .map((part, index) => {
           const source = part && typeof part === 'object' ? part : {}
-          const text = String(source.text || source.label || '').trim()
-          const meaning = String(source.meaning || source.title || '').trim()
-          if (!text && !meaning) return null
+          const style = TODAY_PART_STYLES[index % TODAY_PART_STYLES.length]
           return {
             ...source,
-            key: `${text || 'part'}-${index}`,
-            text,
-            meaning,
-            chipStyle: buildPartChipStyle(source, index),
-            textStyle: buildPartTextStyle(source, index)
+            key: `part-${index}`,
+            chipStyle: `background-color:${style.background};border-color:${style.border};`,
+            textStyle: `color:${style.color};`
           }
         })
-        .filter((part) => part)
       return normalizedParts.map((part, index) => ({
         ...part,
         showPlus: index < normalizedParts.length - 1
@@ -475,18 +479,49 @@ export default {
       const publishedWord = word && word.status === 'published' ? word : null
       this.todayWord = publishedWord
       this.todayWordSource = publishedWord ? source : 'empty'
-      this.todayParts = publishedWord && Array.isArray(publishedWord.parts) ? publishedWord.parts : []
+    },
+    stopTodayWordRefresh() {
+      this.todayWordActive = false
+      this.todayWordRequestId++
+      this.todayWordPending = false
+      clearTimeout(this.todayWordRefreshTimer)
+      this.todayWordRefreshTimer = null
+      this.applyTodayWord(null)
+    },
+    scheduleTodayWordRefresh(delay) {
+      clearTimeout(this.todayWordRefreshTimer)
+      this.todayWordRefreshTimer = null
+      if (!this.todayWordActive) return
+      // Shanghai has a fixed UTC+8 date boundary. Server selects the word.
+      const dayMs = 24 * 60 * 60 * 1000
+      const untilMidnight = dayMs - ((Date.now() + 8 * 60 * 60 * 1000) % dayMs)
+      this.todayWordRefreshTimer = setTimeout(() => {
+        this.todayWordRefreshTimer = null
+        this.loadTodayWord()
+      }, delay === undefined ? Math.min(5 * 60 * 1000, untilMidnight) : delay)
     },
     async loadTodayWord() {
+      if (!this.todayWordActive || this.todayWordPending) return
+      clearTimeout(this.todayWordRefreshTimer)
+      this.todayWordRefreshTimer = null
+      this.todayWordPending = true
+      this.applyTodayWord(null)
+      const shanghaiDay = () => Math.floor((Date.now() + 8 * 60 * 60 * 1000) / (24 * 60 * 60 * 1000))
+      const requestedDay = shanghaiDay()
       const requestId = this.todayWordRequestId + 1
       this.todayWordRequestId = requestId
       try {
         const result = await fetchHomepageFeaturedWord()
-        if (this.todayWordRequestId !== requestId) return
+        if (!this.todayWordActive || this.todayWordRequestId !== requestId || requestedDay !== shanghaiDay()) return
         this.applyTodayWord(result && result.word, result && result.source)
       } catch (error) {
-        if (this.todayWordRequestId !== requestId) return
+        if (!this.todayWordActive || this.todayWordRequestId !== requestId) return
         this.applyTodayWord(null, 'empty')
+      } finally {
+        if (this.todayWordActive && this.todayWordRequestId === requestId) {
+          this.todayWordPending = false
+          this.scheduleTodayWordRefresh(requestedDay !== shanghaiDay() ? 1 : undefined)
+        }
       }
     },
     resetSuggestionState() {
@@ -1143,11 +1178,14 @@ export default {
 .word-row {
   position: relative;
   align-items: flex-end;
+  flex-wrap: wrap;
   gap: 18rpx;
   margin-bottom: 22rpx;
 }
 
 .today-word {
+  max-width: 100%;
+  overflow-wrap: anywhere;
   color: #ffffff;
   font-size: 72rpx;
   font-weight: 900;
@@ -1156,7 +1194,7 @@ export default {
 
 .today-phonetic {
   margin-bottom: 8rpx;
-  color: rgba(255, 255, 255, 0.56);
+  color: #c5dfed;
   font-size: 26rpx;
 }
 
@@ -1164,46 +1202,65 @@ export default {
   position: relative;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10rpx;
-  margin-bottom: 22rpx;
+  gap: 12rpx;
+  margin-bottom: 26rpx;
 }
 
 .part-chip {
-  min-width: 96rpx;
-  padding: 10rpx 16rpx;
+  box-sizing: border-box;
+  min-width: 120rpx;
+  max-width: 100%;
+  padding: 16rpx 18rpx;
   border: 2rpx solid;
   border-radius: 18rpx;
   text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .part-text,
 .part-meaning,
 .tip,
-.level-badge,
 .tap-tip {
   display: block;
 }
 
 .part-text {
-  font-size: 30rpx;
+  font-size: 34rpx;
   font-weight: 800;
+  line-height: 1.25;
 }
 
 .part-meaning {
-  margin-top: 2rpx;
-  color: #315c82;
-  font-size: 18rpx;
+  margin-top: 6rpx;
+  color: #29475e;
+  font-size: 22rpx;
+  line-height: 1.5;
 }
 
 .plus {
-  color: rgba(255, 255, 255, 0.3);
-  font-size: 24rpx;
+  color: #bad8e9;
+  font-size: 28rpx;
+}
+
+.imagery {
+  padding-top: 22rpx;
+  border-top: 1rpx solid rgba(197, 223, 237, 0.24);
+}
+
+.imagery-label {
+  display: block;
+  margin-bottom: 8rpx;
+  color: #ffeba2;
+  font-size: 22rpx;
+  font-weight: 700;
 }
 
 .tip {
-  color: rgba(255, 255, 255, 0.76);
-  font-size: 24rpx;
+  color: #e0edf5;
+  font-size: 26rpx;
   line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .card-foot {
@@ -1213,17 +1270,8 @@ export default {
   margin-top: 24rpx;
 }
 
-.level-badge {
-  padding: 4rpx 18rpx;
-  border-radius: 999rpx;
-  background: rgba(255, 235, 162, 0.18);
-  color: #ffeba2;
-  font-size: 22rpx;
-  font-weight: 800;
-}
-
 .tap-tip {
-  color: rgba(255, 255, 255, 0.44);
+  color: #bad8e9;
   font-size: 22rpx;
 }
 

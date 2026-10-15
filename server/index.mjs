@@ -13,7 +13,7 @@ import { createUserStore } from './user-store.mjs'
 import { createVirtualPaymentRoutes } from './virtual-payment-routes.mjs'
 import { createVirtualPaymentMessageRoutes } from './virtual-payment-message-routes.mjs'
 import { createWechatLoginClient } from './wechat-login.mjs'
-import { toBasicWord, toFullWord } from './word-access-policy.mjs'
+import { toBasicWord, toFullWord, toHomepageFeaturedWord } from './word-access-policy.mjs'
 import { createLocalContentRateLimiter, getDirectPeerIp } from './content-rate-limit.mjs'
 import { createRuntimeWordStore } from './word-store.mjs'
 import { checkVirtualPaymentDeliverySchema } from '../scripts/check-virtual-payment-delivery-schema.mjs'
@@ -1255,9 +1255,9 @@ export function createApiHandler(options = {}) {
         const featured = await store.resolveHomepageFeaturedWord({
           date: now()
         })
-        sendJson(res, 200, {
+        sendNoStoreJson(res, 200, {
           ok: true,
-          word: featured.word ? toBasicWord(featured.word) : null,
+          word: featured.word ? toHomepageFeaturedWord(featured.word) : null,
           source: featured.source
         })
         return
