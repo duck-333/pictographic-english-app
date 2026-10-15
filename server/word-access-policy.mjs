@@ -119,3 +119,30 @@ export function toFullWord(sourceWord, accessOptions = {}) {
   })
   return word
 }
+
+// Full text is free only after the route's current-recommendation decision.
+// Explicit projection keeps all video aliases, asset IDs and credentials out.
+export function toFeaturedTextWord(sourceWord) {
+  const source = cloneObject(sourceWord)
+  const pickStrings = (record, keys) => Object.fromEntries(keys
+    .filter((key) => typeof record[key] === 'string')
+    .map((key) => [key, record[key]]))
+  const word = {
+    ...toBasicWord(source),
+    ...pickStrings(source, ['meaning', 'tip', 'explanation', 'intro', 'pictograph', 'videoTitle']),
+    parts: Array.isArray(source.parts) ? source.parts.filter(isPlainObject).map((part) =>
+      pickStrings(part, ['text', 'label', 'meaning', 'title', 'targetId', 'color', 'bgColor', 'borderColor'])) : [],
+    examples: Array.isArray(source.examples) ? source.examples.map((example) =>
+      typeof example === 'string' ? example : pickStrings(isPlainObject(example) ? example : {},
+        ['english', 'chinese', 'text', 'en', 'sentence', 'zh', 'translation'])) : [],
+    siblingIds: Array.isArray(source.siblingIds) ? source.siblingIds.filter((id) => typeof id === 'string') : [],
+    videoClips: Array.isArray(source.videoClips) ? source.videoClips.filter(isPlainObject).map((clip) => ({
+      ...pickStrings(clip, ['clipId', 'title', 'segmentTitle', 'focus', 'targetPart', 'note']),
+      ...Object.fromEntries(['startSec', 'endSec'].filter((key) => Number.isFinite(clip[key])).map((key) => [key, clip[key]]))
+    })) : []
+  }
+  return toFullWord(word, {
+    reason: 'FEATURED_WORD_FREE', charged: false, chargeAmount: 0,
+    remainingQuota: null, membershipActive: false
+  })
+}

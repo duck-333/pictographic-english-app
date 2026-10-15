@@ -236,6 +236,29 @@ function normalizePublicWord(source) {
   }
 }
 
+function findWordInRecords(words, id) {
+  const targetId = String(id || '').trim()
+  if (!targetId) return null
+  const targetKey = normalizeLookupKey(targetId)
+  return words.find((item) => item.id === targetId) ||
+    words.find((item) => item.word === targetId) ||
+    words.find((item) => normalizeLookupKey(item.id) === targetKey) ||
+    words.find((item) => normalizeLookupKey(item.word) === targetKey) || null
+}
+
+function resolveFeaturedFromRecords(publishedWords, config, date) {
+  const publishedById = new Map(publishedWords.map((word) => [word.id, word]))
+  const featuredWords = config.featuredWordIds.map((id) => publishedById.get(id)).filter(Boolean)
+  const manualWord = config.mode === 'manual' && config.featuredWordIds.includes(config.manualWordId)
+    ? publishedById.get(config.manualWordId) : null
+  const selected = manualWord || (featuredWords.length ? featuredWords[getShanghaiDayNumber(date) % featuredWords.length] : null)
+  return {
+    word: selected ? clone(normalizePublicWord(selected)) : null,
+    source: manualWord ? 'manual' : selected ? 'dailyRotation' : 'empty',
+    config: clone(config)
+  }
+}
+
 export function createWordStore(options = {}) {
   const dataPath = options.dataPath ? new URL(options.dataPath, import.meta.url) : DEFAULT_DATA_PATH
   const dataFilePath = fileURLToPath(dataPath)
@@ -293,15 +316,23 @@ export function createWordStore(options = {}) {
   }
 
   async function findWordById(id, options = {}) {
-    const targetId = String(id || '').trim()
-    if (!targetId) return null
+    if (!String(id || '').trim()) return null
     const words = await listWords({ publishedOnly: options.publishedOnly, query: '' })
-    const targetKey = normalizeLookupKey(targetId)
-    const word = words.find((item) => item.id === targetId) ||
-      words.find((item) => item.word === targetId) ||
-      words.find((item) => normalizeLookupKey(item.id) === targetKey) ||
-      words.find((item) => normalizeLookupKey(item.word) === targetKey)
+    const word = findWordInRecords(words, id)
     return word ? clone(word) : null
+  }
+
+  async function findWordDetailContext(id, options = {}) {
+    // Target, publication state and recommendation all use this one read.
+    const payload = await readPayload()
+    const publishedWords = payload.words.map(normalizeWordRecord).filter((word) => word.status === 'published')
+    const config = normalizeHomepageFeaturedConfig(payload.homepageFeatured)
+    const featured = resolveFeaturedFromRecords(publishedWords, config, options.date || now())
+    const word = findWordInRecords(publishedWords, id)
+    return {
+      word: word ? clone(normalizePublicWord(word)) : null,
+      featuredWordId: featured.word ? featured.word.id : null
+    }
   }
 
   async function saveWord(sourceWord) {
@@ -365,6 +396,9 @@ export function createWordStore(options = {}) {
     if (config.mode === 'manual' && config.manualWordId && !publishedIds.has(config.manualWordId)) {
       errors.push(`manualWordId must reference a published word: ${config.manualWordId}`)
     }
+    if (config.mode === 'manual' && config.manualWordId && !config.featuredWordIds.includes(config.manualWordId)) {
+      errors.push('manualWordId must belong to featuredWordIds')
+    }
     if (errors.length) {
       return {
         ok: false,
@@ -395,36 +429,7 @@ export function createWordStore(options = {}) {
     const publishedWords = payload.words
       .map((word) => normalizeWordRecord(word))
       .filter((word) => word.status === 'published')
-    const publishedById = new Map(publishedWords.map((word) => [word.id, word]))
-    const featuredWords = config.featuredWordIds
-      .map((id) => publishedById.get(id))
-      .filter((word) => word)
-
-    if (config.mode === 'manual') {
-      const manualWord = publishedById.get(config.manualWordId)
-      if (manualWord) {
-        return {
-          word: clone(normalizePublicWord(manualWord)),
-          source: 'manual',
-          config: clone(config)
-        }
-      }
-    }
-
-    if (featuredWords.length) {
-      const index = getShanghaiDayNumber(options.date || now()) % featuredWords.length
-      return {
-        word: clone(normalizePublicWord(featuredWords[index])),
-        source: 'dailyRotation',
-        config: clone(config)
-      }
-    }
-
-    return {
-      word: null,
-      source: 'empty',
-      config: clone(config)
-    }
+    return resolveFeaturedFromRecords(publishedWords, config, options.date || now())
   }
 
   return {
@@ -433,6 +438,7 @@ export function createWordStore(options = {}) {
     listWords,
     getWordCount,
     findWordById,
+    findWordDetailContext,
     saveWord,
     getHomepageFeaturedConfig,
     saveHomepageFeaturedConfig,
