@@ -13,8 +13,8 @@ import { createUserStore } from './user-store.mjs'
 import { createVirtualPaymentRoutes } from './virtual-payment-routes.mjs'
 import { createVirtualPaymentMessageRoutes } from './virtual-payment-message-routes.mjs'
 import { createWechatLoginClient } from './wechat-login.mjs'
-import { toBasicWord, toFullWord, toHomepageFeaturedWord } from './word-access-policy.mjs'
-import { createLocalContentRateLimiter, getDirectPeerIp } from './content-rate-limit.mjs'
+import { toBasicWord, toFullWord, toHomepageFeaturedWord, toFeaturedTextWord } from './word-access-policy.mjs'
+import { createLocalContentRateLimiter, getContentClientIp } from './content-rate-limit.mjs'
 import { createRuntimeWordStore } from './word-store.mjs'
 import { checkVirtualPaymentDeliverySchema } from '../scripts/check-virtual-payment-delivery-schema.mjs'
 
@@ -1127,7 +1127,7 @@ export function createApiHandler(options = {}) {
       const contentRoute = req.method === 'GET' && (contentDetail || pathname === '/api/words' || pathname === '/api/homepage/featured-word')
       if (limiter && contentRoute) {
         const group = contentDetail && hasAuthorizationHeader(req) ? 'fullIp' : 'basicIp'
-        const result = await limiter.consume(group, getDirectPeerIp(req))
+        const result = await limiter.consume(group, getContentClientIp(req))
         if (!result.allowed) {
           sendJson(res, 429, { ok: false, code: 'CONTENT_RATE_LIMITED', message: '访问过于频繁，请稍后重试。' }, {
             'Cache-Control': 'private, no-store', 'Retry-After': String(result.retryAfter || 1)
@@ -1280,9 +1280,8 @@ export function createApiHandler(options = {}) {
 
       if (req.method === 'GET' && pathname.startsWith('/api/words/')) {
         const id = decodeURIComponent(pathname.slice('/api/words/'.length))
-        const word = await store.findWordById(id, {
-          publishedOnly: true
-        })
+        const context = await store.findWordDetailContext(id, { date: now() })
+        const word = context.word
         if (!word) {
           sendJson(res, 404, {
             ok: false,
@@ -1291,7 +1290,9 @@ export function createApiHandler(options = {}) {
           return
         }
 
-        if (!hasAuthorizationHeader(req)) {
+        const isFeaturedWord = word.status === 'published' && word.id === context.featuredWordId
+        const hasAuth = hasAuthorizationHeader(req)
+        if (!hasAuth && !isFeaturedWord) {
           const basicWord = toBasicWord(word, {
             reason: 'LOGIN_REQUIRED'
           })
@@ -1303,15 +1304,20 @@ export function createApiHandler(options = {}) {
           return
         }
 
-        const authResult = requireUserAuth(req, userAuthOptions)
-        if (!authResult.ok) {
+        const authResult = hasAuth ? requireUserAuth(req, userAuthOptions) : null
+        if (hasAuth && !authResult.ok) {
           sendUserAuthError(res, authResult)
           return
         }
 
         try {
+          if (isFeaturedWord && !limiter) {
+            sendJson(res, 503, { ok: false, code: 'CONTENT_RATE_LIMIT_UNAVAILABLE', message: 'Content access is temporarily unavailable.' })
+            return
+          }
           if (limiter) {
-            const result = await limiter.consume('account', authResult.userId)
+            // Authenticated requests already passed fullIp at route admission.
+            const result = await limiter.consume(hasAuth ? 'account' : 'fullIp', hasAuth ? authResult.userId : getContentClientIp(req))
             if (!result.allowed) {
               sendJson(res, 429, { ok: false, code: 'CONTENT_RATE_LIMITED', message: '访问过于频繁，请稍后重试。' }, {
                 'Cache-Control': 'private, no-store', 'Retry-After': String(result.retryAfter || 1)
@@ -1319,14 +1325,14 @@ export function createApiHandler(options = {}) {
               return
             }
           }
-          if (!userEntitlementStore) {
+          if (!isFeaturedWord && !userEntitlementStore) {
             throw createUserEntitlementRequestError('User entitlement store is not available.', {
               code: 'USER_ENTITLEMENT_STORE_UNAVAILABLE'
             })
           }
 
-          const profile = await userStore.findUserProfileById(authResult.userId)
-          if (!profile) {
+          const profile = hasAuth ? await userStore.findUserProfileById(authResult.userId) : null
+          if (hasAuth && !profile) {
             sendJson(res, 401, {
               ok: false,
               code: 'UNAUTHORIZED',
@@ -1341,6 +1347,15 @@ export function createApiHandler(options = {}) {
               ok: false,
               code: requestIdResult.code,
               message: requestIdResult.message
+            })
+            return
+          }
+
+          if (isFeaturedWord) {
+            const fullWord = toFeaturedTextWord(word)
+            sendJson(res, 200, {
+              ok: true, word: fullWord, access: fullWord.access,
+              charged: false, membershipActive: false, remainingQuota: null
             })
             return
           }
@@ -2087,9 +2102,7 @@ export function startServer(options = {}) {
   })
   const server = http.createServer(createApiHandler({
     ...options,
-    contentRateLimiter: options.contentRateLimiter || (
-      (options.nodeEnv || process.env.NODE_ENV) === 'development' ? createLocalContentRateLimiter() : null
-    ),
+    contentRateLimiter: options.contentRateLimiter || createLocalContentRateLimiter(),
     store
   }))
 

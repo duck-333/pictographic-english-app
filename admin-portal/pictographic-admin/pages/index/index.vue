@@ -1726,9 +1726,9 @@ export default {
 		},
 		homepageManualOptions() {
 			return [
-				{ id: '', label: '请选择一个已发布词条' },
+				{ id: '', label: '请选择推荐池内的已发布词条' },
 				...this.homepageFeatured.publishedWords
-					.filter((word) => word && word.status === 'published')
+					.filter((word) => word && word.status === 'published' && this.homepageFeatured.featuredWordIds.includes(word.id))
 					.map((word) => ({
 						id: word.id,
 						label: `${word.word} · ${word.id}`
@@ -2433,7 +2433,7 @@ export default {
 				if (word && word.status === 'published') result[word.id] = word
 				return result
 			}, {})
-			if (this.homepageFeatured.mode === 'manual' && publishedById[this.homepageFeatured.manualWordId]) {
+			if (this.homepageFeatured.mode === 'manual' && this.homepageFeatured.featuredWordIds.includes(this.homepageFeatured.manualWordId) && publishedById[this.homepageFeatured.manualWordId]) {
 				this.homepageFeatured.currentWord = publishedById[this.homepageFeatured.manualWordId]
 				this.homepageFeatured.source = 'manual'
 				return
@@ -2469,11 +2469,11 @@ export default {
 			}
 			if (
 				this.homepageFeatured.mode === 'manual' &&
-				(!this.homepageFeatured.manualWordId || !publishedIds.has(this.homepageFeatured.manualWordId))
+				(!this.homepageFeatured.manualWordId || !publishedIds.has(this.homepageFeatured.manualWordId) || !this.homepageFeatured.featuredWordIds.includes(this.homepageFeatured.manualWordId))
 			) {
 				uni.showModal({
 					title: '无法保存',
-					content: '手动指定模式必须选择一个已发布词条。',
+					content: '手动指定模式必须选择推荐池内的已发布词条。',
 					showCancel: false
 				})
 				return

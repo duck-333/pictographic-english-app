@@ -48,6 +48,7 @@ const token = createUserSessionToken('42', { jwtSecret: secret }).token
 const server = http.createServer(createApiHandler({
   store: {
     async findWordById(id) { if (failLookup) throw new Error('fixture failure'); return id === fixture.id ? fixture : null },
+    async findWordDetailContext(id) { return { word: await this.findWordById(id), featuredWordId: null } },
     async listWords() { return [fixture] },
     async saveWord() {
       if (saveMode === 'throw') throw new Error('save fixture failure')

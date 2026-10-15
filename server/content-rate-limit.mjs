@@ -1,7 +1,7 @@
 import { isIP } from 'node:net'
 
-// Process-local implementation for local development and injected tests ONLY.
-// Production wiring requires verified instance/proxy topology or a shared adapter.
+// Process-local token buckets: counters are not shared across workers and reset
+// on restart. Production use requires a verified single API process.
 export function createLocalContentRateLimiter({ now = Date.now, limits = {}, maxEntries = 10000 } = {}) {
   const policies = {
     basicIp: { ratePerMinute: 1200, capacity: 200 },
@@ -41,8 +41,31 @@ export function createLocalContentRateLimiter({ now = Date.now, limits = {}, max
 }
 
 export function getDirectPeerIp(req) {
-  // Forwarding headers are deliberately ignored until the proxy boundary is verified.
-  const raw = String(req.socket && req.socket.remoteAddress || '')
-  const value = raw.startsWith('::ffff:') && isIP(raw.slice(7)) === 4 ? raw.slice(7) : raw
-  return isIP(value) ? value : 'unknown-peer'
+  return normalizeClientIp(req.socket && req.socket.remoteAddress) || 'unknown-peer'
+}
+
+function normalizeClientIp(value) {
+  if (typeof value !== 'string' || value.includes('%')) return null
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(value)
+  if (mapped && isIP(mapped[1]) === 4) return mapped[1]
+  if (isIP(value) === 4) return value
+  if (isIP(value) === 6) {
+    const canonical = new URL(`http://[${value}]`).hostname.slice(1, -1)
+    const hexMapped = /^::ffff:([a-f0-9]+):([a-f0-9]+)$/.exec(canonical)
+    if (hexMapped) {
+      const high = parseInt(hexMapped[1], 16), low = parseInt(hexMapped[2], 16)
+      return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`
+    }
+    return canonical
+  }
+  return null
+}
+
+export function getContentClientIp(req) {
+  const peer = getDirectPeerIp(req)
+  // The verified Nginx upstream is 127.0.0.1:3002 and overwrites X-Real-IP.
+  // Do not trust other loopback/private addresses or any X-Forwarded-For chain.
+  if (peer !== '127.0.0.1') return peer
+  const header = req.headers && req.headers['x-real-ip']
+  return normalizeClientIp(header) || peer
 }

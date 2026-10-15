@@ -158,6 +158,7 @@ function createEntitlementStore() {
 
 function createWordStore() {
   return {
+    async findWordDetailContext(id) { return { word: await this.findWordById(id), featuredWordId: null } },
     async findWordById(id) {
       if (id !== 'word-study') return null
       return {

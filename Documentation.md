@@ -1,5 +1,42 @@
 # Documentation
 
+## 2026-10-15：P1生产限频兼容本地修复
+
+### 实现与边界
+
+- 本批仅改server/index.mjs的限频导入、两处IP键解析及startServer默认创建；server/content-rate-limit.mjs复用原令牌桶，保留basicIp 1200/min容量200、fullIp 600/min容量100、account 30/min容量10和10000桶上限，无新依赖。显式适配器优先，handler直接缺少适配器时的503失败关闭仍保留。
+- 用户提供的线上只读证据为一个online fork应用，Node监听0.0.0.0:3002，Nginx通过127.0.0.1:3002转发，并以$remote_addr覆盖X-Real-IP。仅socket对端规范化为127.0.0.1时采用单个合法X-Real-IP；::1、127.0.0.2、任意私网和外部直连都不可信；XFF始终忽略。
+- 缺失、非法、数组、逗号多值、带端口或带zone的来源头回退socket对端；socket本身无效则共用unknown-peer。IPv6大小写/压缩及IPv4映射形式统一成同一个计数键，避免同一来源以等价字符串绕过计数。
+- 本机代理信任依赖本机进程可信，不能仅凭socket区分Nginx与其他本机程序；本轮不新增进程身份系统。计数仅单进程，重启恢复突发容量，多实例不共享；目前不支持据此宣称全局限频。
+- production启用后普通词和会员也受原有阈值准入，可能返回429；没有改变JWT、会员判定、消费事务、幂等、会话、缓存规则或视频免费边界。不调整生产端口/防火墙/Nginx，不改UI、游戏、Babel loader options或词库。
+
+### 本轮实际验证
+
+新增scripts/test-production-content-rate-limit.mjs直接调用startServer，设置实际NODE_ENV=production而不传nodeEnv或默认适配器，绑定127.0.0.1随机端口。数据库模块通过Node24 registerHooks映射为抛错桩，任何createPool/createConnection都会失败；实际数据库尝试数为0。默认令牌桶的时钟在测试期间固定，避免HTTP耗时补充令牌令阈值断言不确定，结束恢复。没有连接生产或调用支付/VOD。
+
+| 测试 | 实际退出码 | 覆盖 |
+| --- | --- | --- |
+| node scripts/test-production-content-rate-limit.mjs | 0 | 真实production startServer默认初始化；匿名/普通/会员/零额度免费且consumeQuota调用0、流水0；非法Token/缺请求ID；显式适配器优先；默认容量及补充；同IP/不同IP/429/Retry-After/no-store；可信代理/直连/伪造XFF/异常来源；IPv6与映射等价键；无效头HTTP回退；独立实例不共享桶。 |
+| scripts/test-featured-text-access.mjs | 0 | 免费矩阵、零消费、上海轮换/手动切换/下架/移出池/新入池、同请求ID状态切换、单快照、503失败关闭、视频字段隔离。 |
+| scripts/test-content-api-security.mjs | 0 | 白名单、鉴权、最后额度、幂等重放、限频先于扣次、会员、no-store。 |
+| scripts/test-membership-entitlement-mvp.mjs | 0 | 原有普通会员与额度及授权视频行为（测试适配器）。 |
+| scripts/test-content-session-isolation.mjs | 0 | 退出/换号/重登/续期/过期/401、旧响应与公共缓存。 |
+| scripts/test-homepage-featured-display.mjs | 0 | 首页投影、轮换/刷新/等待/失败/迟到响应及会话缓存。 |
+| scripts/test-server-word-api-link.mjs | 0 | 后台词库、推荐配置、上下架、普通查询链路。 |
+
+六项既有测试使用node --input-type=module -e启动器：仅将mysql2及mysql2/promise通过registerHooks解析到导出createPool/createConnection抛出DATABASE_ACCESS_FORBIDDEN的内存data模块，随后import对应测试脚本；未安装或修改依赖。全部本机HTTP使用执行许可。专项首次沙箱内退出1，原因为fetch连接127.0.0.1被EACCES拒绝；获准后通过。补充异常头真实HTTP断言后专项重跑退出0。测试不代表真实MySQL事务、原生UI或生产链路验收。
+
+### 部署前置
+
+- 部署前仍须授权只读核实生产run入口及其startServer调用/注入、运行提交版本、所有主机/进程实例数、Nginx生效覆盖头配置及可能的上游CDN/LB、公网直连防护。当前0.0.0.0监听不证明公网可达，也不证明已隔离。
+
+## 2026-10-14：当前推荐词完整文字免费批次
+
+- 当前资格按findWordDetailContext一次JSON读取和服务端日期判定；同份数据内目标published词的canonical ID必须等于当前推荐ID。原查找及轮换算法抽为共享内部函数，不创建免费池/名单/缓存；无效历史手动词回退到池内每日轮换，空池不免费。
+- 免费分支不调用consumeQuota，access为canAccessFull=true、reason=FEATURED_WORD_FREE、charged=false、chargeAmount=0，额度null、会员false表示不使用账号权益，不查询/伪造余额。有效Token仍校验真实用户，无效/过期Token保留401/403，完整请求ID仍必需。
+- 匿名免费先通过原basicIp，再通过fullIp；带Token先fullIp再account。免费分支缺少限频器返回503，不把已有生产限频待验证边界当作已完成。普通非当前分支的权益/会员/幂等及视频保持原样。
+- toFeaturedTextWord为同模块内明确文字投影：复用basic及full access构造，提供当前详情消费的完整释义、说明、意象、拆解、例句和同族ID，视频仅页面标题/说明/时间点。原始地址、fileId/assetId/storagePath/凭证及未使用原始HTML/教学图片不放行；普通toFullWord不改，客户端不新增免费声明。
+
 ## 2026-10-14：UI 集成第一轮审查不通过后的 P2/P3 修复
 
 - P2 根因为仅 onShow 请求、持续停留无刷新、请求期间保留旧卡片。现在可见期间每5分钟刷新（约每小时12次），上海午夜优先，首次/重新进入立即获取；重复 onShow 的在途请求合并。每次刷新先清空卡片，失败/空结果继续隐藏，按下个周期重试，不读取旧拆解/意象缓存。
