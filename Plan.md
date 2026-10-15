@@ -1,5 +1,10 @@
 # Plan
 
+## 2026-10-14：UI 集成 P2/P3 最小修复完成
+
+- 实现首页可见期间单定时器、请求合并及生命周期失效；5分钟低频刷新，上海午夜优先；跨日迟到响应拒绝并立即重试。
+- parts 仅输出 text/meaning，兼容 content-schema 的 label→text、title→meaning；原 basic 信封及共享缓存继续复用既有投影。
+
 ## 2026-10-13：安全批次①开发阶段
 
 - 基线9ab54e25，feature/content-api-security，仅本地修改、测试与独立审查；未进行生产操作。

@@ -95,6 +95,22 @@ export function toBasicWord(sourceWord, accessOptions = {}) {
   return word
 }
 
+// Display-only projection for the single current homepage recommendation.
+// The ordinary basic whitelist and detail access payload are unchanged.
+export function toHomepageFeaturedWord(sourceWord) {
+  const source = cloneObject(sourceWord)
+  return {
+    ...toBasicWord(source),
+    parts: Array.isArray(source.parts) ? source.parts.filter(isPlainObject).map(part => {
+      return {
+        text: typeof part.text === 'string' && part.text ? part.text : typeof part.label === 'string' ? part.label : '',
+        meaning: typeof part.meaning === 'string' && part.meaning ? part.meaning : typeof part.title === 'string' ? part.title : ''
+      }
+    }) : [],
+    explanation: typeof source.explanation === 'string' ? source.explanation : ''
+  }
+}
+
 export function toFullWord(sourceWord, accessOptions = {}) {
   const word = cloneObject(sourceWord)
   word.access = createAccessPayload({

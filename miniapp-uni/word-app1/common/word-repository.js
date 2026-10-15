@@ -430,7 +430,9 @@ export function fetchHomepageFeaturedWord() {
       }
       cacheRemoteWords([word])
       return {
-        word: cloneWord(normalizeRemoteDisplayWord(word)),
+        // The API client already projected this dedicated display response.
+        // cacheRemoteWords above stores only the basic projection.
+        word,
         source: String(result.source || 'dailyRotation')
       }
     })
