@@ -1,0 +1,28 @@
+{
+  "command": "node scripts/verify-content-security-release.mjs miniapp-uni/word-app1/unpackage/dist/build/mp-weixin miniapp-uni/word-app1/unpackage/ui-integration-validation/module-inventory.json",
+  "exitCode": 0,
+  "build": {
+    "command": "HBuilderX bundled Node18 + in-memory Vue CLI Service uni-build(watch=false,minimize=true,clean=false)",
+    "exitCode": 0,
+    "result": {
+      "node": "v18.20.0",
+      "errors": false,
+      "warnings": false,
+      "start": 1791964875000,
+      "end": 1791964894667,
+      "output": "D:\\english-app\\pictographic-english-app-ui-integration\\miniapp-uni\\word-app1\\unpackage\\dist\\build\\mp-weixin"
+    }
+  },
+  "earlierAttempts": [
+    {
+      "runtime": "system Node 24.17.0",
+      "exitCode": 1,
+      "reason": "compiler dependency util.isRegExp removed"
+    },
+    {
+      "runtime": "HBuilderX Node18.20.0, forward-slash service context",
+      "exitCode": 1,
+      "reason": "webpack4 requires Windows-native absolute context"
+    }
+  ]
+}

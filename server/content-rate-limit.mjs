@@ -1,7 +1,10 @@
 import { isIP } from 'node:net'
+import { createHmac, randomBytes } from 'node:crypto'
 
-// Process-local token buckets: counters are not shared across workers and reset
-// on restart. Production use requires a verified single API process.
+// Per-group exact buckets plus bounded spill buckets. Exact keys are never
+// evicted/promoted: neither churn nor expiry can reset an exhausted spill key.
+// Spill collisions share a budget conservatively; they never grant extra tokens.
+// Process-local only: counters reset on restart and are not shared by workers.
 export function createLocalContentRateLimiter({ now = Date.now, limits = {}, maxEntries = 10000 } = {}) {
   const policies = {
     basicIp: { ratePerMinute: 1200, capacity: 200 },
@@ -13,31 +16,50 @@ export function createLocalContentRateLimiter({ now = Date.now, limits = {}, max
     if (!Number.isFinite(policy.ratePerMinute) || !Number.isFinite(policy.capacity) || !(policy.ratePerMinute > 0) || !(policy.capacity >= 1)) throw new Error('Invalid content rate limit.')
   }
   if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) throw new Error('Invalid rate limit capacity.')
-  const buckets = new Map()
+  const groups = new Map(Object.entries(policies).map(([name, policy]) => [name, { policy, exact: new Map(), spill: new Map() }]))
+  // A per-instance secret makes deliberate targeting of another spill slot harder.
+  const secret = randomBytes(32)
   return {
     scope: 'local-process',
     consume(group, key) {
-      const policy = policies[group]
-      if (!policy) throw new Error('Unknown content rate group.')
+      const state = groups.get(group)
+      if (!state) throw new Error('Unknown content rate group.')
+      const { policy, exact, spill } = state
       const timestamp = Number(now())
-      // Idle buckets are full again and need not occupy memory.
-      for (const [id, bucket] of buckets) {
-        if (timestamp - bucket.updatedAt >= bucket.idleMs) buckets.delete(id)
-      }
-      const id = `${group}:${key}`
-      let bucket = buckets.get(id)
+      const identity = group === 'basicIp' || group === 'fullIp' ? getIpBucketKey(key) : String(key)
+      let bucket = exact.get(identity)
       if (!bucket) {
-        if (buckets.size >= maxEntries) return { allowed: false, retryAfter: 60 }
-        bucket = { tokens: policy.capacity, updatedAt: timestamp, idleMs: Math.max(60000, policy.capacity * 60000 / policy.ratePerMinute) }
-        buckets.set(id, bucket)
+        if (exact.size < maxEntries) {
+          bucket = { tokens: policy.capacity, updatedAt: timestamp }
+          exact.set(identity, bucket)
+        } else {
+          const slot = createHmac('sha256', secret).update(group).update('\0').update(identity).digest().readUInt32BE(0) % maxEntries
+          bucket = spill.get(slot)
+          if (!bucket) {
+            bucket = { tokens: policy.capacity, updatedAt: timestamp }
+            spill.set(slot, bucket)
+          }
+        }
       }
       bucket.tokens = Math.min(policy.capacity, bucket.tokens + Math.max(0, timestamp - bucket.updatedAt) * policy.ratePerMinute / 60000)
-      bucket.updatedAt = timestamp
+      bucket.updatedAt = Math.max(bucket.updatedAt, timestamp)
       if (bucket.tokens < 1) return { allowed: false, retryAfter: Math.max(1, Math.ceil((1 - bucket.tokens) * 60 / policy.ratePerMinute)) }
       bucket.tokens -= 1
       return { allowed: true }
     }
   }
+}
+
+// IPv6 privacy-address rotation inside one /64 shares the existing IP policy.
+// This does not change which proxy header is trusted; mapped IPv4 remains IPv4.
+function getIpBucketKey(key) {
+  const normalized = normalizeClientIp(key)
+  if (!normalized || isIP(normalized) !== 6) return normalized || String(key)
+  const [left, right] = normalized.split('::')
+  const head = left ? left.split(':') : []
+  const tail = right ? right.split(':') : []
+  const words = right === undefined ? head : [...head, ...Array(8 - head.length - tail.length).fill('0'), ...tail]
+  return words.slice(0, 4).map(word => parseInt(word, 16).toString(16)).join(':') + '::/64'
 }
 
 export function getDirectPeerIp(req) {

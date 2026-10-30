@@ -1,0 +1,44 @@
+[
+  {
+    "command": "npm.cmd run check:miniapp",
+    "exitCode": 0,
+    "stdout": "\n> pictographic-english-workspace@0.0.1 check:miniapp\n> npm run test:miniapp:purchase && node --check miniapp-uni/word-app1/common/mock-data.js && node --check miniapp-uni/word-app1/common/user-store.js && node --check miniapp-uni/word-app1/common/auth-store.js && node --check miniapp-uni/word-app1/common/auth-api-client.js && node --check miniapp-uni/word-app1/common/book-benefit-api-client.js && node --check scripts/test-miniapp-auth-phone-login.mjs && node scripts/test-miniapp-auth-phone-login.mjs && node --check miniapp-uni/word-app1/common/content-schema.js && node --check miniapp-uni/word-app1/common/part-visual-style.js && node --check miniapp-uni/word-app1/common/api-config.js && node --check miniapp-uni/word-app1/common/word-api-client.js && node --check miniapp-uni/word-app1/common/word-repository.js && npm run test:audio-schema\n\n\n> pictographic-english-workspace@0.0.1 test:miniapp:purchase\n> node --check miniapp-uni/word-app1/common/virtual-payment-api-client.js && node --check miniapp-uni/word-app1/common/virtual-payment-purchase.js && node scripts/test-miniapp-virtual-payment-client.mjs && node scripts/test-miniapp-virtual-payment-purchase.mjs && node scripts/test-miniapp-learning-benefits.mjs\n\nBatch8 API contracts, fresh codes, isolation, native parameters and safe errors passed.\nRecovery Client: GET/JWT, bounded exact schema, duplicates, states, ISO times and cursor passed.\ncreate: 43 invalid contracts rejected; invoke/reconcile/entitlement/refresh/delivery=0/0/0/0/0; subsequent calls=0\nget: 18 invalid contracts rejected; invoke/reconcile/entitlement/refresh/delivery=1/0/0/0/0; subsequent calls=0\nreconcile: 18 invalid contracts rejected; invoke/reconcile/entitlement/refresh/delivery=1/1/0/0/0; subsequent calls=0\nentitlement: 29 invalid contracts rejected; invoke/reconcile/entitlement/refresh/delivery=1/1/1/0/0; subsequent calls=0\ndelivery: 49 invalid contracts rejected; invoke/reconcile/entitlement/refresh/delivery=1/1/1/1/1; subsequent calls=0\nBatch8 purchase, cancellation, explicit additional orders, persistence, resume, grant and lifecycle tests passed.\nDuplicate false+true: total native calls=1\nDuplicate true+false: total native calls=1\nDuplicate false+true+false: total native calls=1\nReview fixtures: duplicates/conflicts, per-endpoint states, missing deliveryStatus (all downstream=0), epochs and late callbacks passed.\nEmpty storage pending/not_ready/not_ready: native payment calls=0\nEmpty storage paid/not_ready/not_ready: native payment calls=0\nEmpty storage paid/granted/confirming: native payment calls=0\nEmpty storage paid/granted/manual_review: native payment calls=0\nRecovery controller: cross-device, merge, conflicts, empty/failure preservation, paging, epoch and shared lock passed.\nBatch8 routes, page contracts and Vue script syntax passed (not a full uni-app build).\nRecovery page: manual pagination and unloaded discovery responses passed.\nEntitlement null/undefined/empty/nonmember/active and refresh failure/late unloaded failure passed.\nminiapp auth phone login tests passed\n\n> pictographic-english-workspace@0.0.1 test:audio-schema\n> node scripts/test-audio-schema.mjs\n\n",
+    "stderr": ""
+  },
+  {
+    "command": "npm.cmd run validate:content",
+    "exitCode": 0,
+    "stdout": "\n> pictographic-english-workspace@0.0.1 validate:content\n> node scripts/validate-content.mjs content-seed/words.example.json content-seed/letter-c-import.json content-seed/letter-c-import-paste-ready.json\n\nContent validation passed\n- file: content-seed\\words.example.json\n- records: 7\n- words: 1\n- word_nodes: 6\n- video_segments: 0\n\nContent validation passed\n- file: content-seed\\letter-c-import.json\n- records: 36\n- words: 36\n- word_nodes: 0\n- video_segments: 0\n\nContent validation passed\n- file: content-seed\\letter-c-import-paste-ready.json\n- records: 36\n- words: 36\n- word_nodes: 0\n- video_segments: 0\n",
+    "stderr": ""
+  },
+  {
+    "command": "node --check server/index.mjs",
+    "exitCode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": "node --check server/word-access-policy.mjs",
+    "exitCode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": "node --check miniapp-uni/word-app1/common/homepage-featured-word.js",
+    "exitCode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": "node --check miniapp-uni/word-app1/common/word-api-client.js",
+    "exitCode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": "node --check miniapp-uni/word-app1/common/word-repository.js",
+    "exitCode": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

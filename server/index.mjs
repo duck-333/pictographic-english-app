@@ -1111,6 +1111,7 @@ export function createApiHandler(options = {}) {
     const requestUrl = new URL(req.url || '/', 'http://127.0.0.1')
     const pathname = normalizePathname(requestUrl.pathname)
     const contentDetail = pathname.startsWith('/api/words/')
+    const contentRoute = req.method === 'GET' && (contentDetail || pathname === '/api/words' || pathname === '/api/homepage/featured-word')
     const adminContent = pathname === '/api/admin/words' || pathname === '/api/admin/homepage-featured'
     if (contentDetail || adminContent) res.setHeader('Cache-Control', 'private, no-store')
 
@@ -1124,7 +1125,6 @@ export function createApiHandler(options = {}) {
 
     try {
       const limiter = options.contentRateLimiter
-      const contentRoute = req.method === 'GET' && (contentDetail || pathname === '/api/words' || pathname === '/api/homepage/featured-word')
       if (limiter && contentRoute) {
         const group = contentDetail && hasAuthorizationHeader(req) ? 'fullIp' : 'basicIp'
         const result = await limiter.consume(group, getContentClientIp(req))
@@ -2084,6 +2084,14 @@ export function createApiHandler(options = {}) {
         message: 'API route not found.'
       })
     } catch (error) {
+      if (contentRoute) {
+        sendNoStoreJson(res, 500, {
+          ok: false,
+          code: 'CONTENT_INTERNAL_ERROR',
+          message: 'Content is temporarily unavailable.'
+        })
+        return
+      }
       sendJson(res, 500, {
         ok: false,
         message: error && error.message ? error.message : 'Internal server error.'

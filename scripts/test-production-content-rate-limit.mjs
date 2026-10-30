@@ -53,9 +53,54 @@ for (const [group, capacity, recovery] of [['basicIp', 200, 50], ['fullIp', 100,
   tick += recovery
   assert.equal(limiter.consume(group, 'a').allowed, true)
 }
-const bounded = createLocalContentRateLimiter({ maxEntries: 1, now: () => 0 })
-bounded.consume('fullIp', 'a')
-assert.deepEqual(bounded.consume('fullIp', 'b'), { allowed: false, retryAfter: 60 })
+// Saturation is isolated per policy. With one exact slot and one spill slot,
+// unrelated callers still get a budget; churn cannot reset a spent spill budget.
+let overflowTime = 0
+const bounded = createLocalContentRateLimiter({
+  maxEntries: 1, now: () => overflowTime,
+  limits: Object.fromEntries(['basicIp', 'fullIp', 'account'].map(group => [group, { ratePerMinute: 60, capacity: 1 }]))
+})
+for (const group of ['basicIp', 'fullIp', 'account']) {
+  assert.equal(bounded.consume(group, 'exact').allowed, true)
+  assert.equal(bounded.consume(group, 'exact').allowed, false)
+  assert.equal(bounded.consume(group, 'overflow-a').allowed, true)
+  assert.equal(bounded.consume(group, 'overflow-a').allowed, false)
+  for (let i = 0; i < 20; i++) assert.equal(bounded.consume(group, 'churn-' + i).allowed, false)
+}
+for (const tick of [1000, 61000]) {
+  overflowTime = tick
+  for (const group of ['basicIp', 'fullIp', 'account']) {
+    assert.equal(bounded.consume(group, 'overflow-a').allowed, true)
+    assert.equal(bounded.consume(group, 'another-overflow').allowed, false,
+      'Refill or elapsed idle time must not give another spill caller a fresh bucket')
+  }
+}
+
+// A backwards clock must not move the last-refill time backwards.
+let rollbackTime = 1000
+const clock = createLocalContentRateLimiter({ now: () => rollbackTime, limits: { account: { ratePerMinute: 60, capacity: 1 } } })
+assert.equal(clock.consume('account', 'user').allowed, true)
+for (const tick of [500, 1000]) {
+  rollbackTime = tick
+  assert.equal(clock.consume('account', 'user').allowed, false)
+}
+rollbackTime = 2000
+assert.equal(clock.consume('account', 'user').allowed, true)
+
+// Rotating IPv6 addresses inside one /64 share a budget, unlike another /64.
+// Mapped IPv4 shares its IPv4 budget; account identifiers are not IP-grouped.
+for (const group of ['basicIp', 'fullIp']) {
+  const limiter = createLocalContentRateLimiter({ now: () => 0, limits: { [group]: { ratePerMinute: 60, capacity: 1 } } })
+  assert.equal(limiter.consume(group, '2001:db8:abcd:1234::1').allowed, true)
+  assert.equal(limiter.consume(group, '2001:0db8:abcd:1234:0:0:0:2').allowed, false)
+  assert.equal(limiter.consume(group, '2001:db8:abcd:1235::1').allowed, true)
+  assert.equal(limiter.consume(group, '::ffff:c633:6401').allowed, true)
+  assert.equal(limiter.consume(group, '198.51.100.1').allowed, false)
+  assert.equal(limiter.consume(group, '198.51.100.2').allowed, true)
+}
+const accountIds = createLocalContentRateLimiter({ now: () => 0, limits: { account: { ratePerMinute: 60, capacity: 1 } } })
+assert.equal(accountIds.consume('account', '2001:db8:abcd:1234::1').allowed, true)
+assert.equal(accountIds.consume('account', '2001:db8:abcd:1234::2').allowed, true)
 
 const secret = 'isolated-production-rate-limit-secret'
 const word = { id: 'word-current', word: 'current', status: 'published', meaning: 'current meaning', explanation: 'full text', parts: [] }
@@ -129,6 +174,33 @@ try {
   assert.deepEqual(injectedCalls.slice(1), Array(3).fill(['basicIp', '127.0.0.1']))
   assert.equal(consumeCalls, 0); assert.equal(ledger.size, 0)
   assert.equal(databaseAttempts, 0)
+  // Real loopback requests exercise both store failures and admission failures.
+  // Only synthetic diagnostics are injected; no database or production data.
+  const internalDetail = 'LOCAL_TEST_ONLY_INTERNAL_DETAIL'
+  const fail = () => { throw new Error(internalDetail) }
+  const brokenStore = await open({ store: {
+    async listWords() { return fail() },
+    async resolveHomepageFeaturedWord() { return fail() },
+    async findWordDetailContext() { return fail() }
+  } })
+  const brokenLimiter = await open({ contentRateLimiter: { consume: fail } })
+  let redactedResponses = 0
+  for (const target of [brokenStore, brokenLimiter]) {
+    for (const pathname of ['/api/words?q=test', '/api/homepage/featured-word', '/api/words/' + word.id]) {
+      const response = await fetch('http://127.0.0.1:' + target.address().port + pathname)
+      const text = await response.text()
+      assert.equal(response.status, 500)
+      assert.match(response.headers.get('cache-control'), /no-store/)
+      assert.deepEqual(JSON.parse(text), {
+        ok: false, code: 'CONTENT_INTERNAL_ERROR', message: 'Content is temporarily unavailable.'
+      })
+      assert.equal(text.includes(internalDetail), false)
+      redactedResponses++
+    }
+  }
+  assert.equal(redactedResponses, 6)
+  assert.equal(databaseAttempts, 0)
+  console.log('R7 adaptation: per-group saturation/spill churn/refill, clock rollback, IPv6 /64 and mapped IPv4, six content-error redaction/no-store responses passed; no DB access.')
   console.log('Production startServer: default limiter, free user matrix/zero ledger, explicit adapter, IP isolation/429, proxy and forged headers passed; no DB access.')
 } finally {
   for (const server of servers) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
