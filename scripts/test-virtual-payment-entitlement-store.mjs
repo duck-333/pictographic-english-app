@@ -1,3 +1,4 @@
+import { MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT, membershipProductForPrice } from '../miniapp-uni/word-app1/common/membership-products.js'
 import assert from 'node:assert/strict'
 import { createWechatQueryCanonicalFact } from '../server/virtual-payment-reconciliation.mjs'
 import { scheduleMembershipGrant } from '../server/membership-grant-schedule.mjs'
@@ -33,6 +34,9 @@ const canonical = createWechatQueryCanonicalFact({
 
 function harness(overrides = {}) {
   let row = orderRow(overrides.order)
+  const product = membershipProductForPrice(row.unit_price_fen)
+  const evidenceCanonical = createWechatQueryCanonicalFact({ ...JSON.parse(canonical.raw), environment: row.environment, wechatEnv: row.wechat_env, orderAmountFen: product.priceFen, paidAmountFen: product.priceFen })
+  const end = new Date(NOW.getTime() + product.durationSeconds * 1000).toISOString()
   let evidence = overrides.evidence === undefined ? true : overrides.evidence
   const calls = { begin: 0, commit: 0, rollback: 0, release: 0, execute: 0, lock: 0, grant: 0, verify: 0, updates: 0 }
   const connection = {
@@ -49,9 +53,9 @@ function harness(overrides = {}) {
       if (sql.includes('INNER JOIN virtual_payment_orders')) {
         if (!evidence) return [[]]
         return [[{
-          event_key: canonical.eventKey, event_type: 'wechat_query_status_2_paid', order_id: row.id,
+          event_key: evidenceCanonical.eventKey, event_type: 'wechat_query_status_2_paid', order_id: row.id,
           order_no: row.order_no, provider_order_id: row.provider_order_id,
-          provider_transaction_id: row.provider_transaction_id, payload_hash: Buffer.from(canonical.payloadHash),
+          provider_transaction_id: row.provider_transaction_id, payload_hash: Buffer.from(evidenceCanonical.payloadHash),
           processing_status: 'processed', received_count: 1, processed_at: NOW, attempt_count: 1,
           last_error_code: null, linked_order_id: row.id, linked_order_no: row.order_no,
           linked_provider_order_id: row.provider_order_id,
@@ -74,8 +78,8 @@ function harness(overrides = {}) {
   }
   const membership = {
     grantId: '9', transactionId: 'ent-payment', sourceType: 'wechat_order', sourceId: ORDER_NO,
-    idempotent: false, effectiveStartAt: NOW.toISOString(), effectiveEndAt: END,
-    membershipStartedAt: NOW.toISOString(), membershipExpireAt: END
+    idempotent: false, effectiveStartAt: NOW.toISOString(), effectiveEndAt: end,
+    membershipStartedAt: NOW.toISOString(), membershipExpireAt: end
   }
   const entitlementStore = {
     async lockMembershipScheduleInTransaction(receivedConnection, userId) {
@@ -89,7 +93,7 @@ function harness(overrides = {}) {
       assert.equal(input.userId, '42'); assert.equal(input.sourceType, 'wechat_order')
       assert.equal(input.sourceId, ORDER_NO)
       assert.equal(input.idempotencyKey, `membership_grant:wechat_order:${ORDER_NO}`)
-      assert.equal(Object.hasOwn(input, 'durationSeconds'), false)
+      assert.equal(input.durationSeconds, product.durationSeconds)
       return membership
     },
     async verifyMembershipGrantInTransaction(receivedConnection, input) {
@@ -249,9 +253,9 @@ function membershipIntegrityFixture(overrides = {}) {
   const store = createUserEntitlementStore({ pool: {} })
   return {
     calls,
-    verify: () => store.verifyMembershipGrantInTransaction(connection, {
+    verify: (durationSeconds) => store.verifyMembershipGrantInTransaction(connection, {
       userId: '42', grantId, sourceType: 'wechat_order', sourceId,
-      idempotencyKey, transactionId
+      idempotencyKey, transactionId, ...(durationSeconds === undefined ? {} : { durationSeconds })
     })
   }
 }
@@ -770,3 +774,29 @@ for (const corruption of [
 }
 
 console.log('virtual payment entitlement store tests passed')
+
+for (const product of [MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT]) {
+  for (const environment of ['sandbox', 'production']) {
+    const h = harness({ order: { internal_sku: product.internalSku, product_name: product.displayName,
+      unit_price_fen: product.priceFen, order_amount_fen: product.priceFen, paid_amount_fen: product.priceFen,
+      environment, wechat_env: environment === 'production' ? 0 : 1 } })
+    const result = await h.store.grantTrustedPaidOrderEntitlement('42', ORDER_NO, { expectedProductId: 'sandbox-product', expectedPriceFen: product.priceFen, now: NOW })
+    assert.equal(result.order.unitPriceFen, product.priceFen)
+    assert.equal(Date.parse(result.membership.effectiveEndAt) - Date.parse(result.membership.effectiveStartAt), product.durationSeconds * 1000)
+    await h.store.grantTrustedPaidOrderEntitlement('42', ORDER_NO, { expectedProductId: 'sandbox-product', expectedPriceFen: product.priceFen, now: NOW })
+    assert.equal(h.calls.grant, 1)
+    assert.equal(h.calls.verify, 1)
+  }
+}
+{
+  const durationSeconds = YEARLY_MEMBERSHIP_PRODUCT.durationSeconds
+  const end = new Date(NOW.getTime() + durationSeconds * 1000)
+  const fixture = membershipIntegrityFixture({
+    grant: { days_granted: 365, duration_seconds: durationSeconds, effective_end_at: end },
+    entitlement: { membership_expire_at: end },
+    metadata: { daysGranted: 365, durationSeconds, effectiveEndAt: end.toISOString(), durationRule: '365x24_hours_not_calendar_year' }
+  })
+  assert.equal((await fixture.verify(durationSeconds)).idempotent, true)
+  await assert.rejects(fixture.verify(30 * 86400), { code: 'MEMBERSHIP_GRANT_INTEGRITY_INVALID' })
+}
+console.log('Monthly/yearly entitlement issuance, replay and ledger integrity passed.')

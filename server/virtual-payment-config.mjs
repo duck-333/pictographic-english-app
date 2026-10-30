@@ -1,3 +1,5 @@
+import { LEGACY_MEMBERSHIP_PRODUCT, SANDBOX_MEMBERSHIP_PRODUCT, MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT, membershipProductForPrice } from '../miniapp-uni/word-app1/common/membership-products.js'
+
 const ENABLED_VARIABLE = 'VIRTUAL_PAYMENT_ENABLED'
 const ENVIRONMENT_VARIABLE = 'VIRTUAL_PAYMENT_ENV'
 const SANDBOX_OFFER_ID_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID'
@@ -12,21 +14,22 @@ const PRODUCTION_APP_KEY_VARIABLE = 'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY'
 const MAX_SAFE_USER_ID = BigInt(Number.MAX_SAFE_INTEGER)
 const VIRTUAL_PAYMENT_PRODUCT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/
 
-export const VIRTUAL_PAYMENT_PRODUCT = Object.freeze({
-  internalSku: 'membership_30d',
-  mode: 'short_series_goods',
-  displayName: '30天学习会员',
-  priceFen: 3000,
-  quantity: 1,
-  durationSeconds: 2592000,
-  currency: 'CNY',
-  membershipSourceType: 'wechat_order'
-})
+export const VIRTUAL_PAYMENT_PRODUCT = LEGACY_MEMBERSHIP_PRODUCT
+export const VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT = SANDBOX_MEMBERSHIP_PRODUCT
 
-export const VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT = Object.freeze({
-  ...VIRTUAL_PAYMENT_PRODUCT,
-  priceFen: 100
-})
+export function virtualPaymentProductId(config, product) {
+  if (product.sandboxTest) return config.sandboxTestProductId
+  return config.productIds[product.internalSku] || null
+}
+
+function readPlanProductIds(env, environment, legacyId, testId = null) {
+  const prefix = environment === 'production' ? 'WECHAT_VIRTUAL_PAYMENT_PRODUCTION' : 'WECHAT_VIRTUAL_PAYMENT_SANDBOX'
+  const monthly = readProductId(env, prefix + '_MONTHLY_PRODUCT_ID', { optional: true })
+  const yearly = readProductId(env, prefix + '_YEARLY_PRODUCT_ID', { optional: true })
+  const ids = [legacyId, testId, monthly, yearly].filter(Boolean)
+  if (new Set(ids).size !== ids.length) throw configError('Virtual payment products must use distinct product ids.')
+  return { [VIRTUAL_PAYMENT_PRODUCT.internalSku]: legacyId, [MONTHLY_MEMBERSHIP_PRODUCT.internalSku]: monthly, [YEARLY_MEMBERSHIP_PRODUCT.internalSku]: yearly }
+}
 
 export const VIRTUAL_PAYMENT_ENVIRONMENTS = Object.freeze({
   sandbox: Object.freeze({ environment: 'sandbox', wechatEnv: 1, expectedWechatEnvironmentType: 2 }),
@@ -43,11 +46,7 @@ export function matchesVirtualPaymentEnvironment(environment, wechatEnv, environ
     (environmentType === undefined || expected.expectedWechatEnvironmentType === environmentType))
 }
 
-export function virtualPaymentProductForPrice(priceFen) {
-  if (priceFen === VIRTUAL_PAYMENT_PRODUCT.priceFen) return VIRTUAL_PAYMENT_PRODUCT
-  if (priceFen === VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT.priceFen) return VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT
-  return null
-}
+export const virtualPaymentProductForPrice = membershipProductForPrice
 
 export function isVirtualPaymentProductId(value) {
   return typeof value === 'string' && VIRTUAL_PAYMENT_PRODUCT_ID_PATTERN.test(value)
@@ -194,6 +193,7 @@ export function getVirtualPaymentConfig(options = {}) {
       offerId: requireVariable(env, PRODUCTION_OFFER_ID_VARIABLE),
       productId,
       standardProductId: productId,
+      productIds: readPlanProductIds(env, environment, productId),
       sandboxTestProductId: null,
       sandboxTestProductEnabled: false,
       appKey: requireVariable(env, PRODUCTION_APP_KEY_VARIABLE),
@@ -232,6 +232,7 @@ export function getVirtualPaymentConfig(options = {}) {
     offerId,
     productId: activeProductId,
     standardProductId: productId,
+    productIds: readPlanProductIds(env, environment, productId, sandboxTestProductId),
     sandboxTestProductId,
     sandboxTestProductEnabled,
     appKey,

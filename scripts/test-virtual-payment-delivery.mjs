@@ -1,3 +1,4 @@
+import { MEMBERSHIP_PLANS } from '../miniapp-uni/word-app1/common/membership-products.js'
 import assert from 'node:assert/strict'
 
 import { normalizeVerifiedWechatDeliveryQueryFact } from '../server/virtual-payment-delivery.mjs'
@@ -355,3 +356,15 @@ for (const invalid of [
 }
 
 console.log('virtual payment delivery service tests passed')
+
+for (const product of MEMBERSHIP_PLANS) for (const environment of ['sandbox', 'production']) {
+  const snapshot = { ...order, internalSku: product.internalSku, productName: product.displayName,
+    unitPriceFen: product.priceFen, orderAmountFen: product.priceFen,
+    environment, wechatEnv: environment === 'production' ? 0 : 1 }
+  const query = { ...query4, orderFeeFen: product.priceFen, paidFeeFen: product.priceFen,
+    environment, environmentType: environment === 'production' ? 1 : 2 }
+  const options = { queryOperationId: 'e'.repeat(64), querySequence: 1, claimedOrderVersion: snapshot.version, now: NOW.getTime() }
+  assert.equal(normalizeVerifiedWechatDeliveryQueryFact(query, snapshot, options).orderAmountFen, product.priceFen)
+  assert.throws(() => normalizeVerifiedWechatDeliveryQueryFact({ ...query, orderFeeFen: product.priceFen + 1 }, snapshot, options))
+}
+console.log('Monthly/yearly delivery query validation passed.')

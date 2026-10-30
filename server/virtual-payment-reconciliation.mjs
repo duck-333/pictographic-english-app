@@ -125,7 +125,7 @@ export function createWechatQueryCanonicalFact(input) {
     typeof input.orderType !== 'number' ||
     !Number.isSafeInteger(input.orderType) ||
     input.orderType !== 0 ||
-    !product || (input.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT)
+    !product || (input.environment === 'production' && product.sandboxTest === true)
   ) {
     throw reconciliationError('Wechat payment query fact is invalid.')
   }
@@ -193,7 +193,7 @@ function assertOrderSnapshot(order) {
     order.orderAmountFen !== product.priceFen * product.quantity ||
     order.currency !== product.currency ||
     !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
-    (order.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
+    (order.environment === 'production' && product.sandboxTest === true) ||
     order.paymentChannel !== 'wechat_virtual_payment'
   ) {
     throw reconciliationError('Payment order conflicts with current configuration.', 'PAYMENT_ORDER_CONFLICT', 409)

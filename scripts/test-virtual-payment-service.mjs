@@ -1,3 +1,4 @@
+import { MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT } from '../miniapp-uni/word-app1/common/membership-products.js'
 import assert from 'node:assert/strict'
 
 import { createSensitivePaymentSession } from '../server/virtual-payment-session.mjs'
@@ -14,6 +15,8 @@ function enabledEnv(overrides = {}) {
     VIRTUAL_PAYMENT_SANDBOX_USER_IDS: '42',
     WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID: 'sandbox-offer',
     WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID: 'sandbox-product',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_MONTHLY_PRODUCT_ID: 'sandbox-monthly-product',
+    WECHAT_VIRTUAL_PAYMENT_SANDBOX_YEARLY_PRODUCT_ID: 'sandbox-yearly-product',
     WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY: 'fake-app-key',
     ...overrides
   }
@@ -26,6 +29,8 @@ function productionEnv(overrides = {}) {
     VIRTUAL_PAYMENT_ENV: 'production',
     WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID: 'production-offer',
     WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID: 'production-product',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_MONTHLY_PRODUCT_ID: 'production-monthly-product',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_YEARLY_PRODUCT_ID: 'production-yearly-product',
     WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY: 'fake-production-app-key',
     ...overrides
   }
@@ -71,7 +76,7 @@ function request(overrides = {}) {
     authenticatedUserId: '42',
     clientRequestId: 'request-12345678',
     loginCode: 'fresh-login-code',
-    sku: 'membership_30d',
+    sku: 'membership_30d_v2',
     platform: 'android',
     ...overrides
   }
@@ -160,12 +165,12 @@ const createCall = harness.calls.find((call) => call[0] === 'create')[1]
 assert.deepEqual(createCall, {
   userId: '42',
   clientRequestId: 'request-12345678',
-  internalSku: 'membership_30d',
-  productId: 'sandbox-product',
+  internalSku: 'membership_30d_v2',
+  productId: 'sandbox-monthly-product',
   productName: '30天学习会员',
   quantity: 1,
-  unitPriceFen: 3000,
-  orderAmountFen: 3000,
+  unitPriceFen: 1200,
+  orderAmountFen: 1200,
   currency: 'CNY',
   environment: 'sandbox',
   wechatEnv: 1,
@@ -174,11 +179,11 @@ assert.deepEqual(createCall, {
 })
 assert.equal(JSON.stringify(createCall).includes('loginCode'), false)
 assert.deepEqual(harness.calls.find((call) => call[0] === 'sign')[1].productContext, {
-  productId: 'sandbox-product',
-  internalSku: 'membership_30d',
+  productId: 'sandbox-monthly-product',
+  internalSku: 'membership_30d_v2',
   mode: 'short_series_goods',
   displayName: '30天学习会员',
-  priceFen: 3000,
+  priceFen: 1200,
   quantity: 1,
   durationSeconds: 2592000,
   currency: 'CNY',
@@ -190,8 +195,8 @@ await productionHarness.service.createOrResumeOrder(request())
 const productionCreateCall = productionHarness.calls.find((call) => call[0] === 'create')[1]
 assert.equal(productionCreateCall.environment, 'production')
 assert.equal(productionCreateCall.wechatEnv, 0)
-assert.equal(productionCreateCall.productId, 'production-product')
-assert.equal(productionCreateCall.unitPriceFen, 3000)
+assert.equal(productionCreateCall.productId, 'production-monthly-product')
+assert.equal(productionCreateCall.unitPriceFen, 1200)
 assert.equal(productionHarness.getCurrentOrder().environment, 'production')
 assert.equal(productionHarness.getCurrentOrder().wechatEnv, 0)
 assert.equal(productionHarness.calls.some((call) => call[0] === 'exchange'), true,
@@ -211,9 +216,10 @@ const sandboxTestHarness = createHarness({ env: enabledEnv({
   VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true',
   WECHAT_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ID: 'sandbox-test-product'
 }) })
-await sandboxTestHarness.service.createOrResumeOrder(request())
+await sandboxTestHarness.service.createOrResumeOrder(request({ sku: 'membership_30d' }))
 assert.deepEqual(sandboxTestHarness.calls.find((call) => call[0] === 'create')[1], {
   ...createCall,
+  internalSku: 'membership_30d',
   productId: 'sandbox-test-product',
   unitPriceFen: 100,
   orderAmountFen: 100
@@ -592,3 +598,41 @@ console.log('Virtual payment service tests passed.')
   })
   assert.deepEqual(receivedEnvironment, { environment: 'production', wechatEnv: 0 })
 }
+
+// Full signing with each new sale SKU; page selection cannot reprice a saved order.
+for (const environment of ['sandbox', 'production']) {
+  for (const product of [MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT]) {
+    const env = environment === 'sandbox' ? enabledEnv() : productionEnv()
+    const signingService = createVirtualPaymentSigningService({ env })
+    const h = createHarness({ env, signingService, paymentSessionService: {
+      async exchangeAndVerifyPaymentSession() {
+        return createSensitivePaymentSession({ userId: '42', openid: 'membership-plan-fixture' }, 'session-plan-fixture')
+      }
+    } })
+    const result = await h.service.createOrResumeOrder(request({ sku: product.internalSku }))
+    assert.equal(JSON.parse(result.paymentParams.signData).goodsPrice, product.priceFen)
+    assert.equal(result.product.durationSeconds, product.durationSeconds)
+    const resumed = await h.service.createOrResumeOrder(request({ sku: product === MONTHLY_MEMBERSHIP_PRODUCT ? YEARLY_MEMBERSHIP_PRODUCT.internalSku : MONTHLY_MEMBERSHIP_PRODUCT.internalSku }))
+    assert.deepEqual(resumed.product, result.product)
+    assert.equal(JSON.parse(resumed.paymentParams.signData).goodsPrice, product.priceFen)
+    assert.equal(h.calls.filter(c => c[0] === 'create').length, 1)
+  }
+  const oldSale = createHarness({ env: environment === 'sandbox' ? enabledEnv() : productionEnv() })
+  await assert.rejects(oldSale.service.createOrResumeOrder(request({ sku: 'membership_30d' })), { code: 'PAYMENT_PRODUCT_UNAVAILABLE' })
+  assert.deepEqual(oldSale.calls.map(c => c[0]), ['findRequest'])
+}
+for (const [sku, variable] of [
+  ['membership_30d_v2', 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_MONTHLY_PRODUCT_ID'],
+  ['membership_365d', 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_YEARLY_PRODUCT_ID']
+]) {
+  const h = createHarness({ env: enabledEnv({ [variable]: undefined }) })
+  await assert.rejects(h.service.createOrResumeOrder(request({ sku })), { code: 'PAYMENT_PRODUCT_NOT_CONFIGURED' })
+  assert.deepEqual(h.calls.map(c => c[0]), ['findRequest'])
+}
+const legacyResume = createHarness({ currentOrder: order(), env: enabledEnv({
+  WECHAT_VIRTUAL_PAYMENT_SANDBOX_MONTHLY_PRODUCT_ID: undefined, WECHAT_VIRTUAL_PAYMENT_SANDBOX_YEARLY_PRODUCT_ID: undefined
+}) })
+const oldResult = await legacyResume.service.createOrResumeOrder(request({ sku: 'membership_365d' }))
+assert.equal(oldResult.product.priceFen, 3000)
+assert.equal(oldResult.product.durationSeconds, 30 * 86400)
+console.log('Monthly/yearly create, history resume and missing configuration passed.')

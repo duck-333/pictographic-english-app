@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import mysql from 'mysql2/promise'
+import { LEGACY_MEMBERSHIP_PRODUCT, MEMBERSHIP_PLANS } from '../miniapp-uni/word-app1/common/membership-products.js'
 
 import { hashBookBenefitRedemptionCode } from '../server/book-benefit-code.mjs'
 import { createBookBenefitStore } from '../server/book-benefit-store.mjs'
@@ -60,27 +61,28 @@ async function assertDatabaseAbsent(connection, databaseName) {
   assert.equal(rows.length, 0)
 }
 
-function orderInput(userId, clientRequestId) {
+function orderInput(userId, clientRequestId, product = LEGACY_MEMBERSHIP_PRODUCT) {
   return {
-    userId, clientRequestId, internalSku: 'membership_30d', productId: 'sandbox-product',
-    productName: '30天学习会员', quantity: 1, unitPriceFen: 3000, orderAmountFen: 3000,
+    userId, clientRequestId, internalSku: product.internalSku,
+    productId: product === LEGACY_MEMBERSHIP_PRODUCT ? 'sandbox-product' : `mysql-${product.internalSku}`,
+    productName: product.displayName, quantity: 1, unitPriceFen: product.priceFen, orderAmountFen: product.priceFen,
     currency: 'CNY', environment: 'sandbox', wechatEnv: 1,
     paymentChannel: 'wechat_virtual_payment', clientPlatform: 'android'
   }
 }
 
-async function createTrustedPaidOrder(store, userId, clientRequestId, suffix, paidAt = NOW) {
-  const created = await store.createOrder(orderInput(userId, clientRequestId))
+async function createTrustedPaidOrder(store, userId, clientRequestId, suffix, paidAt = NOW, product = LEGACY_MEMBERSHIP_PRODUCT) {
+  const created = await store.createOrder(orderInput(userId, clientRequestId, product))
   const pending = await store.markOrderPending(userId, created.order.orderNo)
   const query = {
     orderId: pending.orderNo, wechatOrderId: `WXORDER${suffix}`,
     wechatPaymentOrderId: `WXPAY${suffix}`, status: 2, orderType: 0,
-    orderFeeFen: 3000, paidFeeFen: 3000, paidAtSeconds: Math.floor(paidAt.getTime() / 1000),
+    orderFeeFen: product.priceFen, paidFeeFen: product.priceFen, paidAtSeconds: Math.floor(paidAt.getTime() / 1000),
     providedAtSeconds: null, environmentType: 2, environment: 'sandbox'
   }
   const fact = normalizeVerifiedWechatQueryFact(query, pending, { now: () => paidAt.getTime() })
   const reconciled = await store.reconcileVerifiedWechatQuery(userId, pending.orderNo, fact, {
-    expectedProductId: 'sandbox-product'
+    expectedProductId: pending.productId, expectedPriceFen: product.priceFen
   })
   assert.equal(reconciled.order.paymentStatus, 'paid')
   return reconciled.order
@@ -353,6 +355,36 @@ async function runScenarios(pool, databaseConfig) {
   assert.equal(orders.length, 6)
   assert(orders.every((order) => order.entitlement_status === 'granted' && order.delivery_status === 'not_ready'))
   assert(orders.every((order) => order.membership_grant_id && order.entitlement_transaction_id))
+
+  // Reuse the actual book redemption above, then renew the active mixed membership.
+  assert(grants.some((grant) => grant.source_type === 'redemption_code'))
+  let previousEnd = new Date(grants.at(-1).effective_end_at).getTime()
+  for (const product of MEMBERSHIP_PLANS) {
+    const paid = await createTrustedPaidOrder(store, '301', `entitlement-${product.internalSku}`, product.internalSku, NOW, product)
+    const context = { expectedProductId: paid.productId, expectedPriceFen: product.priceFen, now: NOW }
+    const result = await store.grantTrustedPaidOrderEntitlement('301', paid.orderNo, context)
+    assert.equal(Date.parse(result.membership.effectiveStartAt), previousEnd)
+    previousEnd += product.durationSeconds * 1000
+    assert.equal(Date.parse(result.membership.effectiveEndAt), previousEnd)
+    const [[row]] = await pool.execute(
+      `SELECT days_granted, duration_seconds, effective_start_at, effective_end_at
+         FROM membership_grants WHERE id = ?`, [result.membership.grantId]
+    )
+    assert.equal(Number(row.days_granted), product.durationSeconds / 86400)
+    assert.equal(Number(row.duration_seconds), product.durationSeconds)
+    assert.equal(new Date(row.effective_end_at) - new Date(row.effective_start_at), product.durationSeconds * 1000)
+    const [[snapshot]] = await pool.execute('SELECT membership_type, membership_expire_at, quota_balance FROM user_entitlements WHERE user_id = ?', ['301'])
+    assert.equal(snapshot.membership_type, 'monthly')
+    assert.equal(new Date(snapshot.membership_expire_at).getTime(), previousEnd)
+    assert.equal(snapshot.quota_balance, 5)
+    const [[before]] = await pool.execute('SELECT COUNT(*) AS count FROM membership_grants WHERE user_id = ?', ['301'])
+    const replay = await store.grantTrustedPaidOrderEntitlement('301', paid.orderNo, context)
+    assert.equal(replay.idempotent, true)
+    assert.equal(replay.membership.grantId, result.membership.grantId)
+    const [[after]] = await pool.execute('SELECT COUNT(*) AS count FROM membership_grants WHERE user_id = ?', ['301'])
+    assert.equal(Number(after.count), Number(before.count))
+  }
+  console.log('MySQL plans: 30/365-day grants, active/book renewal, unchanged quota and compensation replay passed.')
 
   await entitlementStore.grantQuota({
     userId: '314', amount: 30, source: 'registration', sourceId: '314',

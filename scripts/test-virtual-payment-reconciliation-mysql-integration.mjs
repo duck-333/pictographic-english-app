@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import mysql from 'mysql2/promise'
+import { YEARLY_MEMBERSHIP_PRODUCT } from '../miniapp-uni/word-app1/common/membership-products.js'
 
 import {
   createWechatQueryCanonicalFact,
@@ -579,6 +580,26 @@ async function testReconciliation(pool) {
        AND COLUMN_NAME IN ('login_code', 'session_key', 'app_key', 'app_secret', 'access_token', 'pay_sig', 'signature', 'openid')`
   )
   assert.deepEqual(sensitiveColumns, [])
+
+  const product = YEARLY_MEMBERSHIP_PRODUCT
+  const created = await store.createOrder({ ...createInput('221', 'reconcile-yearly-request'),
+    internalSku: product.internalSku, productId: 'mysql-yearly', productName: product.displayName,
+    unitPriceFen: product.priceFen, orderAmountFen: product.priceFen })
+  const pending = await store.markOrderPending('221', created.order.orderNo)
+  const yearlyFact = normalizeVerifiedWechatQueryFact(
+    queryResult(pending.orderNo, 2, 'WXORDERYEAR221', 'WXPAYYEAR221', { orderFeeFen: 9800, paidFeeFen: 9800 }),
+    pending, { now: () => NOW }
+  )
+  const yearlyContext = { expectedProductId: pending.productId, expectedPriceFen: 9800 }
+  await store.reconcileVerifiedWechatQuery('221', pending.orderNo, yearlyFact, yearlyContext)
+  await store.reconcileVerifiedWechatQuery('221', pending.orderNo, yearlyFact, yearlyContext)
+  const reloaded = await store.findByUserAndOrderNo('221', pending.orderNo)
+  assert.equal(reloaded.paidAmountFen, 9800)
+  assert.equal(reloaded.paymentStatus, 'paid')
+  assert.equal(await store.findTrustedWechatQueryPaidEvidence('221', pending.orderNo), true)
+  const [[events]] = await pool.execute('SELECT COUNT(*) AS count FROM virtual_payment_events WHERE order_no = ?', [pending.orderNo])
+  assert.equal(Number(events.count), 1)
+  console.log('MySQL yearly reconciliation: 9800-fen paid fact, evidence reload and repeated query passed.')
 }
 
 export async function runVirtualPaymentReconciliationMysqlIntegration(env = process.env) {

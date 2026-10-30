@@ -256,7 +256,7 @@ export default {
     membershipTypeText() {
       const type = this.entitlement ? String(this.entitlement.membershipType || 'none') : 'none'
       if (type === 'none') return '普通'
-      if (type === 'monthly') return '月会员'
+      if (type === 'monthly') return '会员'
       return type
     },
     membershipStatusText() {

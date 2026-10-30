@@ -153,12 +153,12 @@ export function createWechatGoodsDeliveryCanonicalFact(input) {
     !matchesVirtualPaymentEnvironment(input.environment, input.wechatEnv) ||
     typeof input.userId !== 'string' || !/^[1-9][0-9]*$/.test(input.userId) ||
     typeof input.orderNo !== 'string' || !ORDER_NUMBER_PATTERN.test(input.orderNo) ||
-    !isVirtualPaymentProductId(input.productId) || input.internalSku !== 'membership_30d' ||
+    !isVirtualPaymentProductId(input.productId) || input.internalSku !== virtualPaymentProductForPrice(input.unitPriceFen)?.internalSku ||
     input.quantity !== 1 || typeof input.attach !== 'string' ||
     input.attach.length === 0 || input.attach.length > 128 ||
     /[\u0000-\u001f\u007f]/.test(input.attach) ||
     !virtualPaymentProductForPrice(input.unitPriceFen) ||
-    (input.environment === 'production' && input.unitPriceFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen) ||
+    (input.environment === 'production' && virtualPaymentProductForPrice(input.unitPriceFen)?.sandboxTest === true) ||
     input.orderAmountFen !== input.unitPriceFen ||
     (input.providerMerchantOrderNo !== null && (
       typeof input.providerMerchantOrderNo !== 'string' ||
@@ -187,7 +187,7 @@ export function normalizeWechatGoodsDeliveryMessage(body, order, context = {}) {
     !order || typeof order !== 'object' || body.OutTradeNo !== order.orderNo ||
     body.OpenId !== context.openid || order.userId !== context.userId ||
     !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
-    (order.environment === 'production' && order.unitPriceFen !== VIRTUAL_PAYMENT_PRODUCT.priceFen)
+    (order.environment === 'production' && virtualPaymentProductForPrice(order.unitPriceFen)?.sandboxTest === true)
   ) throw messageError()
   if (!hasRequiredFields(body.GoodsInfo, GOODS_REQUIRED_FIELDS)) throw messageError()
   const goods = body.GoodsInfo

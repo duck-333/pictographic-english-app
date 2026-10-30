@@ -5,7 +5,8 @@ import {
   isVirtualPaymentProductId,
   matchesVirtualPaymentEnvironment,
   VIRTUAL_PAYMENT_PRODUCT,
-  virtualPaymentProductForPrice
+  virtualPaymentProductForPrice,
+  virtualPaymentProductId
 } from './virtual-payment-config.mjs'
 import { createPaymentSessionSignature } from './virtual-payment-session.mjs'
 
@@ -79,12 +80,10 @@ function assertAuthoritativeConfig(config) {
   const product = config.product
   if (
     virtualPaymentProductForPrice(product && product.priceFen) !== product ||
-    product.internalSku !== 'membership_30d' ||
     product.mode !== 'short_series_goods' ||
     product.quantity !== 1 ||
-    product.durationSeconds !== 2592000 ||
     product.currency !== 'CNY'
-    || (config.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT)
+    || (config.environment === 'production' && product.sandboxTest === true)
   ) {
     throw createSigningError('Virtual payment product configuration is invalid.', 'VIRTUAL_PAYMENT_PRODUCT_INVALID', 503)
   }
@@ -117,14 +116,14 @@ function normalizeProductContext(value, config) {
   }
   const keys = Object.keys(value)
   const product = virtualPaymentProductForPrice(value.priceFen)
-  const usesStandardProduct = product === VIRTUAL_PAYMENT_PRODUCT
+  const usesStandardProduct = product && !product.sandboxTest
   if (
     keys.length !== PAYMENT_PRODUCT_CONTEXT_FIELDS.length ||
     PAYMENT_PRODUCT_CONTEXT_FIELDS.some((field) => !Object.hasOwn(value, field)) ||
     !product ||
-    (config.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
+    (config.environment === 'production' && product.sandboxTest === true) ||
     !isVirtualPaymentProductId(value.productId) ||
-    (usesStandardProduct && value.productId !== config.standardProductId) ||
+    (usesStandardProduct && value.productId !== virtualPaymentProductId(config, product)) ||
     (!usesStandardProduct && value.productId === config.standardProductId) ||
     value.internalSku !== product.internalSku ||
     value.mode !== product.mode ||

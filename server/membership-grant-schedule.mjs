@@ -1,5 +1,6 @@
-export const MEMBERSHIP_GRANT_DAYS = 30
-export const MEMBERSHIP_GRANT_DURATION_SECONDS = 30 * 24 * 60 * 60
+import { MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT } from '../miniapp-uni/word-app1/common/membership-products.js'
+export const MEMBERSHIP_GRANT_DAYS = MONTHLY_MEMBERSHIP_PRODUCT.durationSeconds / 86400
+export const MEMBERSHIP_GRANT_DURATION_SECONDS = MONTHLY_MEMBERSHIP_PRODUCT.durationSeconds
 
 function parseDate(value, fieldName) {
   const date = value instanceof Date ? new Date(value.getTime()) : new Date(value)
@@ -118,8 +119,8 @@ export function scheduleMembershipGrant(input = {}) {
   const durationSeconds = input.durationSeconds === undefined
     ? MEMBERSHIP_GRANT_DURATION_SECONDS
     : parsePositiveInteger(input.durationSeconds, 'durationSeconds')
-  if (durationSeconds !== MEMBERSHIP_GRANT_DURATION_SECONDS) {
-    throw new RangeError(`durationSeconds must be ${MEMBERSHIP_GRANT_DURATION_SECONDS}.`)
+  if (![MEMBERSHIP_GRANT_DURATION_SECONDS, YEARLY_MEMBERSHIP_PRODUCT.durationSeconds].includes(durationSeconds)) {
+    throw new RangeError(`Unsupported membership duration.`)
   }
 
   const grants = normalizeGrantList(input.grants || [], input.legacyBaseline)

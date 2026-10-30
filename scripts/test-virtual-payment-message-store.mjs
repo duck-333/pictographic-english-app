@@ -1,3 +1,4 @@
+import { MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT, membershipProductForPrice } from '../miniapp-uni/word-app1/common/membership-products.js'
 import assert from 'node:assert/strict'
 
 import { readDeliverySchemaContract } from '../server/virtual-payment-delivery-schema.mjs'
@@ -93,6 +94,7 @@ function schemaRows(sql, values) {
 
 function harness(overrides = {}) {
   const state = { order: orderRow(overrides.order), event: null, attempt: overrides.attempt || null, grants: overrides.granted ? 1 : 0, commits: 0, rollbacks: 0, lockOrder: [] }
+  const product = membershipProductForPrice(state.order.unit_price_fen)
   let tail = Promise.resolve()
   function connection() {
     let unlock = null
@@ -165,16 +167,18 @@ function harness(overrides = {}) {
   const membership = {
     grantId: '9', transactionId: 'ent-message', sourceType: 'wechat_order', sourceId: ORDER_NO,
     idempotent: false, effectiveStartAt: NOW.toISOString(),
-    effectiveEndAt: new Date(NOW.getTime() + 2_592_000_000).toISOString()
+    effectiveEndAt: new Date(NOW.getTime() + product.durationSeconds * 1000).toISOString()
   }
   const entitlementStore = {
     async lockMembershipScheduleInTransaction() { state.lockOrder.push('membership') },
-    async grantMembershipDurationInTransaction() {
+    async grantMembershipDurationInTransaction(_connection, input) {
+      assert.equal(input.durationSeconds, product.durationSeconds)
       if (state.grants !== 0) return { ...membership, idempotent: true }
       state.grants += 1
       return membership
     },
     async verifyMembershipGrantInTransaction(_connection, input) {
+      assert.equal(input.durationSeconds, product.durationSeconds)
       if (state.grants !== 1 || String(input.grantId) !== '9' || input.transactionId !== 'ent-message') throw new Error('invalid grant')
       return { ...membership, idempotent: true }
     }
@@ -340,3 +344,18 @@ for (const deliveryStatus of ['manual_review', 'delivered']) {
 }
 
 console.log('virtual payment message store transaction tests passed')
+
+for (const product of [MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT]) {
+  for (const environment of ['sandbox', 'production']) {
+    const h = harness({ order: { internal_sku: product.internalSku, product_name: product.displayName,
+      unit_price_fen: product.priceFen, order_amount_fen: product.priceFen,
+      environment, wechat_env: environment === 'production' ? 0 : 1 } })
+    const verified = fact(h.state.order)
+    await h.store.applyGoodsDeliveryNotification('42', ORDER_NO, verified, { now: NOW })
+    const repeated = await h.store.applyGoodsDeliveryNotification('42', ORDER_NO, verified, { now: NOW })
+    assert.equal(repeated.eventDuplicate, true)
+    assert.equal(h.state.grants, 1)
+    assert.equal(h.state.order.delivery_status, 'delivered')
+  }
+}
+console.log('New membership notification issuance and repeated delivery passed.')

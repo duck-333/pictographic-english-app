@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import mysql from 'mysql2/promise'
+import { MEMBERSHIP_PLANS } from '../miniapp-uni/word-app1/common/membership-products.js'
 
 import { createVirtualPaymentStore } from '../server/virtual-payment-store.mjs'
 import { runWithGuaranteedCleanup } from './test-virtual-payment-mysql-integration.mjs'
@@ -136,6 +137,27 @@ async function testOrderStore(pool) {
     'paid',
     'conditional pending update must not overwrite a terminal state'
   )
+
+  const planStore = createVirtualPaymentStore({ pool })
+  for (const product of MEMBERSHIP_PLANS) {
+    const created = await planStore.createOrder(input('106', `mysql-plan-${product.internalSku}`, {
+      internalSku: product.internalSku, productId: `mysql-${product.internalSku}`,
+      productName: product.displayName, unitPriceFen: product.priceFen, orderAmountFen: product.priceFen
+    }))
+    const reloaded = await planStore.findByUserAndOrderNo('106', created.order.orderNo)
+    const [[row]] = await pool.execute(
+      'SELECT internal_sku, product_id, product_name, unit_price_fen, order_amount_fen FROM virtual_payment_orders WHERE order_no = ?',
+      [created.order.orderNo]
+    )
+    assert.equal(row.internal_sku, product.internalSku)
+    assert.equal(row.product_id, `mysql-${product.internalSku}`)
+    assert.equal(row.product_name, product.displayName)
+    assert.equal(Number(row.unit_price_fen), product.priceFen)
+    assert.equal(Number(row.order_amount_fen), product.priceFen)
+    assert.equal(reloaded.internalSku, product.internalSku)
+    assert.equal(reloaded.unitPriceFen, product.priceFen)
+  }
+  console.log('MySQL plans: monthly 1200/yearly 9800 order INSERT, raw SELECT and Store reload passed.')
 }
 
 export async function runVirtualPaymentOrderMysqlIntegration(env = process.env) {
