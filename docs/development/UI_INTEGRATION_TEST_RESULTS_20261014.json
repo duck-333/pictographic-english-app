@@ -1,0 +1,71 @@
+{
+  "note": "Only local HTTP/fakes; existing mysql2 resolved read-only from primary checkout; temp writes stay inside Integration Worktree.",
+  "results": [
+    {
+      "script": "scripts/test-homepage-featured-display.mjs",
+      "command": "node --input-type=module --eval <existing mysql2 resolver; import scripts/test-homepage-featured-display.mjs>",
+      "exitCode": 3221226505,
+      "stdout": "",
+      "stderr": "node:internal/modules/run_main:107\r\n    triggerUncaughtException(\r\n    ^\r\n\r\nAssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\r\n+ actual - expected\r\n\r\n  [\r\n    {\r\n      bgColor: '',\r\n      borderColor: '',\r\n      color: '',\r\n      meaning: '太阳升起',\r\n+     privateNote: 'not public',\r\n      targetId: 'as',\r\n      text: 'as'\r\n    },\r\n    {\r\n      bgColor: '',\r\n\r\n    at sameRecord (file:///D:/english-app/pictographic-english-app-ui-integration/scripts/test-homepage-featured-display.mjs:53:10)\r\n    at file:///D:/english-app/pictographic-english-app-ui-integration/scripts/test-homepage-featured-display.mjs:76:69 {\r\n  generatedMessage: true,\r\n  code: 'ERR_ASSERTION',\r\n  actual: [\r\n    {\r\n      text: 'as',\r\n      meaning: '太阳升起',\r\n      targetId: 'as',\r\n      privateNote: 'not public',\r\n      color: '',\r\n      bgColor: '',\r\n      borderColor: ''\r\n    },\r\n    {\r\n      text: 'i',\r\n      meaning: '连接',\r\n      targetId: '',\r\n      color: '',\r\n      bgColor: '',\r\n      borderColor: ''\r\n    },\r\n    {\r\n      text: 'a',\r\n      meaning: '表地点',\r\n      targetId: '',\r\n      color: '',\r\n      bgColor: '',\r\n      borderColor: ''\r\n    }\r\n  ],\r\n  expected: [\r\n    {\r\n      text: 'as',\r\n      meaning: '太阳升起',\r\n      targetId: 'as',\r\n      color: '',\r\n      bgColor: '',\r\n      borderColor: ''\r\n    },\r\n    {\r\n      text: 'i',\r\n      meaning: '连接',\r\n      targetId: '',\r\n      color: '',\r\n      bgColor: '',\r\n      borderColor: ''\r\n    },\r\n    {\r\n      text: 'a',\r\n      meaning: '表地点',\r\n      targetId: '',\r\n      color: '',\r\n      bgColor: '',\r\n      borderColor: ''\r\n    }\r\n  ],\r\n  operator: 'deepStrictEqual',\r\n  diff: 'simple'\r\n}\r\n\r\nNode.js v24.17.0\r\nAssertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 94\r\n"
+    },
+    {
+      "script": "scripts/test-content-api-security.mjs",
+      "command": "node --input-type=module --eval <existing mysql2 resolver; import scripts/test-content-api-security.mjs>",
+      "exitCode": 0,
+      "stdout": "Content API security: field projection, no-store, authorization, last quota, replay, 429-before-consume, membership, peer IP passed (local fakes; no DB).\n",
+      "stderr": ""
+    },
+    {
+      "script": "scripts/test-content-session-isolation.mjs",
+      "command": "node --input-type=module --eval <existing mysql2 resolver; import scripts/test-content-session-isolation.mjs>",
+      "exitCode": 0,
+      "stdout": "Actual detail/mine scripts: public cache, logout, account switch, relogin race, renewal ID, expiration/401 and stale book replies passed (native UI stubbed).\n",
+      "stderr": ""
+    },
+    {
+      "script": "scripts/test-server-word-api-link.mjs",
+      "command": "node --input-type=module --eval <existing mysql2 resolver; import scripts/test-server-word-api-link.mjs>",
+      "exitCode": 0,
+      "stdout": "Server word API link test passed\n",
+      "stderr": ""
+    },
+    {
+      "script": "scripts/test-membership-entitlement-mvp.mjs",
+      "command": "node --input-type=module --eval <existing mysql2 resolver; import scripts/test-membership-entitlement-mvp.mjs>",
+      "exitCode": 0,
+      "stdout": "membership entitlement MVP tests passed\n",
+      "stderr": ""
+    },
+    {
+      "script": "scripts/test-baxiaota-entry.mjs",
+      "command": "node --input-type=module --eval <existing mysql2 resolver; import scripts/test-baxiaota-entry.mjs>",
+      "exitCode": 0,
+      "stdout": "Baxiaota entry, asynchronous homepage measurement, watcher/lifecycle and home navigation tests passed (native touch/scroll still requires device validation).\n",
+      "stderr": ""
+    },
+    {
+      "script": "scripts/test-content-security-release-verifier.mjs",
+      "command": "node --input-type=module --eval <existing mysql2 resolver; import scripts/test-content-security-release-verifier.mjs>",
+      "exitCode": 0,
+      "stdout": "Release verifier: 21 subprocess exit-code/conclusion cases passed. Generated fixtures retained outside the repository: D:\\english-app\\pictographic-english-app-ui-integration\\server\\local-data\\ui-integration-temp\\content-release-verifier-AsUTWC\n",
+      "stderr": ""
+    },
+    {
+      "script": "scripts/test-homepage-featured-display.mjs",
+      "command": "node --input-type=module --eval <existing mysql2 resolver; import scripts/test-homepage-featured-display.mjs>",
+      "exitCode": 0,
+      "stdout": "Homepage display: local HTTP selected record/rotation/update, no-store/429, client projection/basic-only caches, session races, and actual page methods passed; no production data or native layout acceptance.\n",
+      "stderr": "",
+      "note": "Retry after correcting the comparison of an internal stored record to its public display projection."
+    },
+    {
+      "script": "scripts/test-homepage-featured-display.mjs",
+      "command": "node --input-type=module --eval <existing mysql2 resolver; import scripts/test-homepage-featured-display.mjs>",
+      "exitCode": 0,
+      "stdout": "Homepage display: local HTTP selected record/rotation/update, no-store/429, client projection/basic-only caches, session races, and actual page methods passed; no production data or native layout acceptance.\n",
+      "stderr": "",
+      "note": "Final test, including current-only response and absence of display fields in persistent storage."
+    }
+  ],
+  "artifactRelocation": "Only newly generated test temporary artifacts moved within Integration to miniapp-uni/word-app1/unpackage/ui-integration-validation/test-temp; no deletion or cleanup of pre-existing worktrees."
+}

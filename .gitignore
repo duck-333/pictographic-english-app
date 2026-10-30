@@ -15,3 +15,4 @@ server/local-data/*.json
 admin-portal/pictographic-admin/unpackage
 admin-portal/pictographic-admin/.hbuilderx
 admin-portal/pictographic-admin/node_modules
+/server/local-data/content-release-verifier-abJUb2/

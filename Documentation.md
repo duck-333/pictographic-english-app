@@ -1,5 +1,60 @@
 # Documentation
 
+## 2026-10-30：首页API上线完成与本地Git收尾
+
+- 状态：上线完成，服务端与真机业务验收通过。用户确认：首页推荐词正常且与详情一致；当前推荐词完整文字免费查看、不扣额度；普通词仍遵守原权限规则。真机结论来自用户反馈，本次整理没有追加生产请求。
+- 实际采用四文件原地更新，保留原PM2记录及运行环境，不是完整256文件发行包部署。三个现场原件备份、第四项原缺失收据、控制收据、冻结R7和旧审查资料保留；前台会话正常退出，fd 9已关闭，内存环境基线已丢弃。
+- 服务端验收时五项支付变量保持缺失；未执行pm2 save，bootRecoveryVerified=false。这里只确认已完成的运行态及真机验收，不宣称主机或daemon丢失后的恢复已验证。
+- 旧JSON重构路线与7项字段补证为“本次发布不再采用”，不是“问题已解决”，不再作为本次上线待办。后续同类更新优先采用已验证的最小增量发布流程，仍须依据当次状态及授权核验。
+
+### 已上线四文件追溯
+
+冻结R7来源：C:/Users/Lenovo/.codex/visualizations/2026/10/19/01a15331-7f27-7941-8496-6cb3d09079ee/r7-homepage-release-candidate-20261021-r1。
+实际发布载荷：C:/Users/Lenovo/.codex/visualizations/2026/10/29/01a1868b-f8b9-7ee3-9937-dfb026e5ecc6/four-file-inplace-20261029/payload。
+执行记录：C:/Users/Lenovo/.codex/visualizations/2026/10/29/01a1868b-f8b9-7ee3-9937-dfb026e5ecc6/FOUR_FILE_INPLACE_EXECUTION_2026-10-30.md。
+
+| 线上文件 | 冻结SHA-256（实际发布原字节） |
+| --- | --- |
+| server/index.mjs | df6c318d2258a1285e57ebb1d6ce57cdcdb881b96b0af4120f8f2a23adb588ff |
+| server/word-store.mjs | 5b8d80f3139b0b4fc6144e2362023f464115e8290e105d78a6cf9717d447bf08 |
+| server/word-access-policy.mjs | 17e61abb9453bfd9869f1467abcd5e4fc54a38c2bda7522ad93f339630b9212f |
+| server/content-rate-limit.mjs | 99d3e5fd5ba9e943fb32bddd4c6e3d59f2ff0875aeb6fa74e46608dae86dd902 |
+
+当前分支为适配后的代码，不与线上整文件完全一致。基线为codex/ui-integration-20261014 / a4de80c5fed67189ac69107a65f549fa100e4989；word-store及word-access-policy已在该提交中对应上线内容（工作区有CRLF表示差异）。本次只移植index的内容接口异常脱敏/no-store及限频器加固，保留当前分支邀请、注册赠额及其他逻辑，未整文件覆盖index；不得把该适配提交当作线上四文件原样快照。
+
+### 本轮本地整理范围与其他任务
+
+- 保留三个UI_INTEGRATION_*_20261014.json及其中初始失败记录，作为10月14日历史证据，不改写为本次发布测试结果。
+- .gitignore仅新增/server/local-data/content-release-verifier-abJUb2/；27项测试生成物保留，不删除、不扩大忽略范围。
+- 两个巴小塔检查/测试脚本属于独立D批任务，原样保留，不因本次服务端上线而关闭其复审或完整游戏验收；manifest.json、冻结R7及其他工作区不改。
+- 下文10月14/15日“待审查/待部署”是对应批次的历史状态；本次服务端上线状态以上述10月30日结论为准，不改写历史证据，也不将其他任务一并判定完成。
+- 本轮针对性本地验证：Node v24.17.0运行node scripts/test-production-content-rate-limit.mjs退出0；分组容量/溢出键更换与恢复、时间回退、IPv6 /64与映射IPv4、六项内容接口异常脱敏/no-store通过，既有启动/默认策略/代理头/零消费断言保持通过。仅127.0.0.1临时HTTP和内存数据，mysql2驱动桩拒绝数据库调用且访问次数为0，无文件测试产物；三个改动代码文件node --check均退出0，git diff --check退出0。未重跑R7业务套件或真机验收。本轮不暂存、不提交、不推送；后续只复核新增整理和移植差异。
+
+## 2026-10-15：D批构建产物检查三项P2修复
+
+### 历史误通过及本次边界
+
+- 本节补充10月14日历史构建检查记录：原脚本虽能拒绝纯Component({})，但以createComponent/openGame字符串判断注册和事件，未确认首页实际挂载、底栏模板及游戏页面三个文件，存在本轮独立审查确认的三项P2误通过。此前脚本成功不能作为这些检查已经完成的证据；用户此前入口显示验收结论不扩展为完整游戏流程验收。
+- P2-1：读取真实common/vendor.js与组件webpack4模块，捕获并执行实际组件注册入口；uni适配器替换成无网络/文件能力的测试API。使用产物中的真实normalizer和依赖模块，要求得到正确命名、已编译render、data及methods的组件。原生占位Component直接拒绝，只有注释/字符串、未执行注册或错误模块路径不能通过。
+- P2-2：有限WXML标签/属性结构读取排除注释、template定义和可直接识别的恒假分支；首页必须挂载浮窗和底栏且JSON映射正确，保留Vue绑定桥及显示props/当前路由。浮窗movable-view必须有__e点击绑定、literal事件表及实际方法；在就绪状态调用编译方法，观察隔离navigateTo确实指向游戏。底栏必须有根节点、navItems循环、item.label实际插值和事件绑定，读取真实导航数据并观察编译处理方法调用reLaunch。
+- P2-3：保留app.json分包声明检查，同时逐个读取游戏JS/WXML/JSON，要求非空；JS可编译、WXML有元素、JSON为对象。保留入口图片非空并新增模板src核对。游戏JS只检查文件/语法，未执行完整游戏页面或其异步分包依赖。
+- 检查器有限支持已经核实的uni-app webpack4格式（含当前uni模块编号2），其他编译格式或事件表达式失败关闭，不降级为关键词搜索。VM仅用于受信任本地编译产物的隔离探针，不是执行恶意JS的安全沙箱。它不能证明CSS层级、动态显示条件的全部分支、真实触摸/键盘/拖动、微信事件桥、分包下载或教程/总结/完整游戏运行正确。
+
+### 本轮执行与反例
+
+- 实际正常产物：miniapp-uni/word-app1/unpackage/dist/dev/mp-weixin-entry-check-1791988397072，来自此前修正构建包装器后的真实成功编译；本轮没有重新编译、修改产物或覆盖Babel loader options。
+- node scripts/check-baxiaota-entry-build.mjs <上述真实产物>：退出0。
+- 同脚本读取旧真实mp-weixin-competition-1791979706409产物：退出1，REGISTER拒绝BaxiaotaEntry的原生Component占位输出，符合预期。
+- node scripts/test-baxiaota-entry-build.mjs <上述真实产物>：退出0。真实产物和仅复制必要文件的正例分别退出0；以下34个反例均退出1且匹配相应失败原因。
+- 注册5项：浮窗占位加关键词注释、底栏占位加注释、关键词字符串、注册调用注释化、注册模块不存在。
+- 浮窗事件5项：方法名仅普通文本、无tap绑定、无事件表、无处理方法、只有路由文本却不导航。
+- 首页挂载8项：无浮窗、无底栏、浮窗只在注释、恒假分支、错误usingComponents映射、显示props缺失、Vue绑定桥缺失、底栏当前路由缺失。
+- 底栏7项：模板缺失、模板只有关键词、循环缺失、标签缺失、标签插值改为普通文本、tap绑定缺失、处理方法缺失。
+- 图片/分包3项：图片为空、图片绑定缺失、分包声明缺失。
+- 游戏文件6项：JS/WXML/JSON分别缺失、分别为空；各测试仍保留app.json声明，避免只验证配置。
+- 最终34例证据保留于miniapp-uni/word-app1/unpackage/d-entry-check-tests-jIPx71/results.json；补充显示绑定反例前的首轮30例记录位于d-entry-check-tests-AcixjP/results.json，均保留。专项仅在新建忽略目录里逐项修改并恢复副本，对14个真实输入文件逐字节验证未改变；没有清理任何原有文件或27个安全夹具、3个历史JSON。
+- 本批修改范围：检查脚本、新增D专项测试及Prompt/Plan/本文的D章节。未改首页/游戏/服务端权益/限频/支付/VOD，未访问生产。完成后停止等待独立复审，不暂存、提交、推送、合并或部署。
+
 ## 2026-10-15：P1生产限频兼容本地修复
 
 ### 实现与边界
@@ -26,16 +81,28 @@
 
 六项既有测试使用node --input-type=module -e启动器：仅将mysql2及mysql2/promise通过registerHooks解析到导出createPool/createConnection抛出DATABASE_ACCESS_FORBIDDEN的内存data模块，随后import对应测试脚本；未安装或修改依赖。全部本机HTTP使用执行许可。专项首次沙箱内退出1，原因为fetch连接127.0.0.1被EACCES拒绝；获准后通过。补充异常头真实HTTP断言后专项重跑退出0。测试不代表真实MySQL事务、原生UI或生产链路验收。
 
-### 部署前置
+### 交付与部署前置
 
+- 修改前13个已跟踪修改/36个未跟踪、暂存区空。新增改动限于上述两个服务端文件、一个专项测试及Prompt/Plan/本文；所有既有成果和27个夹具保留。新专项只使用内存适配器、无持久测试数据；既有回归临时JSON由其原finally逐文件清理，不清理原有文件。
 - 部署前仍须授权只读核实生产run入口及其startServer调用/注入、运行提交版本、所有主机/进程实例数、Nginx生效覆盖头配置及可能的上游CDN/LB、公网直连防护。当前0.0.0.0监听不证明公网可达，也不证明已隔离。
+- 本轮未暂存、提交、推送、合并、部署，未启动生产服务或修改其他Worktree。等待独立代码审查，不能宣布生产部署条件全部满足。
+
+## 2026-10-14：首页浮窗缺失为开发构建包装器问题
+
+- 根因证据：旧预览包BaxiaotaEntry.js、BottomNav.js都是Component({})占位，虽有wxml和绑定但无createComponent注册；实际模拟器搜索/统计正常、底栏/浮窗缺失、Vue children=0，浮窗bounds初值0。不是安全第一批删除游戏或目录括号问题。
+- 本地A/B构建只移除包装器手动遍历loader并重新赋值babel-loader options/删除cache-loader的段落，其余源码和development/watch=false/minimize=true/clean=false不变；保留uni-app自身缓存/动态组件配置、UNI_USING_CACHE未设置。新组件脚本含createComponent，浮窗15557字节、底栏11626字节；编译退出0，2026-10-14 22:33:31.107北京时间完成。
+- 新模拟器实际children=2、bounds.width=412/bottom≈796.33、visible=true、positionReady=true；浮窗80×110，bottom≈780.30，在底栏上方。截图和修正命令位于word-app1（2）/unpackage/entry-diagnostic-目录，新产物为dist/dev/mp-weixin-entry-check-1791988397072。
+- 新增scripts/check-baxiaota-entry-build.mjs验证实际注册/组件引用/事件/图片/分包，旧产物退出1、新产物退出0；原浮窗测试仅在内存映射改名路径后退出0，不改已有测试文件。实际API仍sandbox.invalid，26项私有样例文本未进入包；不处理推荐数据缺失。
+- 初始显示恢复已由模拟器确认；实际点击事件自动化超时，页面重载阶段出现子组件未就绪，焦点关闭后的模拟器恢复也未获得一致结果，不算这些真机场景通过。新preview命令退出0，主包707.6KB/总2.2MB；真机点击、返回、键盘/焦点及拖动吸边待用户验收。游戏和业务源码未改，未暂存/提交或连接生产。
 
 ## 2026-10-14：当前推荐词完整文字免费批次
 
+- 前置：首页UI第二轮独立复审已由用户确认通过，P2/P3关闭。本批仅在Integration、codex/ui-integration-20261014、HEAD d8a7137b043c8d48e23db8d61c774a0c631ffb0c上继续开发，前述未提交变更完整保留。
 - 当前资格按findWordDetailContext一次JSON读取和服务端日期判定；同份数据内目标published词的canonical ID必须等于当前推荐ID。原查找及轮换算法抽为共享内部函数，不创建免费池/名单/缓存；无效历史手动词回退到池内每日轮换，空池不免费。
 - 免费分支不调用consumeQuota，access为canAccessFull=true、reason=FEATURED_WORD_FREE、charged=false、chargeAmount=0，额度null、会员false表示不使用账号权益，不查询/伪造余额。有效Token仍校验真实用户，无效/过期Token保留401/403，完整请求ID仍必需。
 - 匿名免费先通过原basicIp，再通过fullIp；带Token先fullIp再account。免费分支缺少限频器返回503，不把已有生产限频待验证边界当作已完成。普通非当前分支的权益/会员/幂等及视频保持原样。
 - toFeaturedTextWord为同模块内明确文字投影：复用basic及full access构造，提供当前详情消费的完整释义、说明、意象、拆解、例句和同族ID，视频仅页面标题/说明/时间点。原始地址、fileId/assetId/storagePath/凭证及未使用原始HTML/教学图片不放行；普通toFullWord不改，客户端不新增免费声明。
+- 专项及回归最终结果、实际初始测试桩修正、文件清单、测试残留分类见开发记录。仅本地JSON/内存测试，无新增依赖或DB表，不宣称真实数据库流水/视频源站/真机验收完成。停在待独立代码审查。
 
 ## 2026-10-14：UI 集成第一轮审查不通过后的 P2/P3 修复
 
@@ -43,6 +110,8 @@
 - 隐藏/销毁清定时器并递增已有请求序号；迟到回复不得更新或重新调度。跨上海日界的回复拒绝并在1ms后重新请求。客户端仅按日期调度，当前词始终由服务端决定，不授予免费完整详情/视频权益。
 - P3 专用新增字段只有 parts 与 explanation；parts 严格仅 text/meaning。label/title 仅作为既有后台格式输入别名并归一，targetId/color/bgColor/borderColor 不再输出。复用原basic信封是既有 cacheRemoteWords、最近历史及普通查词缓存的消费者需要，不复制/改变普通白名单。
 - 新测试使用独立显式字段预期；并补断言后台 fixture 保存成功，避免原测试保存失败却仍比较同记录的假通过。实际结果及沙箱失败均记录于集成文档。
+- 原未跟踪 content-release-verifier-abJUb2 目录只读保留：18个JSON、6个JS、3个模拟PNG，与发行扫描测试生成的正常/错误清单和公开/私有模拟资源对应；脚本使用mkdtemp且没有清理，之前TEMP指向local-data，来源据此判断，未重跑该残留测试。本轮测试临时JSON逐个由脚本finally清理，无新增持久测试残留。
+- 本轮本地测试最终通过，未编译/预览当前版本，也未扩大为真机或生产验收。停在待第二轮独立复审，未暂存/提交/推送/部署。
 
 ## 2026-10-14：最终提交补审P2最小修正
 
@@ -1311,3 +1380,12 @@ IDENTITY_STORE_ERROR
 版本边界：最新 P2 异常分支的证据为源码复审及编译派发回归，不扩大为新版本异常分支全部经真机验收。旧二维码对应17:36版，不包含最新修复，本轮未生成新二维码。
 
 历史记录与各版本证据保留；下文“待复审／待真机复验”等表述为当时状态，以本段最终状态为准。本批已进入待本地提交阶段，仅按已核对清单暂存，不提交、推送、合并或正式发布。
+
+
+### 2026-10-14：首页推荐UI迁移到安全第一批 master
+
+Integration路径D:/english-app/pictographic-english-app-ui-integration，分支codex/ui-integration-20261014，基线d8a7137b043c8d48e23db8d61c774a0c631ffb0c。仅应用备份中的首页Vue补丁；服务端和客户端安全代码均在新基线上局部修改，没有用旧文件覆盖。
+
+当前推荐响应使用basic加parts／explanation专用展示投影，客户端响应原样保留这两项，cacheRemoteWords和普通查询仍只接受basic；专用响应不经普通cloneWord误删字段。补充首页请求的会话快照检查，保留页面请求序号及详情／会员／VOD原逻辑；推荐接口增加no-store，原429不变。不产生推荐词免费权益或第二套词库。
+
+本地接口和安全回归、小程序检查、内容校验及HBuilderX自带Node18发行构建通过；真实编译图安全扫描通过。系统Node24构建不兼容和一次Windows上下文格式错误均已通过调整本地调用解决，未改依赖。新增测试最初有内部对象／投影对象比较错误，修正后通过，失败记录保留。无生产API／数据库／视频连接，真实数据与真机未验收，停在待独立审查，不暂存／提交／推送／合并／部署。详情见docs/development/UI_INTEGRATION_20261014.md。
