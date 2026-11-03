@@ -48,7 +48,7 @@ export function normalizeVerifiedWechatDeliveryQueryFact(input, order, options =
     !isPlainObject(order) || typeof order.userId !== 'string' || !/^[1-9][0-9]*$/.test(order.userId) ||
     !product || order.orderAmountFen !== product.priceFen * product.quantity ||
     !environmentConfig || !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
-    (order.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) || order.currency !== product.currency ||
+    (order.environment === 'production' && product.sandboxTest === true) || order.currency !== product.currency ||
     typeof order.orderNo !== 'string' || !ORDER_NUMBER_PATTERN.test(order.orderNo) ||
     input.orderId !== order.orderNo ||
     input.environment !== order.environment || input.environmentType !== environmentConfig.expectedWechatEnvironmentType ||

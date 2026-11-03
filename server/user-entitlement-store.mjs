@@ -1,9 +1,9 @@
+import { YEARLY_MEMBERSHIP_PRODUCT } from '../miniapp-uni/word-app1/common/membership-products.js'
 import crypto from 'crypto'
 import mysql from 'mysql2/promise'
 
 import { requireDatabaseTransactionContext } from './database-transaction-context.mjs'
 import {
-  MEMBERSHIP_GRANT_DAYS,
   MEMBERSHIP_GRANT_DURATION_SECONDS,
   revokeMembershipGrantSchedule,
   scheduleMembershipGrant
@@ -14,6 +14,18 @@ const DEFAULT_DB_PORT = 3306
 const DEFAULT_DB_NAME = 'baxiaota'
 const USER_ENTITLEMENTS_TABLE = 'user_entitlements'
 const ENTITLEMENT_TRANSACTIONS_TABLE = 'entitlement_transactions'
+function membershipDuration(input, sourceType) {
+  const duration = input.durationSeconds === undefined ? MEMBERSHIP_GRANT_DURATION_SECONDS : input.durationSeconds
+  if (duration !== MEMBERSHIP_GRANT_DURATION_SECONDS &&
+      !(sourceType === 'wechat_order' && duration === YEARLY_MEMBERSHIP_PRODUCT.durationSeconds)) {
+    throw new RangeError('Unsupported membership grant duration.')
+  }
+  return duration
+}
+function membershipDurationRule(duration) {
+  return duration === MEMBERSHIP_GRANT_DURATION_SECONDS ? '30x24_hours_not_calendar_month' : '365x24_hours_not_calendar_year'
+}
+
 const MEMBERSHIP_GRANTS_TABLE = 'membership_grants'
 const MAX_ID_LENGTH = 191
 const MAX_SOURCE_LENGTH = 64
@@ -1304,6 +1316,8 @@ export function createUserEntitlementStore(options = {}) {
       existingGrant.sourceId === expected.sourceId &&
       existingGrant.idempotencyKey === expected.idempotencyKey &&
       existingGrant.redemptionCodeId === expected.redemptionCodeId &&
+      existingGrant.durationSeconds === expected.durationSeconds &&
+      existingGrant.daysGranted === expected.durationSeconds / 86400 &&
       existingTransaction.idempotencyKey === expected.idempotencyKey &&
       existingTransaction.transactionType === ENTITLEMENT_TRANSACTION_TYPES.MEMBERSHIP_GRANT &&
       existingTransaction.userId === existingGrant.userId &&
@@ -1747,6 +1761,8 @@ export function createUserEntitlementStore(options = {}) {
 
     const userId = normalizeUserId(input.userId)
     const sourceType = normalizeMembershipSourceType(input.sourceType)
+    const durationSeconds = membershipDuration(input, sourceType)
+    const daysGranted = durationSeconds / 86400
     if (sourceType === 'legacy_membership') {
       throw createUserEntitlementStoreError('Legacy membership grants are created only by snapshot preservation.', {
         code: 'LEGACY_MEMBERSHIP_SOURCE_RESERVED',
@@ -1785,7 +1801,8 @@ export function createUserEntitlementStore(options = {}) {
         sourceType,
         sourceId,
         idempotencyKey,
-        redemptionCodeId
+        redemptionCodeId,
+        durationSeconds
       })
       return createMembershipGrantResult(existingByIdempotency, existingTransaction, entitlement, true)
     }
@@ -1809,15 +1826,15 @@ export function createUserEntitlementStore(options = {}) {
       now: currentTime,
       membershipExpireAt: entitlement.membershipExpireAt,
       grants,
-      durationSeconds: MEMBERSHIP_GRANT_DURATION_SECONDS
+      durationSeconds
     })
     const grantId = await insertMembershipGrant(connection, {
       userId,
       sourceType,
       sourceId,
       redemptionCodeId,
-      daysGranted: MEMBERSHIP_GRANT_DAYS,
-      durationSeconds: MEMBERSHIP_GRANT_DURATION_SECONDS,
+      daysGranted,
+      durationSeconds,
       status: 'granted',
       grantedAt: currentTime,
       effectiveStartAt: new Date(schedule.effectiveStartAt),
@@ -1841,11 +1858,11 @@ export function createUserEntitlementStore(options = {}) {
       metadataJson: normalizeJson({
         membershipGrantId: grantId,
         membershipType: 'monthly',
-        daysGranted: MEMBERSHIP_GRANT_DAYS,
-        durationSeconds: MEMBERSHIP_GRANT_DURATION_SECONDS,
+        daysGranted,
+        durationSeconds,
         effectiveStartAt: schedule.effectiveStartAt,
         effectiveEndAt: schedule.effectiveEndAt,
-        durationRule: '30x24_hours_not_calendar_month'
+        durationRule: membershipDurationRule(durationSeconds)
       }, 'Metadata', 'METADATA_INVALID')
     })
     const [grantLinkUpdate] = await connection.execute(
@@ -1871,7 +1888,7 @@ export function createUserEntitlementStore(options = {}) {
       'Membership expiry time',
       'MEMBERSHIP_EXPIRE_AT_INVALID'
     )
-    // Compatibility value: "monthly" means exactly 30x24 hours in stage 1, never a calendar month.
+    // Keep the legacy snapshot marker; each grant and ledger entry records its actual duration.
     const [snapshotUpdate] = await connection.execute(
       `UPDATE ${quoteIdentifier(USER_ENTITLEMENTS_TABLE)}
           SET membership_type = ?,
@@ -1932,6 +1949,8 @@ export function createUserEntitlementStore(options = {}) {
       maxLength: MAX_ID_LENGTH
     })
     const sourceType = normalizeMembershipSourceType(input.sourceType)
+    const durationSeconds = membershipDuration(input, sourceType)
+    const daysGranted = durationSeconds / 86400
     const sourceId = normalizeRequiredSourceId(input.sourceId)
     const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey)
     const expectedTransactionId = normalizeRequiredString(
@@ -2006,7 +2025,9 @@ export function createUserEntitlementStore(options = {}) {
       const end = Date.parse(normalized.effectiveEndAt)
       if (normalized.sourceType === 'legacy_membership') {
         if (normalized.durationSeconds <= 0 || normalized.daysGranted <= 0) throw createMembershipGrantIntegrityError()
-      } else if (normalized.durationSeconds !== MEMBERSHIP_GRANT_DURATION_SECONDS || normalized.daysGranted !== MEMBERSHIP_GRANT_DAYS) {
+      } else if ((normalized.durationSeconds !== MEMBERSHIP_GRANT_DURATION_SECONDS &&
+          !(normalized.sourceType === 'wechat_order' && normalized.durationSeconds === YEARLY_MEMBERSHIP_PRODUCT.durationSeconds)) ||
+          normalized.daysGranted !== normalized.durationSeconds / 86400) {
         throw createMembershipGrantIntegrityError()
       }
       if (normalized.status === 'granted') {
@@ -2056,8 +2077,8 @@ export function createUserEntitlementStore(options = {}) {
     const grant = activeGrants.find((candidate) => candidate.id === grantId)
     if (!grant || grant.sourceType !== sourceType || grant.sourceId !== sourceId ||
         grant.idempotencyKey !== idempotencyKey || grant.redemptionCodeId !== null ||
-        grant.grantTransactionId !== expectedTransactionId || grant.daysGranted !== MEMBERSHIP_GRANT_DAYS ||
-        grant.durationSeconds !== MEMBERSHIP_GRANT_DURATION_SECONDS) {
+        grant.grantTransactionId !== expectedTransactionId || grant.daysGranted !== daysGranted ||
+        grant.durationSeconds !== durationSeconds) {
       throw createMembershipGrantIntegrityError()
     }
     const entitlementRow = entitlementRows[0]
@@ -2197,11 +2218,11 @@ export function createUserEntitlementStore(options = {}) {
         transaction.reason !== 'Verified WeChat virtual payment membership grant.' ||
         metadataKeys.length !== expectedMetadataKeys.length || metadataKeys.some((key, index) => key !== expectedMetadataKeys[index]) ||
         metadata.membershipGrantId !== grantId || metadata.membershipType !== 'monthly' ||
-        metadata.daysGranted !== MEMBERSHIP_GRANT_DAYS || metadata.durationSeconds !== MEMBERSHIP_GRANT_DURATION_SECONDS ||
+        metadata.daysGranted !== daysGranted || metadata.durationSeconds !== durationSeconds ||
         truncateDateToDatabaseSecond(metadataEffectiveStartAt).toISOString() !== grant.effectiveStartAt ||
         truncateDateToDatabaseSecond(metadataEffectiveEndAt).toISOString() !== grant.effectiveEndAt ||
-        metadataDurationMilliseconds !== MEMBERSHIP_GRANT_DURATION_SECONDS * 1000 ||
-        metadata.durationRule !== '30x24_hours_not_calendar_month') {
+        metadataDurationMilliseconds !== durationSeconds * 1000 ||
+        metadata.durationRule !== membershipDurationRule(durationSeconds)) {
       throw createMembershipGrantIntegrityError()
     }
     return createMembershipGrantResult(grant, transaction, entitlement, true)
@@ -2244,7 +2265,8 @@ export function createUserEntitlementStore(options = {}) {
         sourceType,
         sourceId,
         idempotencyKey,
-        redemptionCodeId
+        redemptionCodeId,
+        durationSeconds: membershipDuration(input, sourceType)
       })
       const entitlement = await findUserEntitlement(recoveryConnection, userId)
       result = createMembershipGrantResult(existingGrant, existingTransaction, entitlement, true)

@@ -1,8 +1,10 @@
+import { membershipProductForSku } from '../miniapp-uni/word-app1/common/membership-products.js'
 import {
   getVirtualPaymentConfig,
   isVirtualPaymentProductId,
   VIRTUAL_PAYMENT_PRODUCT,
-  virtualPaymentProductForPrice
+  virtualPaymentProductForPrice,
+  virtualPaymentProductId
 } from './virtual-payment-config.mjs'
 import { normalizeVerifiedWechatDeliveryQueryFact } from './virtual-payment-delivery.mjs'
 import { normalizeVerifiedWechatQueryFact } from './virtual-payment-reconciliation.mjs'
@@ -112,7 +114,7 @@ function assertCreateInput(input) {
   if (!isPlainObject(input) || Object.keys(input).some((key) => !ALLOWED_CREATE_FIELDS.has(key))) {
     throw createServiceError('Payment request is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
   }
-  if (input.sku !== undefined && input.sku !== VIRTUAL_PAYMENT_PRODUCT.internalSku) {
+  if (input.sku !== undefined && !membershipProductForSku(input.sku)) {
     throw createServiceError('Payment request is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
   }
   if (typeof input.loginCode !== 'string' || !input.loginCode) {
@@ -123,13 +125,13 @@ function assertCreateInput(input) {
 function savedProductForOrder(order, config) {
   const product = virtualPaymentProductForPrice(order && order.unitPriceFen)
   const productId = order && order.productId
-  const usesStandardProduct = product === VIRTUAL_PAYMENT_PRODUCT
+  const usesStandardProduct = product && !product.sandboxTest
   if (
     !product ||
     !isVirtualPaymentProductId(productId) ||
-    (usesStandardProduct && productId !== config.standardProductId) ||
+    (usesStandardProduct && productId !== virtualPaymentProductId(config, product)) ||
     (!usesStandardProduct && productId === config.standardProductId) ||
-    (config.environment === 'production' && !usesStandardProduct)
+    (config.environment === 'production' && product.sandboxTest === true)
   ) {
     throw createServiceError('Payment order conflicts with saved product facts.', 'PAYMENT_ORDER_CONFLICT', 409)
   }
@@ -154,10 +156,6 @@ function assertOrderMatchesProduct(order, productId, product, userId, clientRequ
   ) {
     throw createServiceError('Payment order conflicts with current configuration.', 'PAYMENT_ORDER_CONFLICT', 409)
   }
-}
-
-function assertOrderMatchesConfig(order, config, userId, clientRequestId, platform) {
-  assertOrderMatchesProduct(order, config.productId, config.product, userId, clientRequestId, platform, config)
 }
 
 function signingProductContext(productId, product) {
@@ -275,6 +273,8 @@ function assertPaidOrderForEntitlement(order, config, userId, nowProvider) {
 function safeOrderSummary(order) {
   return Object.freeze({
     orderNo: order.orderNo,
+    product: { internalSku: order.internalSku, priceFen: order.unitPriceFen,
+      displayName: order.productName, durationSeconds: virtualPaymentProductForPrice(order.unitPriceFen).durationSeconds },
     paymentStatus: order.paymentStatus,
     entitlementStatus: order.entitlementStatus,
     deliveryStatus: order.deliveryStatus,
@@ -367,6 +367,16 @@ export function createVirtualPaymentService(options = {}) {
       assertPayable(order)
     }
 
+    if (!order) {
+      orderProduct = membershipProductForSku(input.sku)
+      if (config.sandboxTestProductEnabled && orderProduct === VIRTUAL_PAYMENT_PRODUCT) orderProduct = config.product
+      if (!orderProduct || (!orderProduct.sellable && !orderProduct.sandboxTest)) {
+        throw createServiceError('This product is no longer available for new orders.', 'PAYMENT_PRODUCT_UNAVAILABLE', 400)
+      }
+      orderProductId = virtualPaymentProductId(config, orderProduct)
+      if (!orderProductId) throw createServiceError('The selected payment product is not configured.', 'PAYMENT_PRODUCT_NOT_CONFIGURED', 503)
+    }
+
     let paymentSession
     try {
       paymentSession = await paymentSessionService.exchangeAndVerifyPaymentSession({
@@ -382,13 +392,13 @@ export function createVirtualPaymentService(options = {}) {
         const creation = await store.createOrder({
           userId,
           clientRequestId,
-          internalSku: config.product.internalSku,
-          productId: config.productId,
-          productName: config.product.displayName,
-          quantity: config.product.quantity,
-          unitPriceFen: config.product.priceFen,
-          orderAmountFen: config.product.priceFen * config.product.quantity,
-          currency: config.product.currency,
+          internalSku: orderProduct.internalSku,
+          productId: orderProductId,
+          productName: orderProduct.displayName,
+          quantity: orderProduct.quantity,
+          unitPriceFen: orderProduct.priceFen,
+          orderAmountFen: orderProduct.priceFen * orderProduct.quantity,
+          currency: orderProduct.currency,
           environment: config.environment,
           wechatEnv: config.wechatEnv,
           paymentChannel: PAYMENT_CHANNEL,
@@ -398,10 +408,8 @@ export function createVirtualPaymentService(options = {}) {
       } catch (error) {
         throw mapDependencyError(error, 'PAYMENT_ORDER_CREATE_FAILED')
       }
-      assertOrderMatchesConfig(order, config, userId, clientRequestId, platform)
+      assertOrderMatchesProduct(order, orderProductId, orderProduct, userId, clientRequestId, platform, config)
       assertPayable(order)
-      orderProduct = config.product
-      orderProductId = config.productId
     }
 
     let paymentParams

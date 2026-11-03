@@ -1,3 +1,4 @@
+import { virtualPaymentProductForPrice, virtualPaymentProductId } from './virtual-payment-config.mjs'
 import { getVirtualPaymentConfig } from './virtual-payment-config.mjs'
 import {
   decryptWechatAesMessage,
@@ -129,11 +130,8 @@ export function createVirtualPaymentMessageRoutes(options = {}) {
     }
     const order = await current.store.findByUserAndOrderNo(binding.userId, body.OutTradeNo)
     if (!order) throw new Error('message rejected')
-    const expectedProductId = current.paymentConfig.environment === 'production'
-      ? current.paymentConfig.standardProductId
-      : order.unitPriceFen === 100
-      ? current.paymentConfig.sandboxTestProductId
-      : current.paymentConfig.standardProductId
+    const product = virtualPaymentProductForPrice(order.unitPriceFen)
+    const expectedProductId = product && virtualPaymentProductId(current.paymentConfig, product)
     if (!expectedProductId || order.productId !== expectedProductId ||
         order.environment !== current.paymentConfig.environment || order.wechatEnv !== current.paymentConfig.wechatEnv) {
       throw new Error('message rejected')

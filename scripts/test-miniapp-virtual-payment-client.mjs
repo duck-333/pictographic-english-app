@@ -1,3 +1,4 @@
+import { MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT, LEGACY_MEMBERSHIP_PRODUCT, SANDBOX_MEMBERSHIP_PRODUCT } from '../miniapp-uni/word-app1/common/membership-products.js'
 import assert from 'node:assert/strict'
 import { createVirtualPaymentApi, getVirtualPaymentClientProduct, paymentMessage, validatePaymentParams } from '../miniapp-uni/word-app1/common/virtual-payment-api-client.js'
 
@@ -18,7 +19,7 @@ await api.reconcile(owner, orderNo)
 await api.entitlement(owner, orderNo)
 await api.delivery(owner, orderNo)
 assert.deepEqual(requests.map((r) => [r.method, r.url.replace(env.VUE_APP_WORD_API_BASE_URL, ''), r.data]), [
-  ['POST', '/api/user/virtual-payment/orders', { clientRequestId: 'purchase-fixture-1', loginCode: 'fresh-1', sku: 'membership_30d', platform: 'android' }],
+  ['POST', '/api/user/virtual-payment/orders', { clientRequestId: 'purchase-fixture-1', loginCode: 'fresh-1', sku: 'membership_30d_v2', platform: 'android' }],
   ['GET', `/api/user/virtual-payment/orders/${orderNo}`, undefined],
   ['POST', `/api/user/virtual-payment/orders/${orderNo}/reconcile`, { loginCode: 'fresh-2' }],
   ['POST', `/api/user/virtual-payment/orders/${orderNo}/entitlement`, {}],
@@ -26,23 +27,23 @@ assert.deepEqual(requests.map((r) => [r.method, r.url.replace(env.VUE_APP_WORD_A
 ])
 assert(requests.every((r) => r.header.Authorization === 'Bearer jwt-fixture' && r.header['Content-Type'] === 'application/json'))
 await api.refresh(owner)
-const params = { mode: 'short_series_goods', signData: JSON.stringify({ env: 1, buyQuantity: 1, currencyType: 'CNY', goodsPrice: 3000, outTradeNo: orderNo }, null, 2), paySig: 'a'.repeat(64), signature: 'b'.repeat(64) }
+const params = { mode: 'short_series_goods', signData: JSON.stringify({ env: 1, buyQuantity: 1, currencyType: 'CNY', goodsPrice: 1200, outTradeNo: orderNo }, null, 2), paySig: 'a'.repeat(64), signature: 'b'.repeat(64) }
 assert.equal(validatePaymentParams(params, orderNo), params, 'validation preserves the original parameter object and strings')
 const sandboxTestEnv = { ...env, VUE_APP_WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com', VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'true' }
-assert.deepEqual(getVirtualPaymentClientProduct({ env: sandboxTestEnv }), { priceFen: 100, priceText: '¥1.00', sandboxTest: true })
+assert.deepEqual(getVirtualPaymentClientProduct({ env: sandboxTestEnv }), { ...SANDBOX_MEMBERSHIP_PRODUCT, priceText: '¥1.00', sandboxTest: true })
 assert.deepEqual(getVirtualPaymentClientProduct({
   env: { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: 'https://baxiaota.com' },
   apiBaseUrl: 'https://sandbox-api.baxiaota.com'
-}), { priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
+}), { ...MONTHLY_MEMBERSHIP_PRODUCT, priceText: '¥12.00', sandboxTest: false })
 assert.deepEqual(getVirtualPaymentClientProduct({ env: {
   ...sandboxTestEnv,
   VUE_APP_WORD_API_BASE_URL: 'https://sandbox.example.test',
   UNI_APP_WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com'
-} }), { priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
+} }), { ...MONTHLY_MEMBERSHIP_PRODUCT, priceText: '¥12.00', sandboxTest: false })
 for (const fallbackEnv of [
   { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: '', UNI_APP_WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com' },
   { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: '', UNI_APP_WORD_API_BASE_URL: '', WORD_API_BASE_URL: 'https://sandbox-api.baxiaota.com' }
-]) assert.deepEqual(getVirtualPaymentClientProduct({ env: fallbackEnv }), { priceFen: 100, priceText: '¥1.00', sandboxTest: true })
+]) assert.deepEqual(getVirtualPaymentClientProduct({ env: fallbackEnv }), { ...SANDBOX_MEMBERSHIP_PRODUCT, priceText: '¥1.00', sandboxTest: true })
 for (const disabledEnv of [
   { ...sandboxTestEnv, NODE_ENV: 'production' },
   { ...sandboxTestEnv, NODE_ENV: ' development' },
@@ -63,7 +64,7 @@ for (const disabledEnv of [
   { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: '' },
   { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: 'false' },
   { ...sandboxTestEnv, VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED: undefined }
-]) assert.deepEqual(getVirtualPaymentClientProduct({ env: disabledEnv }), { priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
+]) assert.deepEqual(getVirtualPaymentClientProduct({ env: disabledEnv }), { ...MONTHLY_MEMBERSHIP_PRODUCT, priceText: '¥12.00', sandboxTest: false })
 for (const rawBaseUrl of [
   ' https://sandbox-api.baxiaota.com',
   'https://sandbox-api.baxiaota.com ',
@@ -74,7 +75,7 @@ for (const rawBaseUrl of [
     ...options,
     env: { ...sandboxTestEnv, VUE_APP_WORD_API_BASE_URL: rawBaseUrl }
   })
-  assert.deepEqual(normalizedApi.product(), { priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
+  assert.deepEqual(normalizedApi.product(), { ...MONTHLY_MEMBERSHIP_PRODUCT, priceText: '¥12.00', sandboxTest: false })
   assert.equal(normalizedApi.environment().baseUrl, 'https://sandbox-api.baxiaota.com')
 }
 const testParams = { ...params, signData: JSON.stringify({ env: 1, buyQuantity: 1, currencyType: 'CNY', goodsPrice: 100, outTradeNo: orderNo }) }
@@ -82,10 +83,10 @@ assert.equal(validatePaymentParams(testParams, orderNo, 100), testParams)
 assert.throws(() => validatePaymentParams(testParams, orderNo), { code: 'PAYMENT_RESPONSE_INVALID' })
 assert.throws(() => validatePaymentParams(params, orderNo, 100), { code: 'PAYMENT_RESPONSE_INVALID' })
 const productionParams = { ...params, signData: JSON.stringify({
-  env: 0, buyQuantity: 1, currencyType: 'CNY', goodsPrice: 3000, outTradeNo: orderNo
+  env: 0, buyQuantity: 1, currencyType: 'CNY', goodsPrice: 1200, outTradeNo: orderNo
 }) }
-assert.equal(validatePaymentParams(productionParams, orderNo, 3000, 0), productionParams)
-assert.throws(() => validatePaymentParams(params, orderNo, 3000, 0), { code: 'PAYMENT_RESPONSE_INVALID' })
+assert.equal(validatePaymentParams(productionParams, orderNo, 1200, 0), productionParams)
+assert.throws(() => validatePaymentParams(params, orderNo, 1200, 0), { code: 'PAYMENT_RESPONSE_INVALID' })
 assert.throws(() => validatePaymentParams({
   ...productionParams,
   signData: JSON.stringify({ env: 0, buyQuantity: 1, currencyType: 'CNY', goodsPrice: 100, outTradeNo: orderNo })
@@ -105,7 +106,7 @@ assert.throws(() => validatePaymentParams({
       requestVirtualPayment(args) { invoked = args; args.success({}) }
     }
   })
-  assert.deepEqual(productionApi.product(), { priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
+  assert.deepEqual(productionApi.product(), { ...MONTHLY_MEMBERSHIP_PRODUCT, priceText: '¥12.00', sandboxTest: false })
   const productionOwner = productionApi.context(true)
   assert.equal(productionOwner.environment, 'production')
   assert.equal(productionOwner.wechatEnv, 0)
@@ -241,3 +242,20 @@ console.log('Batch8 API contracts, fresh codes, isolation, native parameters and
   for (const value of bad) { response = value; await assert.rejects(recovery.discover(owner), { code: 'PAYMENT_RESPONSE_INVALID' }) }
   console.log('Recovery Client: GET/JWT, bounded exact schema, duplicates, states, ISO times and cursor passed.')
 }
+
+await api.create(owner, 'purchase-yearly-fixture', undefined, undefined, YEARLY_MEMBERSHIP_PRODUCT.internalSku)
+assert.equal(requests.at(-1).data.sku, YEARLY_MEMBERSHIP_PRODUCT.internalSku)
+for (const product of [MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT, LEGACY_MEMBERSHIP_PRODUCT]) {
+  const signed = { ...params, signData: JSON.stringify({ env: 1, buyQuantity: 1, currencyType: 'CNY', goodsPrice: product.priceFen, outTradeNo: orderNo }) }
+  assert.equal(validatePaymentParams(signed, orderNo, product.priceFen, 1), signed)
+  assert.equal(await api.invoke(owner, signed, orderNo, undefined, product), 'unknown')
+  assert.throws(() => validatePaymentParams(signed, orderNo, product.priceFen + 1, 1), { code: 'PAYMENT_RESPONSE_INVALID' })
+}
+assert.deepEqual(api.products().map(p => [p.internalSku, p.priceFen, p.durationSeconds]), [
+  ['membership_30d_v2', 1200, 30 * 86400], ['membership_365d', 9800, 365 * 86400]
+])
+assert(paymentMessage({ code: 'PAYMENT_PRODUCT_NOT_CONFIGURED' }).includes('尚未配置'))
+console.log('Monthly/yearly client selection and legacy price validation passed.')
+
+assert.equal(getVirtualPaymentClientProduct({ env: sandboxTestEnv, sku: SANDBOX_MEMBERSHIP_PRODUCT.internalSku }).priceFen, 100)
+assert.equal(getVirtualPaymentClientProduct({ env: sandboxTestEnv, sku: YEARLY_MEMBERSHIP_PRODUCT.internalSku }).priceFen, 9800)

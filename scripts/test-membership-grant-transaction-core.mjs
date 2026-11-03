@@ -690,3 +690,28 @@ await assert.rejects(
 )
 
 console.log('membership grant transaction core tests passed')
+
+// Mixed monthly/yearly/book grants use the existing transaction and keep quota unchanged.
+{
+  const database = createDatabase()
+  const store = createUserEntitlementStore({ pool: database.pool, now: () => new Date(NOW) })
+  let end = NOW.getTime()
+  for (const [label, sourceType, days] of [['month', 'wechat_order', 30], ['year', 'wechat_order', 365], ['book', 'book_order', 30]]) {
+    const input = grantInput('mixed-' + label, { sourceType, ...(sourceType === 'wechat_order' ? { durationSeconds: days * 86400 } : {}) })
+    const result = await store.grantMembershipDuration(input)
+    assert.equal(Date.parse(result.effectiveStartAt), end)
+    end += days * DAY_MS
+    assert.equal(Date.parse(result.membershipExpireAt), end)
+    const state = database.snapshot()
+    assert.equal(state.grants.at(-1).days_granted, days)
+    assert.equal(state.grants.at(-1).duration_seconds, days * 86400)
+    assert.equal(JSON.parse(state.transactions.at(-1).metadata_json).durationSeconds, days * 86400)
+    assert.equal(state.entitlement.quota_balance, 11)
+    const before = clone(state)
+    assert.equal((await store.grantMembershipDuration(input)).idempotent, true)
+    assert.deepEqual(database.snapshot(), before)
+    if (days === 365) await assert.rejects(store.grantMembershipDuration({ ...input, durationSeconds: 30 * 86400 }))
+  }
+  await assert.rejects(store.grantMembershipDuration(grantInput('invalid-book-year', { sourceType: 'book_order', durationSeconds: 365 * 86400 })))
+}
+console.log('Mixed 30/365-day/book grants and replay validation passed.')

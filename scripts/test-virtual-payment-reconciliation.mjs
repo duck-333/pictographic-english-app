@@ -1,3 +1,4 @@
+import { MEMBERSHIP_PLANS } from '../miniapp-uni/word-app1/common/membership-products.js'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 
@@ -668,3 +669,15 @@ for (const invalidInput of [
 }
 
 console.log('virtual payment reconciliation tests passed')
+
+for (const product of MEMBERSHIP_PLANS) for (const environment of ['sandbox', 'production']) {
+  const snapshot = order({ internalSku: product.internalSku, productName: product.displayName,
+    unitPriceFen: product.priceFen, orderAmountFen: product.priceFen,
+    environment, wechatEnv: environment === 'production' ? 0 : 1 })
+  const query = queryResult(2, { orderFeeFen: product.priceFen, paidFeeFen: product.priceFen,
+    environment, environmentType: environment === 'production' ? 1 : 2 })
+  const fact = normalizeVerifiedWechatQueryFact(query, snapshot, { now: () => NOW })
+  assert.equal(fact.paidAmountFen, product.priceFen)
+  assert.throws(() => normalizeVerifiedWechatQueryFact({ ...query, paidFeeFen: product.priceFen + 1 }, snapshot, { now: () => NOW }))
+}
+console.log('Monthly/yearly query amounts validated in both environments.')

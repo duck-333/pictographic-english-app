@@ -1,3 +1,4 @@
+import { MEMBERSHIP_PLANS } from '../miniapp-uni/word-app1/common/membership-products.js'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import http from 'node:http'
@@ -469,3 +470,20 @@ for (const changed of [
 }
 
 console.log('virtual payment message route tests passed')
+
+for (const product of MEMBERSHIP_PLANS) {
+  const productId = product.internalSku + '-route-fixture'
+  const variable = product.durationSeconds === 30 * 86400 ? 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_MONTHLY_PRODUCT_ID' : 'WECHAT_VIRTUAL_PAYMENT_SANDBOX_YEARLY_PRODUCT_ID'
+  const fixture = await start({ env: config({ [variable]: productId }), order: { ...order,
+    internalSku: product.internalSku, productId, productName: product.displayName, unitPriceFen: product.priceFen, orderAmountFen: product.priceFen } })
+  try {
+    const body = validBody({ GoodsInfo: { ProductId: productId, Quantity: 1, Attach: ORDER_NO } })
+    const result = await post(fixture, JSON.stringify(body))
+    assert.deepEqual(JSON.parse(result.text), { ErrCode: 0, ErrMsg: 'success' })
+    assert.equal(fixture.state.lastFact.unitPriceFen, product.priceFen)
+    assert.equal(fixture.state.lastFact.internalSku, product.internalSku)
+    await post(fixture, JSON.stringify({ ...body, GoodsInfo: { ...body.GoodsInfo, ProductId: PRODUCT_ID } }))
+    assert.equal(fixture.state.applyCalls, 1)
+  } finally { await close(fixture) }
+}
+console.log('Monthly/yearly notification routes use their own configured product IDs.')

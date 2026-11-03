@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import mysql from 'mysql2/promise'
 import net from 'node:net'
 import { spawn, execFileSync } from 'node:child_process'
+import { membershipProductForPrice } from '../miniapp-uni/word-app1/common/membership-products.js'
 
 import { createUserEntitlementStore } from '../server/user-entitlement-store.mjs'
 import { checkVirtualPaymentDeliverySchema } from './check-virtual-payment-delivery-schema.mjs'
@@ -62,29 +63,31 @@ async function assertDatabaseAbsent(connection, name) {
 
 function orderInput(userId, requestId, options = {}) {
   const priceFen = options.priceFen === undefined ? 3000 : options.priceFen
+  const product = membershipProductForPrice(priceFen)
   return {
-    userId, clientRequestId: requestId, internalSku: 'membership_30d', productId: options.productId || PRODUCT_ID,
-    productName: '30天学习会员', quantity: 1, unitPriceFen: priceFen, orderAmountFen: priceFen,
+    userId, clientRequestId: requestId, internalSku: product.internalSku, productId: options.productId || PRODUCT_ID,
+    productName: product.displayName, quantity: 1, unitPriceFen: priceFen, orderAmountFen: priceFen,
     currency: 'CNY', environment: 'sandbox', wechatEnv: 1,
     paymentChannel: 'wechat_virtual_payment', clientPlatform: 'android'
   }
 }
 
-async function createGrantedOrder(store, userId, requestId, suffix, now = T0) {
-  const created = await store.createOrder(orderInput(userId, requestId))
+async function createGrantedOrder(store, userId, requestId, suffix, now = T0, options = {}) {
+  const created = await store.createOrder(orderInput(userId, requestId, options))
   const pending = await store.markOrderPending(userId, created.order.orderNo)
   const rawQuery = {
     orderId: pending.orderNo,
     wechatOrderId: `WX${suffix}`,
     wechatPaymentOrderId: `WXPAY${suffix}`,
-    status: 2, orderType: 0, orderFeeFen: 3000, paidFeeFen: 3000,
+    status: 2, orderType: 0, orderFeeFen: pending.unitPriceFen, paidFeeFen: pending.unitPriceFen,
     paidAtSeconds: Math.floor(now.getTime() / 1000) - 3600,
     providedAtSeconds: 0, environmentType: 2, environment: 'sandbox'
   }
   const fact = normalizeVerifiedWechatQueryFact(rawQuery, pending, { now: () => now.getTime() })
-  const paid = await store.reconcileVerifiedWechatQuery(userId, pending.orderNo, fact, { expectedProductId: PRODUCT_ID })
+  const context = { expectedProductId: pending.productId, expectedPriceFen: pending.unitPriceFen }
+  const paid = await store.reconcileVerifiedWechatQuery(userId, pending.orderNo, fact, context)
   const granted = await store.grantTrustedPaidOrderEntitlement(userId, pending.orderNo, {
-    expectedProductId: PRODUCT_ID, now
+    ...context, now
   })
   assert.equal(paid.order.paymentStatus, 'paid')
   assert.equal(granted.order.entitlementStatus, 'granted')
@@ -178,6 +181,7 @@ async function runScenarios(pool, singleConnectionPool) {
         VIRTUAL_PAYMENT_SANDBOX_USER_IDS: userId,
         WECHAT_VIRTUAL_PAYMENT_SANDBOX_OFFER_ID: 'sandbox.offer-001',
         WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID: PRODUCT_ID,
+        WECHAT_VIRTUAL_PAYMENT_SANDBOX_YEARLY_PRODUCT_ID: 'mysql-yearly',
         WECHAT_VIRTUAL_PAYMENT_SANDBOX_APP_KEY: 'sandbox-key'
       },
       now: () => clock(300_000), store: customStore,
@@ -958,6 +962,23 @@ async function runScenarios(pool, singleConnectionPool) {
      WHERE o.id IS NULL OR o.user_id <> a.user_id`
   )
   assert.equal(Number(orphans.count), 0)
+
+  const yearly = await createGrantedOrder(store, '739', 'delivery-yearly-739', 'YEAR739', T0,
+    { priceFen: 9800, productId: 'mysql-yearly' })
+  const beforeYearly = await membershipSnapshot(pool, '739')
+  let yearlyNotifyCalls = 0
+  const yearlyService = serviceFor('739', store, {
+    async notifyProvideGoods() { yearlyNotifyCalls++; return { accepted: true } },
+    async queryOrder() { throw new Error('not used') }
+  })
+  const yearlyInput = { authenticatedUserId: '739', orderNo: yearly.order.orderNo }
+  assert.equal((await yearlyService.deliverOwnedOrder(yearlyInput)).deliveryStatus, 'delivered')
+  assert.equal((await yearlyService.deliverOwnedOrder(yearlyInput)).idempotent, true)
+  assert.equal(yearlyNotifyCalls, 1)
+  assert.equal(await membershipSnapshot(pool, '739'), beforeYearly)
+  const [[yearlyGrant]] = await pool.execute('SELECT duration_seconds FROM membership_grants WHERE source_id = ?', [yearly.order.orderNo])
+  assert.equal(Number(yearlyGrant.duration_seconds), 365 * 86400)
+  console.log('MySQL yearly delivery: configured SKU, 365-day prerequisite verification and replay without regrant passed.')
 }
 
 async function testEntrySchema(connection, config, database) {

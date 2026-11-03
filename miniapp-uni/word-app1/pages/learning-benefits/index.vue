@@ -2,18 +2,22 @@
   <view class="page">
     <view class="card">
       <text class="eyebrow">获取学习权益</text>
-      <text class="title">购买30天会员</text>
+      <text class="title">购买学习会员</text>
+      <view class="plans">
+        <button v-for="product in products" :key="product.internalSku" class="plan" :class="{ selected: selectedSku === product.internalSku }"
+          :disabled="busy" @tap="selectProduct(product.internalSku)">{{ product.durationSeconds === monthlyDuration ? '月卡' : '年卡' }} · {{ days(product) }}天 · {{ price(product) }}</button>
+      </view>
       <text class="price">{{ productPriceText }}</text>
       <text class="description">一次性购买，非自动续费</text>
       <text class="description">会员期间不限学习次数</text>
-      <text v-if="entitlement && entitlement.membershipActive" class="note">购买后顺延30天</text>
+      <text v-if="entitlement && entitlement.membershipActive" class="note">购买后从原到期时间顺延{{ days(selectedProduct) }}天</text>
       <text v-if="entitlement && entitlement.membershipExpireAt" class="description">当前有效期至：{{ expiryText }}</text>
       <text v-if="!loggedIn" class="note">请先登录学习账号</text>
       <button v-if="!loggedIn" class="primary" @tap="goLogin">去登录</button>
       <template v-else>
         <button v-if="pendingRecord" class="primary" :disabled="busy || !queryAllowed" :loading="busy" @tap="query(pendingRecord)">查询上次购买结果</button>
-        <button v-else class="primary" :disabled="busy || !purchaseAllowed" :loading="busy" @tap="buy()">购买30天会员</button>
-        <button v-if="pendingRecord" class="secondary" :disabled="busy || !purchaseAllowed" @tap="buy()">仍要另购30天会员</button>
+        <button v-else class="primary" :disabled="busy || !purchaseAllowed" :loading="busy" @tap="buy()">购买{{ days(selectedProduct) }}天会员</button>
+        <button v-if="pendingRecord" class="secondary" :disabled="busy || !purchaseAllowed" @tap="buy()">仍要另购{{ days(selectedProduct) }}天会员</button>
       </template>
       <text v-if="availabilityMessage" class="message">{{ availabilityMessage }}</text>
       <text v-if="message" class="message" aria-live="polite">{{ message }}</text>
@@ -27,7 +31,7 @@
       <text class="section-title">本机购买记录</text>
       <text class="description">未确认的购买记录会保留，可稍后回来查询。</text>
       <view v-for="record in records" :key="record.clientRequestId" class="record">
-        <text class="description">30天会员 · {{ dateText(record.createdAt) }}</text>
+        <text class="description">{{ recordTitle(record) }} · {{ dateText(record.createdAt) }}</text>
         <text class="note">{{ statusText(record) }}</text>
         <button v-if="!isFinished(record)" class="secondary" :disabled="busy || !queryAllowed" @tap="query(record)">查询购买结果</button>
         <button v-if="!record.mayHaveInvoked" class="secondary" :disabled="busy || !purchaseAllowed" @tap="buy(record.clientRequestId)">继续未完成的购买</button>
@@ -37,16 +41,19 @@
 </template>
 
 <script>
+import { MEMBERSHIP_PLANS, MONTHLY_MEMBERSHIP_PRODUCT, membershipProductForPrice, membershipDays, membershipPriceText } from '../../common/membership-products.js'
 import { getAuthSession } from '../../common/auth-store.js'
 import { createPurchaseController, recordMessage } from '../../common/virtual-payment-purchase.js'
 import { paymentMessage } from '../../common/virtual-payment-api-client.js'
 
 export default {
   data() {
-    return { loggedIn: false, purchaseAllowed: false, queryAllowed: false, busy: false, records: [], entitlement: null, productPriceText: '¥30.00',
+    return { loggedIn: false, purchaseAllowed: false, queryAllowed: false, busy: false, records: [], entitlement: null, products: MEMBERSHIP_PLANS, selectedSku: MONTHLY_MEMBERSHIP_PRODUCT.internalSku, monthlyDuration: MONTHLY_MEMBERSHIP_PRODUCT.durationSeconds,
       availabilityMessage: '', message: '', nextCursor: null, discoveryFailed: false, loadSequence: 0, pageEpoch: 0, pageVisible: true, pageDisposed: false }
   },
   computed: {
+    selectedProduct() { return this.products.find((p) => p.internalSku === this.selectedSku) || this.products[0] },
+    productPriceText() { return membershipPriceText(this.selectedProduct) },
     pendingRecord() { return this.records.find((r) => !['granted', 'delivered', 'manual_review', 'closed', 'failed'].includes(r.hint)) || null },
     expiryText() { return String((this.entitlement && this.entitlement.membershipExpireAt) || '').slice(0, 10) }
   },
@@ -68,13 +75,20 @@ export default {
         onRefreshFailed: () => { this.message = '会员已到账，权益展示暂未刷新，请稍后重试' }
       })
     }
-    this.productPriceText = typeof this.purchase.api.product === 'function' ? this.purchase.api.product().priceText : '¥30.00'
+    if (typeof this.purchase.api.products === 'function') {
+      this.products = this.purchase.api.products()
+      if (!this.products.some((p) => p.internalSku === this.selectedSku)) this.selectedSku = this.products[0].internalSku
+    }
     this.purchase.resume()
     this.refresh()
   },
   onHide() { this.pageVisible = false; this.pageEpoch++; this.loadSequence++; if (this.purchase) this.purchase.pause() },
   onUnload() { this.pageDisposed = true; this.pageVisible = false; this.pageEpoch++; this.loadSequence++; if (this.purchase) this.purchase.dispose() },
   methods: {
+    days: membershipDays,
+    price: membershipPriceText,
+    selectProduct(sku) { if (!this.busy) this.selectedSku = sku },
+    recordTitle(record) { const product = membershipProductForPrice(record.priceFen); return product && record.sku === product.internalSku ? `${membershipDays(product)}天会员 · ${membershipPriceText(product)}` : '会员购买' },
     statusText: recordMessage,
     dateText(value) { const date = new Date(value); return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}` },
     isFinished(record) { return ['delivered', 'closed', 'failed'].includes(record.hint) },
@@ -125,7 +139,7 @@ export default {
         this.discoveryFailed = false
       })
     },
-    buy(id) { return this.run(() => this.purchase.buy(id)) },
+    buy(id) { return this.run(() => this.purchase.buy(id, this.selectedSku)) },
     query(record) { return this.run(() => this.purchase.query(record.clientRequestId)) },
     goLogin() {
       try { this.purchase.api.environment(); uni.navigateTo({ url: '/pages/mine/index' }) }
@@ -142,6 +156,9 @@ export default {
 .eyebrow,.title,.price,.description,.note,.message,.section-title { display: block; }
 .eyebrow { color: #53768d; font-size: 25rpx; margin-bottom: 14rpx; }
 .title { font-size: 40rpx; font-weight: 700; }
+.plans { display: flex; gap: 16rpx; margin-top: 24rpx; }
+.plan { flex: 1; padding: 16rpx 8rpx; margin: 0; font-size: 26rpx; border: 2rpx solid #dcebf5; background: #f4f9ff; color: #235376; }
+.plan.selected { border-color: #0e3a5c; background: #e4f1fa; font-weight: 700; }
 .price { font-size: 56rpx; font-weight: 700; margin: 24rpx 0; }
 .description { color: #607b8d; font-size: 27rpx; line-height: 1.8; }
 .note { margin-top: 14rpx; font-size: 28rpx; line-height: 1.7; }

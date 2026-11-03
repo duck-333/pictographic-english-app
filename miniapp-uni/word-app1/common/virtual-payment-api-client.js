@@ -1,3 +1,4 @@
+import { MONTHLY_MEMBERSHIP_PRODUCT, MEMBERSHIP_PLANS, SANDBOX_MEMBERSHIP_PRODUCT, membershipProductForPrice, membershipProductForSku, membershipPriceText } from './membership-products.js'
 import { getWordApiBaseUrl, PRODUCTION_WORD_API_BASE_URL } from './api-config.js'
 import { getAuthSession } from './auth-store.js'
 import { requestWechatLoginCode } from './auth-api-client.js'
@@ -5,8 +6,9 @@ import { getUserEntitlements } from './user-entitlements-api-client.js'
 
 const ROOT = '/api/user/virtual-payment/orders'
 const SANDBOX_API_BASE_URL = 'https://sandbox-api.baxiaota.com'
-const STANDARD_PRODUCT = Object.freeze({ priceFen: 3000, priceText: '¥30.00', sandboxTest: false })
-const SANDBOX_TEST_PRODUCT = Object.freeze({ priceFen: 100, priceText: '¥1.00', sandboxTest: true })
+const clientProduct = (product) => Object.freeze({ ...product, priceText: membershipPriceText(product), sandboxTest: product.sandboxTest === true })
+const STANDARD_PRODUCT = clientProduct(MONTHLY_MEMBERSHIP_PRODUCT)
+const SANDBOX_TEST_PRODUCT = clientProduct(SANDBOX_MEMBERSHIP_PRODUCT)
 
 function rawApiBaseUrl(env) {
   return env.VUE_APP_WORD_API_BASE_URL || env.UNI_APP_WORD_API_BASE_URL || env.WORD_API_BASE_URL
@@ -14,12 +16,17 @@ function rawApiBaseUrl(env) {
 
 export function getVirtualPaymentClientProduct(options = {}) {
   const env = options.env || (typeof process !== 'undefined' && process.env ? process.env : {})
+  if (options.sku && options.sku !== MONTHLY_MEMBERSHIP_PRODUCT.internalSku && options.sku !== SANDBOX_MEMBERSHIP_PRODUCT.internalSku) {
+    const selected = membershipProductForSku(options.sku)
+    if (!selected) throw paymentError('PAYMENT_PRODUCT_UNAVAILABLE')
+    return clientProduct(selected)
+  }
   const selectedBaseUrl = rawApiBaseUrl(env)
   const rawEnabled = env.VUE_APP_VIRTUAL_PAYMENT_SANDBOX_TEST_PRODUCT_ENABLED
   return env.NODE_ENV === 'development' && selectedBaseUrl === SANDBOX_API_BASE_URL &&
     rawEnabled === 'true'
     ? SANDBOX_TEST_PRODUCT
-    : STANDARD_PRODUCT
+    : options.sku === SANDBOX_MEMBERSHIP_PRODUCT.internalSku ? clientProduct(membershipProductForSku(options.sku)) : STANDARD_PRODUCT
 }
 export function validateRecoveryPage(value, cursor = null) {
   const fail = () => { throw paymentError('PAYMENT_RESPONSE_INVALID') }
@@ -45,7 +52,7 @@ export function validateRecoveryPage(value, cursor = null) {
   return value
 }
 export function paymentError(code) { const error = new Error('购买操作暂未完成'); error.code = code; return error }
-export function validatePaymentParams(params, orderNo, expectedPriceFen = 3000, expectedWechatEnv = 1) {
+export function validatePaymentParams(params, orderNo, expectedPriceFen = MONTHLY_MEMBERSHIP_PRODUCT.priceFen, expectedWechatEnv = 1) {
   if (!params || Array.isArray(params) || params.mode !== 'short_series_goods' ||
       typeof params.signData !== 'string' || !params.signData.length ||
       typeof params.paySig !== 'string' || !/^[a-f0-9]{64}$/.test(params.paySig) ||
@@ -53,7 +60,7 @@ export function validatePaymentParams(params, orderNo, expectedPriceFen = 3000, 
   let data
   try { data = JSON.parse(params.signData) } catch (_) { throw paymentError('PAYMENT_RESPONSE_INVALID') }
   if (!data || data.env !== expectedWechatEnv || ![0, 1].includes(expectedWechatEnv) ||
-      (expectedWechatEnv === 0 && expectedPriceFen !== 3000) || data.buyQuantity !== 1 ||
+      (!membershipProductForPrice(expectedPriceFen) || (expectedWechatEnv === 0 && membershipProductForPrice(expectedPriceFen).sandboxTest === true)) || data.buyQuantity !== 1 ||
       data.currencyType !== 'CNY' || data.goodsPrice !== expectedPriceFen ||
       data.outTradeNo !== orderNo || typeof orderNo !== 'string' || !/^VP[A-F0-9]{30}$/.test(orderNo)) throw paymentError('PAYMENT_RESPONSE_INVALID')
   return params
@@ -61,6 +68,9 @@ export function validatePaymentParams(params, orderNo, expectedPriceFen = 3000, 
 export function paymentMessage(error) {
   const code = error && error.code
   if (['UNAUTHORIZED', 'USER_AUTH_REQUIRED'].includes(code)) return '请先登录后再操作'
+  if (code === 'PAYMENT_PRODUCT_NOT_CONFIGURED') return '所选会员套餐尚未配置支付商品，暂时无法购买'
+  if (code === 'PAYMENT_PRODUCT_UNAVAILABLE') return '此套餐已停止新购，请选择月卡或年卡；已有订单仍可查询'
+  if (code === 'PAYMENT_SERVICE_UNAVAILABLE') return '支付服务或商品配置暂不可用，请稍后重试'
   if (code === 'PAYMENT_RUNTIME_UNSUPPORTED') return '当前设备暂不支持本次购买'
   if (code === 'PAYMENT_SANDBOX_UNAVAILABLE') return '购买功能暂未开放'
   if (code === 'PAYMENT_STORAGE_FAILED') return '无法保存购买记录，请检查存储空间后重试'
@@ -73,7 +83,7 @@ export function paymentMessage(error) {
 }
 
 export function createVirtualPaymentApi(options = {}) {
-  const product = getVirtualPaymentClientProduct({ env: options.env })
+  const product = (sku) => getVirtualPaymentClientProduct({ env: options.env, sku })
   const runtime = () => {
     if (options.wx) return options.wx
     let native = null
@@ -153,7 +163,8 @@ export function createVirtualPaymentApi(options = {}) {
   }
   const freshCode = options.loginCode || requestWechatLoginCode
   return {
-    environment, context, assertContext, product: () => product,
+    environment, context, assertContext, product,
+    products: () => MEMBERSHIP_PLANS.map((plan) => product(plan.internalSku)),
     async discover(owner, cursor = null, run) {
       if (cursor !== null && (typeof cursor !== 'string' || !/^VP[A-F0-9]{30}$/.test(cursor))) throw paymentError('PAYMENT_RESPONSE_INVALID')
       const result = await request(owner, 'GET', `${ROOT}/recovery${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`, undefined, run)
@@ -161,11 +172,11 @@ export function createVirtualPaymentApi(options = {}) {
       return validateRecoveryPage(result, cursor)
     },
     async prepare(owner) { assertContext(owner, true); const code = await freshCode(); assertContext(owner, true); return code },
-    async create(owner, clientRequestId, preparedCode, run) {
+    async create(owner, clientRequestId, preparedCode, run, sku = product().internalSku) {
       const current = assertContext(owner, true)
       const loginCode = preparedCode || await freshCode()
       assertContext(owner, true)
-      return request(owner, 'POST', ROOT, { clientRequestId, loginCode, sku: 'membership_30d', platform: current.platform }, run)
+      return request(owner, 'POST', ROOT, { clientRequestId, loginCode, sku, platform: current.platform }, run)
     },
     get(owner, orderNo, run) { return request(owner, 'GET', orderPath(orderNo), undefined, run) },
     async reconcile(owner, orderNo, run) {
@@ -181,10 +192,10 @@ export function createVirtualPaymentApi(options = {}) {
       assertContext(owner)
       return result
     },
-    invoke(owner, params, orderNo, run) {
+    invoke(owner, params, orderNo, run, selectedProduct = product()) {
       if (run) run.check()
       assertContext(owner, true)
-      validatePaymentParams(params, orderNo, product.priceFen, owner.wechatEnv)
+      validatePaymentParams(params, orderNo, selectedProduct.priceFen, owner.wechatEnv)
       return new Promise((resolve) => {
         let settled = false, unsubscribe = () => {}
         const finish = (hint) => { if (settled) return; settled = true; clearTimeout(timer); unsubscribe(); resolve(hint) }

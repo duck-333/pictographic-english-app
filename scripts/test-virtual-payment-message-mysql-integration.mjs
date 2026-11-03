@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import mysql from 'mysql2/promise'
+import { membershipProductForPrice } from '../miniapp-uni/word-app1/common/membership-products.js'
 
 import { createUserEntitlementStore } from '../server/user-entitlement-store.mjs'
 import { normalizeVerifiedWechatQueryFact } from '../server/virtual-payment-reconciliation.mjs'
@@ -61,9 +62,10 @@ function quoteDatabase(name) {
 }
 
 function orderInput(userId, requestId, product = { productId: PRODUCT_ID, priceFen: 3000 }) {
+  const facts = membershipProductForPrice(product.priceFen)
   return {
-    userId, clientRequestId: requestId, internalSku: 'membership_30d', productId: product.productId,
-    productName: '30天学习会员', quantity: 1, unitPriceFen: product.priceFen, orderAmountFen: product.priceFen,
+    userId, clientRequestId: requestId, internalSku: facts.internalSku, productId: product.productId,
+    productName: facts.displayName, quantity: 1, unitPriceFen: product.priceFen, orderAmountFen: product.priceFen,
     currency: 'CNY', environment: 'sandbox', wechatEnv: 1,
     paymentChannel: 'wechat_virtual_payment', clientPlatform: 'android'
   }
@@ -601,6 +603,28 @@ async function runScenarios(pool) {
     events: Number(rollbackResidue.events), attempts: Number(rollbackResidue.attempts),
     queries: Number(rollbackResidue.queries), receivedCount: Number(rollbackResidue.received_count)
   }, { events: 0, attempts: 0, queries: 0, receivedCount: 0 })
+
+  const yearlyOrder = await createPending(store, '908', 'YEARLY908', { productId: 'mysql-yearly', priceFen: 9800 })
+  const yearlyFact = messageFact(yearlyOrder, 'yearly')
+  const yearlyBarrier = createTwoConnectionBarrierPool(pool)
+  const yearlyStore = createStore(yearlyBarrier)
+  const yearlyResults = await withTimeout(Promise.all([
+    yearlyStore.applyGoodsDeliveryNotification('908', yearlyOrder.orderNo, yearlyFact, { now: T0 }),
+    yearlyStore.applyGoodsDeliveryNotification('908', yearlyOrder.orderNo, yearlyFact, { now: T0 })
+  ]), 'yearly duplicate notifications')
+  assert.equal(yearlyBarrier.threadIds.size, 2)
+  assert.equal(yearlyResults.filter((result) => result.eventDuplicate).length, 1)
+  assert.equal((await store.applyGoodsDeliveryNotification('908', yearlyOrder.orderNo, yearlyFact, { now: T0 })).eventDuplicate, true)
+  assert.deepEqual(await membershipCounts(pool, '908'), { grants: 1, transactions: 1 })
+  const [[yearlyGrant]] = await pool.execute(
+    'SELECT days_granted, duration_seconds FROM membership_grants WHERE user_id = ?', ['908']
+  )
+  assert.equal(Number(yearlyGrant.days_granted), 365)
+  assert.equal(Number(yearlyGrant.duration_seconds), 365 * 86400)
+  const yearlyReloaded = await store.findByUserAndOrderNo('908', yearlyOrder.orderNo)
+  assert.equal(yearlyReloaded.paidAmountFen, 9800)
+  assert.equal(yearlyReloaded.deliveryStatus, 'delivered')
+  console.log('MySQL yearly notification: 9800 fen/365 days persisted; concurrent and repeated notifications grant once.')
 }
 
 const config = configFrom(process.env)

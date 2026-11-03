@@ -10,7 +10,7 @@ assert.equal(pages.pages.filter((p) => p.path === 'pages/learning-benefits/index
 const benefits = await read('pages/learning-benefits/index.vue')
 const mine = await read('pages/mine/index.vue')
 const detail = await read('pages/word-detail/index.vue')
-for (const text of ['购买30天会员', '¥30.00', '一次性购买，非自动续费', '会员期间不限学习次数', '购买后顺延30天', '查询上次购买结果', '仍要另购30天会员']) assert(benefits.includes(text))
+for (const text of ['购买学习会员', '月卡', '年卡', '一次性购买，非自动续费', '会员期间不限学习次数', '购买后从原到期时间顺延', '查询上次购买结果', '仍要另购']) assert(benefits.includes(text))
 assert(!benefits.includes('邀请'))
 assert(benefits.includes('uni.showModal') && benefits.includes('result.confirm === true'))
 assert(benefits.includes('this.purchase.pause()'))
@@ -30,7 +30,7 @@ const component = (await import(`data:text/javascript,${encodeURIComponent(scrip
 const page = component.data()
 for (const [name, fn] of Object.entries(component.methods)) page[name] = fn.bind(page)
 for (const [name, fn] of Object.entries(component.computed)) Object.defineProperty(page, name, { get: () => fn.call(page) })
-const renewalCondition = benefits.match(/<text v-if="([^"]+)" class="note">购买后顺延30天/)[1]
+const renewalCondition = benefits.match(/<text v-if="([^"]+)" class="note">购买后从原到期时间顺延/)[1]
 const showsRenewal = new Function('entitlement', `return Boolean(${renewalCondition})`)
 for (const entitlement of [null, undefined, {}, { membershipActive: false }]) {
   page.entitlement = entitlement
@@ -145,3 +145,43 @@ console.log('Entitlement null/undefined/empty/nonmember/active and refresh failu
     assert.equal(entry.entitlement.membershipActive, true)
   } finally { globalThis.uni = savedUni }
 }
+
+page.pageVisible = true; page.pageDisposed = false
+page.products = (await import('../miniapp-uni/word-app1/common/membership-products.js')).MEMBERSHIP_PLANS
+page.busy = false
+page.selectProduct('membership_365d')
+assert.equal(page.productPriceText, '¥98.00')
+assert.equal(page.days(page.selectedProduct), 365)
+assert.equal(page.recordTitle({ sku: 'membership_30d', priceFen: 3000 }), '30天会员 · ¥30.00')
+assert.equal(page.recordTitle({}), '会员购买')
+let selectedArgs
+page.purchase.buy = (...args) => { selectedArgs = args }
+await page.buy()
+assert.deepEqual(selectedArgs, [undefined, 'membership_365d'])
+assert(!/首发|限时|划线|原价|优惠价/.test(benefits))
+console.log('Yearly selection, original order labels and regular pricing passed.')
+
+// The snapshot type is a compatibility marker, not the purchased plan name.
+const mineScript = mine.match(/<script>([\s\S]*?)<\/script>/)[1]
+  .replace(/^import[\s\S]*?from\s+'[^']+'\s*$/gm, '')
+const mineComponent = (await import(`data:text/javascript,${encodeURIComponent('const BottomNav = {};\n' + mineScript)}`)).default
+for (const [source, expiry] of [
+  ['yearly', '2027-10-30T00:00:00.000Z'],
+  ['monthly', '2026-11-29T00:00:00.000Z'],
+  ['book', '2026-11-29T00:00:00.000Z']
+]) {
+  const entry = { entitlement: { membershipType: 'monthly', membershipActive: true, membershipExpireAt: expiry } }
+  for (const name of ['membershipTypeText', 'membershipActive', 'membershipExpireDateText', 'membershipSummaryTitle', 'membershipSummaryValue']) {
+    Object.defineProperty(entry, name, { get: () => mineComponent.computed[name].call(entry) })
+  }
+  assert.equal(entry.membershipTypeText, '会员', source)
+  assert.equal(entry.membershipSummaryTitle, '会员有效期：', source)
+  assert.equal(entry.membershipSummaryValue, expiry.slice(0, 10), source)
+}
+assert.equal(mineComponent.computed.membershipTypeText.call({ entitlement: { membershipType: 'none' } }), '普通')
+for (const [sku, amount, days] of [['membership_30d_v2', '¥12.00', 30], ['membership_365d', '¥98.00', 365]]) {
+  page.selectProduct(sku)
+  assert.equal(page.productPriceText, amount)
+  assert.equal(page.recordTitle({ sku, priceFen: page.selectedProduct.priceFen }), `${days}天会员 · ${amount}`)
+}
+console.log('Mine: yearly/monthly/book show membership with expiry; purchase/order plan labels remain accurate.')

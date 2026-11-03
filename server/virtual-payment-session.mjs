@@ -1,3 +1,4 @@
+import { membershipProductForPrice, LEGACY_MEMBERSHIP_PRODUCT } from '../miniapp-uni/word-app1/common/membership-products.js'
 import crypto from 'node:crypto'
 
 const MAX_SAFE_USER_ID = BigInt(Number.MAX_SAFE_INTEGER)
@@ -92,12 +93,12 @@ function isValidatedPaymentSignData(signData, expectedPriceFen, expectedWechatEn
   )
 }
 
-export function createPaymentSessionSignature(paymentSession, signData, expectedPriceFen = 3000, expectedWechatEnv = 1) {
+export function createPaymentSessionSignature(paymentSession, signData, expectedPriceFen = LEGACY_MEMBERSHIP_PRODUCT.priceFen, expectedWechatEnv = 1) {
   if (
     !paymentSessionKeys.has(paymentSession) ||
-    ![100, 3000].includes(expectedPriceFen) ||
+    !membershipProductForPrice(expectedPriceFen) ||
     ![0, 1].includes(expectedWechatEnv) ||
-    (expectedWechatEnv === 0 && expectedPriceFen !== 3000) ||
+    (expectedWechatEnv === 0 && membershipProductForPrice(expectedPriceFen).sandboxTest === true) ||
     !isValidatedPaymentSignData(signData, expectedPriceFen, expectedWechatEnv)
   ) {
     throw createPaymentSessionError(

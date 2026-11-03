@@ -1,9 +1,27 @@
+import { MONTHLY_MEMBERSHIP_PRODUCT, LEGACY_MEMBERSHIP_PRODUCT, membershipProductForPrice, membershipPriceText, membershipDays } from './membership-products.js'
 import { createVirtualPaymentApi, paymentError, validatePaymentParams, validateRecoveryPage } from './virtual-payment-api-client.js'
 
-export const EXTRA_PURCHASE_WARNING = '上次购买结果尚未确认。继续将新购买一份30天会员；若两笔均支付成功，将分别到账并顺延。是否继续？'
-export const PURCHASE_CONFIRMATION = '购买30天会员，¥30.00，一次性购买，非自动续费。有效会员购买后顺延30天。是否继续？'
-export function purchaseConfirmation(priceText = '¥30.00') {
-  return `购买30天会员，${priceText}，一次性购买，非自动续费。有效会员购买后顺延30天。是否继续？`
+export function purchaseConfirmation(priceText = membershipPriceText(MONTHLY_MEMBERSHIP_PRODUCT), product = MONTHLY_MEMBERSHIP_PRODUCT) {
+  const days = membershipDays(product)
+  return `购买${days}天会员，${priceText}，一次性购买，非自动续费。有效会员购买后顺延${days}天。是否继续？`
+}
+export function extraPurchaseWarning(product = MONTHLY_MEMBERSHIP_PRODUCT) {
+  return `上次购买结果尚未确认。继续将新购买一份${membershipDays(product)}天会员（${membershipPriceText(product)}）；若两笔均支付成功，将分别到账并顺延。是否继续？`
+}
+export const EXTRA_PURCHASE_WARNING = extraPurchaseWarning()
+export const PURCHASE_CONFIRMATION = purchaseConfirmation()
+function recordProduct(record) {
+  if (record.sku === undefined && record.priceFen === undefined) return null
+  const product = membershipProductForPrice(record.priceFen)
+  if (!product || product.internalSku !== record.sku) throw paymentError('PAYMENT_RECORDS_INVALID')
+  return product
+}
+function savedProduct(record, summary) {
+  if (!summary.product) return record
+  const p = summary.product, product = membershipProductForPrice(p.priceFen)
+  if (!product || p.internalSku !== product.internalSku || p.durationSeconds !== product.durationSeconds || p.displayName !== product.displayName ||
+      (recordProduct(record) && recordProduct(record) !== product)) throw paymentError('PAYMENT_RESPONSE_INVALID')
+  return { ...record, sku: product.internalSku, priceFen: product.priceFen }
 }
 let running = null
 let sequence = 0
@@ -46,16 +64,20 @@ export function createPurchaseController(options = {}) {
           typeof r.mayHaveInvoked !== 'boolean' || !hints.includes(r.hint) ||
           !Number.isFinite(r.createdAt) || !Number.isFinite(r.updatedAt) || r.createdAt < 0 || r.updatedAt < r.createdAt ||
           (r.mayHaveInvoked && !r.orderNo)) throw paymentError('PAYMENT_RECORDS_INVALID')
+      recordProduct(r)
       const previous = intents.get(r.clientRequestId)
+      if (previous && recordProduct(previous) && recordProduct(r) && recordProduct(previous) !== recordProduct(r)) throw paymentError('PAYMENT_RECORDS_INVALID')
       if ((previous && previous.orderNo && r.orderNo && previous.orderNo !== r.orderNo) ||
           (r.orderNo && orders.has(r.orderNo) && orders.get(r.orderNo) !== r.clientRequestId)) throw paymentError('PAYMENT_RECORDS_INVALID')
       if (r.orderNo) orders.set(r.orderNo, r.clientRequestId)
+      const product = recordProduct(r) || (previous && recordProduct(previous))
       const merged = { userId: r.userId, environment: owner.environment, clientRequestId: r.clientRequestId,
         orderNo: r.orderNo || (previous && previous.orderNo) || '',
         mayHaveInvoked: r.mayHaveInvoked || Boolean(previous && previous.mayHaveInvoked),
         createdAt: previous ? Math.min(previous.createdAt, r.createdAt) : r.createdAt,
         updatedAt: previous ? Math.max(previous.updatedAt, r.updatedAt) : r.updatedAt,
-        hint: previous && previous.hint !== r.hint ? 'unknown' : r.hint }
+        hint: previous && previous.hint !== r.hint ? 'unknown' : r.hint,
+        ...(product ? { sku: product.internalSku, priceFen: product.priceFen } : {}) }
       intents.set(r.clientRequestId, merged)
     }
     const normalized = [...intents.values()]
@@ -70,7 +92,8 @@ export function createPurchaseController(options = {}) {
   function save(owner, record) {
     const list = records(owner)
     const index = list.findIndex((r) => r.clientRequestId === record.clientRequestId)
-    const safe = { userId: owner.userId, environment: owner.environment, clientRequestId: record.clientRequestId, orderNo: record.orderNo,
+    const product = recordProduct(record)
+    const safe = { ...(product ? { sku: product.internalSku, priceFen: product.priceFen } : {}), userId: owner.userId, environment: owner.environment, clientRequestId: record.clientRequestId, orderNo: record.orderNo,
       mayHaveInvoked: record.mayHaveInvoked, createdAt: record.createdAt, updatedAt: now(), hint: record.hint }
     if (list.some((r) => safe.orderNo && r.orderNo === safe.orderNo && r.clientRequestId !== safe.clientRequestId) ||
         (index >= 0 && list[index].orderNo && list[index].orderNo !== safe.orderNo)) throw paymentError('PAYMENT_RECORDS_INVALID')
@@ -101,10 +124,10 @@ export function createPurchaseController(options = {}) {
         (value.deliveryStatus !== 'not_ready' && value.entitlementStatus !== 'granted')) throw paymentError('PAYMENT_RESPONSE_INVALID')
     return value
   }
-  function validateCreate(value, record) {
+  function validateCreate(value, record, owner) {
     validateSummary(value, record)
-    const product = typeof api.product === 'function' ? api.product() : { priceFen: 3000 }
-    validatePaymentParams(value.paymentParams, record.orderNo, product.priceFen)
+    const product = recordProduct(record) || LEGACY_MEMBERSHIP_PRODUCT
+    validatePaymentParams(value.paymentParams, record.orderNo, product.priceFen, owner.wechatEnv === undefined ? 1 : owner.wechatEnv)
     return value
   }
   function validateReconcile(value, record) { return validateSummary(value, record) }
@@ -133,6 +156,7 @@ export function createPurchaseController(options = {}) {
     let order = await api.get(owner, record.orderNo, run)
     active(owner, run)
     order = validateSummary(order, record)
+    record = savedProduct(record, order)
     if (order.entitlementStatus !== 'granted' && ['pending', 'confirming'].includes(order.paymentStatus)) {
       order = await api.reconcile(owner, record.orderNo, run)
       active(owner, run)
@@ -189,18 +213,18 @@ export function createPurchaseController(options = {}) {
     active(owner, run)
     api.assertContext(owner, true)
     if (record.mayHaveInvoked) return recover(owner, record, run)
-    const created = await api.create(owner, record.clientRequestId, loginCode, run)
+    const created = await api.create(owner, record.clientRequestId, loginCode, run, (recordProduct(record) || LEGACY_MEMBERSHIP_PRODUCT).internalSku)
     active(owner, run)
     if (!created || !/^VP[A-F0-9]{30}$/.test(created.orderNo) || (record.orderNo && created.orderNo !== record.orderNo)) throw paymentError('PAYMENT_RESPONSE_INVALID')
-    record = save(owner, { ...record, orderNo: created.orderNo })
-    validateCreate(created, record)
+    record = save(owner, savedProduct({ ...record, orderNo: created.orderNo }, created))
+    validateCreate(created, record, owner)
     if (record.mayHaveInvoked) return recover(owner, record, run)
     if (!['initializing', 'pending'].includes(created.paymentStatus) || created.entitlementStatus !== 'not_ready' || created.deliveryStatus !== 'not_ready') return recover(owner, record, run)
     // Durable write BEFORE entering the native API. A crash after this line is
     // unknown, even when native payment was not actually reached.
     record = publish(owner, { ...record, mayHaveInvoked: true }, 'unknown')
     active(owner, run)
-    const hint = await api.invoke(owner, created.paymentParams, record.orderNo, run)
+    const hint = await api.invoke(owner, created.paymentParams, record.orderNo, run, recordProduct(record) || LEGACY_MEMBERSHIP_PRODUCT)
     active(owner, run)
     record = publish(owner, record, hint === 'cancelled' ? 'cancelled' : 'unknown')
     return recover(owner, record, run)
@@ -244,7 +268,7 @@ export function createPurchaseController(options = {}) {
         return recover(owner, record, run)
       })
     },
-    buy(resumeId) {
+    buy(resumeId, sku = MONTHLY_MEMBERSHIP_PRODUCT.internalSku) {
       return single(async (run) => {
         const owner = api.context(true)
         const list = records(owner)
@@ -252,15 +276,21 @@ export function createPurchaseController(options = {}) {
         if (resumeId && !record) throw paymentError('PAYMENT_STORAGE_FAILED')
         if (record && record.mayHaveInvoked) return recover(owner, record, run)
         const unresolved = discoveryIncomplete || list.some((r) => !['granted', 'delivered', 'manual_review', 'closed', 'failed'].includes(r.hint) && r.clientRequestId !== resumeId)
-        const product = typeof api.product === 'function' ? api.product() : { priceText: '¥30.00' }
-        if (!await options.confirm(unresolved ? EXTRA_PURCHASE_WARNING : purchaseConfirmation(product.priceText))) return null
+        if (record && record.orderNo) {
+          record = savedProduct(record, validateSummary(await api.get(owner, record.orderNo, run), record))
+          active(owner, run)
+        }
+        const selected = typeof api.product === 'function' ? api.product(sku) : MONTHLY_MEMBERSHIP_PRODUCT
+        const product = record ? (recordProduct(record) || LEGACY_MEMBERSHIP_PRODUCT) : membershipProductForPrice(selected.priceFen)
+        if (!product) throw paymentError('PAYMENT_PRODUCT_UNAVAILABLE')
+        if (!await options.confirm(unresolved ? extraPurchaseWarning(product) : purchaseConfirmation(membershipPriceText(product), product))) return null
         active(owner, run)
         api.assertContext(owner, true)
         const loginCode = await api.prepare(owner)
         active(owner, run)
         if (!record) {
           const clientRequestId = `purchase-${now().toString(36)}-${(++sequence).toString(36)}-${Math.random().toString(36).slice(2, 12)}`
-          record = save(owner, { clientRequestId, orderNo: '', mayHaveInvoked: false, createdAt: now(), hint: 'ready' })
+          record = save(owner, { clientRequestId, sku: product.internalSku, priceFen: product.priceFen, orderNo: '', mayHaveInvoked: false, createdAt: now(), hint: 'ready' })
         }
         return pay(owner, record, loginCode, run)
       })

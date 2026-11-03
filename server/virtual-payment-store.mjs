@@ -58,7 +58,6 @@ const EXPECTED_DUPLICATE_KEYS = new Map(
   ])
 )
 const MAX_ORDER_NUMBER_ATTEMPTS = 5
-const MEMBERSHIP_GRANT_DURATION_SECONDS = 2_592_000
 const MEMBERSHIP_SOURCE_TYPE = 'wechat_order'
 const DELIVERY_ACTIVE_STATUSES = new Set(['claimed', 'dispatching', 'uncertain', 'confirming'])
 const DELIVERY_ATTEMPT_STATUSES = new Set([
@@ -278,7 +277,7 @@ function normalizeOrderRow(row) {
   if (!product || orderAmountFen !== product.priceFen * product.quantity ||
       (paidAmountFen !== null && paidAmountFen !== orderAmountFen) ||
       !matchesVirtualPaymentEnvironment(environment, wechatEnv) ||
-      (environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT)) {
+      (environment === 'production' && product.sandboxTest === true)) {
     throw createStoreError('Payment order data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
   }
   return Object.freeze({
@@ -286,9 +285,9 @@ function normalizeOrderRow(row) {
     orderNo: normalizeOrderNo(row.order_no),
     userId: normalizeBigIntId(row.user_id),
     clientRequestId: normalizeVirtualPaymentClientRequestId(row.client_request_id),
-    internalSku: requireExactString(row.internal_sku, 'membership_30d'),
+    internalSku: requireExactString(row.internal_sku, product.internalSku),
     productId: requireProductId(row.product_id),
-    productName: requireExactString(row.product_name, '30天学习会员'),
+    productName: requireExactString(row.product_name, product.displayName),
     quantity: requireUnsignedInteger(row.quantity, { expected: 1 }),
     unitPriceFen,
     orderAmountFen,
@@ -475,7 +474,7 @@ function normalizeDeliveryQueryFact(value) {
     !Number.isSafeInteger(value.claimedOrderVersion) || value.claimedOrderVersion < 0 ||
     typeof value.userId !== 'string' || !/^[1-9][0-9]*$/.test(value.userId) ||
     !matchesVirtualPaymentEnvironment(value.environment, value.wechatEnv, value.environmentType) ||
-    (value.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) || value.currency !== 'CNY' ||
+    (value.environment === 'production' && product.sandboxTest === true) || value.currency !== 'CNY' ||
     typeof value.orderNo !== 'string' || !ORDER_NUMBER_PATTERN.test(value.orderNo) ||
     typeof value.providerOrderId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value.providerOrderId) ||
     typeof value.providerTransactionId !== 'string' || value.providerTransactionId.length < 1 ||
@@ -590,7 +589,7 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
         wechatEnv: requireUnsignedInteger(row.wechat_env, { maximum: 255 }),
         userId: normalizeBigIntId(row.linked_user_id), orderNo,
         productId: requireProductId(row.linked_product_id),
-        internalSku: requireExactString(row.linked_internal_sku, 'membership_30d'),
+        internalSku: requireExactString(row.linked_internal_sku, virtualPaymentProductForPrice(Number(row.linked_unit_price_fen))?.internalSku),
         quantity: requireUnsignedInteger(row.linked_quantity, { expected: 1 }),
         attach: orderNo,
         unitPriceFen: requireUnsignedInteger(row.linked_unit_price_fen),
@@ -757,7 +756,7 @@ function requireProviderTransactionReference(value, options = {}) {
 
 function normalizeTrustedReconciliationContext(value) {
   const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).join(',') : ''
-  const expectedPriceFen = keys === 'expectedProductId' ? 3000 : value && value.expectedPriceFen
+  const expectedPriceFen = keys === 'expectedProductId' ? VIRTUAL_PAYMENT_PRODUCT.priceFen : value && value.expectedPriceFen
   if (
     !value ||
     typeof value !== 'object' ||
@@ -798,7 +797,7 @@ function normalizeReconciliationFact(value) {
     [...allowedKeys].some((key) => !Object.hasOwn(value, key)) ||
     value.source !== 'wechat_query' ||
     !matchesVirtualPaymentEnvironment(value.environment, value.wechatEnv) ||
-    (value.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
+    (value.environment === 'production' && product.sandboxTest === true) ||
     typeof value.orderNo !== 'string' ||
     !ORDER_NUMBER_PATTERN.test(value.orderNo) ||
     typeof value.eventKey !== 'string' ||
@@ -1221,7 +1220,7 @@ export function createVirtualPaymentStore(options = {}) {
       order.productName !== product.displayName || order.quantity !== product.quantity ||
       order.unitPriceFen !== product.priceFen || order.orderAmountFen !== product.priceFen || order.paidAmountFen !== product.priceFen ||
       order.currency !== product.currency || !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
-      (order.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
+      (order.environment === 'production' && product.sandboxTest === true) ||
       order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
       order.providerOrderId === null || order.providerTransactionId === null || order.paidAt === null ||
       order.deliveryStatus !== 'not_ready' || order.deliveredAt !== null
@@ -1242,7 +1241,7 @@ export function createVirtualPaymentStore(options = {}) {
     const userId = normalizeUserId(userIdValue)
     const orderNo = normalizeOrderNo(orderNoValue)
     const expectedProductId = requireProductId(contextValue.expectedProductId)
-    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? 3000 : contextValue.expectedPriceFen
+    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? VIRTUAL_PAYMENT_PRODUCT.priceFen : contextValue.expectedPriceFen
     const currentTime = contextValue.now instanceof Date && Number.isFinite(contextValue.now.getTime())
       ? new Date(contextValue.now.getTime())
       : null
@@ -1290,7 +1289,8 @@ export function createVirtualPaymentStore(options = {}) {
             userId,
             grantId: lockedOrder.membershipGrantId,
             transactionId: lockedOrder.entitlementTransactionId,
-            ...keys
+            ...keys,
+            durationSeconds: virtualPaymentProductForPrice(lockedOrder.unitPriceFen).durationSeconds
           })
         } catch {
           throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
@@ -1316,6 +1316,7 @@ export function createVirtualPaymentStore(options = {}) {
         membership = await entitlementStore.grantMembershipDurationInTransaction(connection, {
           userId,
           ...keys,
+          durationSeconds: virtualPaymentProductForPrice(lockedOrder.unitPriceFen).durationSeconds,
           operatorType: 'system',
           operatorId: 'virtual-payment-entitlement',
           reason: 'Verified WeChat virtual payment membership grant.',
@@ -1328,7 +1329,7 @@ export function createVirtualPaymentStore(options = {}) {
         !membership || membership.idempotent === true ||
         membership.sourceType !== keys.sourceType || membership.sourceId !== keys.sourceId ||
         !membership.grantId || !membership.transactionId ||
-        Date.parse(membership.effectiveEndAt) - Date.parse(membership.effectiveStartAt) !== MEMBERSHIP_GRANT_DURATION_SECONDS * 1000
+        Date.parse(membership.effectiveEndAt) - Date.parse(membership.effectiveStartAt) !== virtualPaymentProductForPrice(lockedOrder.unitPriceFen).durationSeconds * 1000
       ) {
         throw createStoreError('Membership grant result is invalid.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
       }
@@ -1367,7 +1368,7 @@ export function createVirtualPaymentStore(options = {}) {
       order.productName !== product.displayName || order.quantity !== product.quantity ||
       order.unitPriceFen !== product.priceFen || order.orderAmountFen !== product.priceFen || order.paidAmountFen !== product.priceFen ||
       order.currency !== product.currency || !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
-      (order.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
+      (order.environment === 'production' && product.sandboxTest === true) ||
       order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
       (requireProviderOrderId && order.providerOrderId === null) || order.providerTransactionId === null || order.paidAt === null ||
       order.entitlementStatus !== 'granted' || order.membershipGrantId === null ||
@@ -1400,7 +1401,8 @@ export function createVirtualPaymentStore(options = {}) {
         userId,
         grantId: order.membershipGrantId,
         transactionId: order.entitlementTransactionId,
-        ...membershipGrantKeys(order.orderNo)
+        ...membershipGrantKeys(order.orderNo),
+        durationSeconds: virtualPaymentProductForPrice(order.unitPriceFen).durationSeconds
       })
     } catch {
       throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
@@ -1727,7 +1729,7 @@ export function createVirtualPaymentStore(options = {}) {
     const userId = normalizeUserId(userIdValue)
     const orderNo = normalizeOrderNo(orderNoValue)
     const expectedProductId = requireProductId(contextValue.expectedProductId)
-    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? 3000 : contextValue.expectedPriceFen
+    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? VIRTUAL_PAYMENT_PRODUCT.priceFen : contextValue.expectedPriceFen
     if (contextValue.messagePushEnabled !== undefined && typeof contextValue.messagePushEnabled !== 'boolean') {
       throw createStoreError('Payment delivery context is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
     }
@@ -1926,7 +1928,7 @@ export function createVirtualPaymentStore(options = {}) {
     const operationId = requireString(operationIdValue, 64)
     const currentTime = deliveryTimestamp(contextValue.now)
     const expectedProductId = requireProductId(contextValue.expectedProductId)
-    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? 3000 : contextValue.expectedPriceFen
+    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? VIRTUAL_PAYMENT_PRODUCT.priceFen : contextValue.expectedPriceFen
     return runTransaction(async (connection) => {
       const order = normalizeSingleOrder(await connection.execute(
         `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE} WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
@@ -2040,7 +2042,7 @@ export function createVirtualPaymentStore(options = {}) {
     const userId = normalizeUserId(userIdValue)
     const orderNo = normalizeOrderNo(orderNoValue)
     const expectedProductId = requireProductId(contextValue.expectedProductId)
-    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? 3000 : contextValue.expectedPriceFen
+    const expectedPriceFen = contextValue.expectedPriceFen === undefined ? VIRTUAL_PAYMENT_PRODUCT.priceFen : contextValue.expectedPriceFen
     const currentTime = deliveryTimestamp(contextValue.now)
     const fact = normalizeDeliveryQueryFact(factValue)
     if (fact.orderNo !== orderNo) throw createStoreError('Payment delivery query fact is invalid.', 'PAYMENT_DELIVERY_QUERY_INVALID', 502)
@@ -2241,7 +2243,7 @@ export function createVirtualPaymentStore(options = {}) {
         order.unitPriceFen !== fact.unitPriceFen || order.orderAmountFen !== fact.orderAmountFen ||
         order.currency !== product.currency || order.environment !== fact.environment || order.wechatEnv !== fact.wechatEnv ||
         !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
-        (order.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
+        (order.environment === 'production' && product.sandboxTest === true) ||
         order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
         (order.providerTransactionId !== null && order.providerTransactionId !== fact.providerTransactionId) ||
         (order.paidAmountFen !== null && order.paidAmountFen !== fact.orderAmountFen) ||
@@ -2283,7 +2285,8 @@ export function createVirtualPaymentStore(options = {}) {
         try {
           await entitlementStore.verifyMembershipGrantInTransaction(connection, {
             userId, grantId: order.membershipGrantId, transactionId: order.entitlementTransactionId,
-            ...membershipGrantKeys(orderNo)
+            ...membershipGrantKeys(orderNo),
+          durationSeconds: virtualPaymentProductForPrice(order.unitPriceFen).durationSeconds
           })
         } catch { throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409) }
         assertAffectedRows(await connection.execute(
@@ -2331,7 +2334,7 @@ export function createVirtualPaymentStore(options = {}) {
         let membership
         try {
           membership = await entitlementStore.grantMembershipDurationInTransaction(connection, {
-            userId, ...membershipGrantKeys(orderNo), operatorType: 'system',
+            userId, ...membershipGrantKeys(orderNo), durationSeconds: product.durationSeconds, operatorType: 'system',
             operatorId: 'virtual-payment-entitlement',
             reason: 'Verified WeChat virtual payment membership grant.', now: currentTime
           })
@@ -2339,7 +2342,7 @@ export function createVirtualPaymentStore(options = {}) {
         if (
           !membership || membership.idempotent === true || !membership.grantId || !membership.transactionId ||
           membership.sourceType !== MEMBERSHIP_SOURCE_TYPE || membership.sourceId !== orderNo ||
-          Date.parse(membership.effectiveEndAt) - Date.parse(membership.effectiveStartAt) !== MEMBERSHIP_GRANT_DURATION_SECONDS * 1000
+          Date.parse(membership.effectiveEndAt) - Date.parse(membership.effectiveStartAt) !== product.durationSeconds * 1000
         ) throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409)
         assertAffectedRows(await connection.execute(
           `UPDATE ${ORDERS_TABLE}
@@ -2360,7 +2363,8 @@ export function createVirtualPaymentStore(options = {}) {
       try {
         await entitlementStore.verifyMembershipGrantInTransaction(connection, {
           userId, grantId: order.membershipGrantId, transactionId: order.entitlementTransactionId,
-          ...membershipGrantKeys(orderNo)
+          ...membershipGrantKeys(orderNo),
+            durationSeconds: virtualPaymentProductForPrice(order.unitPriceFen).durationSeconds
         })
       } catch { throw createStoreError('Payment entitlement data is incomplete.', 'PAYMENT_ENTITLEMENT_INCOMPLETE', 409) }
 
@@ -2422,7 +2426,7 @@ export function createVirtualPaymentStore(options = {}) {
       input.orderAmountFen !== product.priceFen * product.quantity ||
       input.currency !== product.currency ||
       !matchesVirtualPaymentEnvironment(input.environment, input.wechatEnv) ||
-      (input.environment === 'production' && product !== VIRTUAL_PAYMENT_PRODUCT) ||
+      (input.environment === 'production' && product.sandboxTest === true) ||
       input.paymentChannel !== 'wechat_virtual_payment' ||
       !CLIENT_PLATFORMS.has(clientPlatform)
     ) {

@@ -278,7 +278,7 @@ Only published word IDs can be saved. Daily rotation uses the Asia/Shanghai cale
   existing sandbox Offer ID, Product ID, AppKey, user allowlist, and optional ¥1 test
   product configuration.
 - `production` requires `NODE_ENV=production`, derives request/message `Env=0` and
-  `query_order env_type=1`, and uses only the ¥30 product configured by
+  `query_order env_type=1`, and uses the product mappings described below with
   `WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID`,
   `WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID`, and
   `WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY`. It does not read the sandbox user
@@ -345,3 +345,9 @@ production payment feature has been deployed or validated against WeChat.
 - `npm.cmd run check:production` also verifies that production admin auth rejects empty/default tokens.
 - `npm.cmd run check:production` also verifies that production user JWT auth rejects missing `JWT_SECRET`.
 - `npm.cmd run check:production` also verifies the required length and non-reuse contract for `CAMPAIGN_PHONE_IDENTITY_HASH_SECRET` with test-only values.
+
+### Membership plans (2026-10-30, local implementation)
+
+New purchases use `membership_30d_v2` (1200 fen, 30 days) or `membership_365d` (9800 fen, 365 days), with identical rights and no automatic renewal or promotional price. `membership_30d` remains history-only at 3000 fen / 30 days; the existing `*_PRODUCT_ID` variables keep that historical mapping. Configure distinct `WECHAT_VIRTUAL_PAYMENT_{SANDBOX,PRODUCTION}_MONTHLY_PRODUCT_ID` and `..._YEARLY_PRODUCT_ID` values for the two new products. Missing new IDs reject the corresponding new purchase without disabling historical recovery. The existing one-yuan sandbox test product stays sandbox-only.
+
+Product facts are shared from `miniapp-uni/word-app1/common/membership-products.js`; include this module with the server files in any later release. No schema migration or historical data rewrite is required by the repository DDL. Grant and ledger durations distinguish plans; `membership_type=monthly` remains the existing snapshot compatibility marker. Platform configuration, actual MySQL schema and real payment acceptance are not established by local unit tests. The installed HBuilderX compiler passed a local mp-weixin build into a separate temporary output directory.

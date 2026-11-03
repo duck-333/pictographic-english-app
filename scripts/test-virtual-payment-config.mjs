@@ -254,3 +254,17 @@ assert(source.includes('WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY'))
 assert(!/VUE_APP_[A-Z_]*APP_KEY/.test(source), 'payment secrets must not use client-exposed VUE_APP variables')
 
 console.log('virtual payment config tests passed')
+
+// New IDs are optional for history-only recovery, but validated when supplied.
+const plans = getVirtualPaymentConfig({ env: enabledEnv({
+  WECHAT_VIRTUAL_PAYMENT_SANDBOX_MONTHLY_PRODUCT_ID: 'monthly-fixture',
+  WECHAT_VIRTUAL_PAYMENT_SANDBOX_YEARLY_PRODUCT_ID: 'yearly-fixture'
+}) })
+assert.equal(plans.productIds.membership_30d, SECRET_SENTINELS.WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID)
+assert.equal(plans.productIds.membership_30d_v2, 'monthly-fixture')
+assert.equal(plans.productIds.membership_365d, 'yearly-fixture')
+for (const value of ['bad/id', SECRET_SENTINELS.WECHAT_VIRTUAL_PAYMENT_SANDBOX_PRODUCT_ID]) {
+  assert.throws(() => getVirtualPaymentConfig({ env: enabledEnv({ WECHAT_VIRTUAL_PAYMENT_SANDBOX_MONTHLY_PRODUCT_ID: value }) }),
+    error => error.code === 'VIRTUAL_PAYMENT_CONFIG_INVALID')
+}
+console.log('New membership product ID configuration passed.')

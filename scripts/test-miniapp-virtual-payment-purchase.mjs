@@ -4,23 +4,23 @@ import { createPurchaseController, EXTRA_PURCHASE_WARNING, purchaseConfirmation,
 assert.equal(purchaseConfirmation('¥1.00'), '购买30天会员，¥1.00，一次性购买，非自动续费。有效会员购买后顺延30天。是否继续？')
 
 const clone = (x) => JSON.parse(JSON.stringify(x))
-const paymentParams = (orderNo, priceFen = 3000) => ({ mode: 'short_series_goods', signData: JSON.stringify({ env: 1, buyQuantity: 1, currencyType: 'CNY', goodsPrice: priceFen, outTradeNo: orderNo }, null, 2), paySig: 'a'.repeat(64), signature: 'b'.repeat(64) })
+const paymentParams = (orderNo, priceFen = 1200) => ({ mode: 'short_series_goods', signData: JSON.stringify({ env: 1, buyQuantity: 1, currencyType: 'CNY', goodsPrice: priceFen, outTradeNo: orderNo }, null, 2), paySig: 'a'.repeat(64), signature: 'b'.repeat(64) })
 function harness(overrides = {}) {
   const disk = new Map(), calls = [], confirmations = [], createdOrders = new Map()
   let current = { userId: '42', token: 'jwt', baseUrl: 'https://sandbox.test', environment: 'sandbox' }
   let count = 0, writes = 0, failNextRead = false
   const order = (n, paymentStatus = 'pending', entitlementStatus = 'not_ready', deliveryStatus = 'not_ready') => ({ orderNo: n, paymentStatus, entitlementStatus, deliveryStatus })
   const api = {
-    product: () => ({ priceFen: overrides.priceFen || 3000, priceText: overrides.priceFen === 100 ? '¥1.00' : '¥30.00' }),
+    product: () => ({ priceFen: overrides.priceFen || 1200, priceText: overrides.priceFen === 100 ? '¥1.00' : '¥12.00' }),
     context: () => ({ ...current }),
     assertContext(owner) { assert.deepEqual(owner, current) },
     async prepare() { calls.push('code'); return 'secret-code' },
-    async create(owner, id) { calls.push(['create', id]); if (overrides.createFailure) throw new Error('network'); if (!createdOrders.has(id)) createdOrders.set(id, 'VP' + (++count).toString(16).toUpperCase().padStart(30, '0')); return { ...order(createdOrders.get(id)), paymentParams: paymentParams(createdOrders.get(id), overrides.priceFen || 3000) } },
+    async create(owner, id) { calls.push(['create', id]); if (overrides.createFailure) throw new Error('network'); if (!createdOrders.has(id)) createdOrders.set(id, 'VP' + (++count).toString(16).toUpperCase().padStart(30, '0')); return { ...order(createdOrders.get(id)), paymentParams: paymentParams(createdOrders.get(id), overrides.priceFen || 1200) } },
     async invoke(owner, params) {
       calls.push('invoke')
       const rows = [...disk.values()].flat()
       assert(rows.some((r) => r.orderNo && r.mayHaveInvoked), 'persist possible invocation BEFORE native call')
-      assert.equal(params.signData, paymentParams(JSON.parse(params.signData).outTradeNo, overrides.priceFen || 3000).signData)
+      assert.equal(params.signData, paymentParams(JSON.parse(params.signData).outTradeNo, overrides.priceFen || 1200).signData)
       if (overrides.crashAtInvoke) throw new Error('simulated crash after durable marker')
       return overrides.cancel ? 'cancelled' : 'unknown'
     },
@@ -459,3 +459,40 @@ for (const endpoint of ['prepare', 'create', 'entitlement', 'refresh', 'delivery
   assert.equal(h.calls.length, count, `${endpoint}: no downstream action from old epoch`)
   assert.equal(JSON.stringify([...h.disk]), snapshot, `${endpoint}: no stale persistence`)
 }
+
+{
+  const h = harness({ priceFen: 9800, unpaid: true })
+  await h.controller.buy(undefined, 'membership_365d')
+  const record = h.controller.list()[0]
+  assert.equal(record.sku, 'membership_365d')
+  assert.equal(record.priceFen, 9800)
+  assert(h.confirmations[0].includes('365天') && h.confirmations[0].includes('¥98.00'))
+  h.api.product = () => ({ priceFen: 1200 })
+  const before = h.calls.filter(c => Array.isArray(c) && c[0] === 'create').length
+  await h.controller.buy(record.clientRequestId, 'membership_30d_v2')
+  assert.equal(h.controller.list()[0].priceFen, 9800)
+  assert.equal(h.calls.filter(c => Array.isArray(c) && c[0] === 'create').length, before)
+}
+{
+  const h = harness({ createFailure: true })
+  await assert.rejects(h.controller.buy())
+  const key = [...h.disk.keys()][0], old = h.disk.get(key)[0]
+  delete old.sku; delete old.priceFen
+  old.orderNo = 'VP' + 'A'.repeat(30)
+  h.disk.set(key, [old])
+  const legacy = { internalSku: 'membership_30d', priceFen: 3000, displayName: '30天学习会员', durationSeconds: 30 * 86400 }
+  h.api.get = async () => ({ ...h.order(old.orderNo), product: legacy })
+  h.api.create = async (_owner, id, _code, _run, sku) => {
+    assert.equal(sku, legacy.internalSku)
+    return { ...h.order(old.orderNo), product: legacy, paymentParams: paymentParams(old.orderNo, legacy.priceFen) }
+  }
+  h.api.invoke = async (_owner, params, _no, _run, product) => {
+    assert.equal(JSON.parse(params.signData).goodsPrice, 3000)
+    assert.equal(product.durationSeconds, 30 * 86400)
+    return 'unknown'
+  }
+  await h.controller.buy(old.clientRequestId, 'membership_365d')
+  assert(h.confirmations.at(-1).includes('¥30.00'))
+  assert.equal(h.controller.list()[0].priceFen, 3000)
+}
+console.log('Yearly purchase and legacy cache recovery keep the saved product.')
