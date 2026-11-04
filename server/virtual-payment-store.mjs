@@ -12,7 +12,9 @@ import { createWechatQueryCanonicalFact } from './virtual-payment-reconciliation
 import { createWechatGoodsDeliveryCanonicalFact } from './virtual-payment-message.mjs'
 import {
   isVirtualPaymentProductId,
+  isVirtualPaymentClientPlatform,
   matchesVirtualPaymentEnvironment,
+  matchesVirtualPaymentOrderType,
   VIRTUAL_PAYMENT_PRODUCT,
   virtualPaymentEnvironment,
   virtualPaymentProductForPrice
@@ -31,7 +33,6 @@ const MAX_UNSIGNED_INT = 4_294_967_295
 const CLIENT_REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{7,79}$/
 const ORDER_NUMBER_PATTERN = /^VP[A-F0-9]{30}$/
 const MYSQL_DATETIME_PATTERN = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/
-const CLIENT_PLATFORMS = new Set(['android', 'harmony', 'windows'])
 const PAYMENT_STATUSES = new Set(['initializing', 'pending', 'confirming', 'paid', 'closed', 'failed'])
 const ENTITLEMENT_STATUSES = new Set(['not_ready', 'pending', 'granting', 'granted', 'retryable_failed', 'failed'])
 const DELIVERY_STATUSES = new Set(['not_ready', 'pending', 'confirming', 'delivered', 'retryable_failed', 'manual_review'])
@@ -265,7 +266,7 @@ function normalizeOrderRow(row) {
     throw createStoreError('Payment order data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
   }
   const clientPlatform = requireString(row.client_platform, 32)
-  if (!CLIENT_PLATFORMS.has(clientPlatform)) {
+  if (!isVirtualPaymentClientPlatform(clientPlatform, row.environment)) {
     throw createStoreError('Payment order data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
   }
   const unitPriceFen = requireUnsignedInteger(row.unit_price_fen)
@@ -480,7 +481,8 @@ function normalizeDeliveryQueryFact(value) {
     typeof value.providerTransactionId !== 'string' || value.providerTransactionId.length < 1 ||
     value.providerTransactionId.length > 128 || /[\u0000-\u001f\u007f]/.test(value.providerTransactionId) ||
     !Number.isSafeInteger(value.wechatStatus) || value.wechatStatus < 0 || value.wechatStatus > 10 ||
-    value.orderType !== 0 || !product || value.paidAmountFen !== product.priceFen ||
+    !(value.orderType === 0 || (value.orderType === 7 && value.environment === 'production')) ||
+    !product || value.paidAmountFen !== product.priceFen ||
     !Number.isSafeInteger(value.paidAtSeconds) || value.paidAtSeconds <= 0 ||
     !Number.isSafeInteger(value.queriedAtSeconds) || value.queriedAtSeconds <= 0 ||
     ![null, 0].includes(value.providedAtSeconds) && (!Number.isSafeInteger(value.providedAtSeconds) || value.providedAtSeconds <= 0) ||
@@ -578,6 +580,10 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
   const eventRule = ALLOWED_WECHAT_QUERY_EVENT_HISTORY.get(eventType)
   const eventKey = requireString(row.event_key, 191)
   const orderNo = normalizeOrderNo(row.order_no)
+  const linkedOrder = {
+    clientPlatform: row.linked_client_platform,
+    environment: row.environment, wechatEnv: Number(row.wechat_env)
+  }
   if (eventType === WECHAT_GOODS_DELIVERY_EVENT_TYPE) {
     const providerTransactionId = requireProviderTransactionReference(row.provider_transaction_id)
     const paidAt = normalizeRequiredDate(row.paid_at)
@@ -660,7 +666,7 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
       environmentType: row.delivery_query_env_type, currency: row.delivery_query_currency,
       orderNo: row.delivery_query_order_no, providerOrderId: row.delivery_query_provider_order_id,
       providerTransactionId: row.delivery_query_provider_transaction_id, wechatStatus,
-      orderType: requireUnsignedInteger(row.delivery_query_order_type, { expected: 0, maximum: 255 }),
+      orderType: requireUnsignedInteger(row.delivery_query_order_type, { maximum: 255 }),
       orderAmountFen: requireUnsignedInteger(row.delivery_query_order_amount_fen, { expected: product.priceFen }),
       paidAmountFen: requireUnsignedInteger(row.delivery_query_paid_amount_fen, { expected: product.priceFen }),
       paidAtSeconds: deliveryPaidAtSeconds, providedAtSeconds, queriedAtSeconds
@@ -681,6 +687,7 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
       row.delivery_query_currency !== 'CNY' ||
       row.delivery_query_order_no !== orderNo || row.delivery_query_provider_order_id !== providerOrderId ||
       row.delivery_query_provider_transaction_id !== providerTransactionId ||
+      !matchesVirtualPaymentOrderType(Number(row.delivery_query_order_type), linkedOrder) ||
       eventType !== `wechat_delivery_query_status_${wechatStatus}` ||
       deliveryPaidAtSeconds !== Date.parse(normalizeRequiredDate(row.paid_at)) / 1000 ||
       !crypto.timingSafeEqual(payloadHash, rebuiltDeliveryHash) ||
@@ -723,11 +730,11 @@ function normalizeTrustedWechatQueryPaidEvidenceRow(row) {
       wechatStatus: eventRule.status,
       meaning: eventRule.meaning,
       targetPaymentStatus: eventRule.target,
-      orderType: 0,
+      orderType: linkedOrder.clientPlatform === 'ios' ? 7 : 0,
       orderAmountFen,
       paidAmountFen,
       paidAtSeconds
-    })
+    }, linkedOrder)
   } catch {
     throw createStoreError('Payment event data is invalid.', 'PAYMENT_ORDER_CONFLICT', 409)
   }
@@ -809,7 +816,7 @@ function normalizeReconciliationFact(value) {
     !Number.isSafeInteger(value.wechatStatus) ||
     typeof value.orderType !== 'number' ||
     !Number.isSafeInteger(value.orderType) ||
-    value.orderType !== 0 ||
+    !(value.orderType === 0 || (value.orderType === 7 && value.environment === 'production')) ||
     !product ||
     !['confirming', 'paid', 'closed'].includes(value.targetPaymentStatus)
   ) {
@@ -1181,6 +1188,7 @@ export function createVirtualPaymentStore(options = {}) {
               o.provider_order_id AS linked_provider_order_id,
               o.provider_transaction_id AS linked_provider_transaction_id,
               o.order_amount_fen, o.paid_amount_fen, o.paid_at,
+              o.client_platform AS linked_client_platform,
               o.environment, o.wechat_env${deliveryQuerySelect}
        FROM ${EVENTS_TABLE} e
        INNER JOIN ${ORDERS_TABLE} o
@@ -1221,7 +1229,7 @@ export function createVirtualPaymentStore(options = {}) {
       order.unitPriceFen !== product.priceFen || order.orderAmountFen !== product.priceFen || order.paidAmountFen !== product.priceFen ||
       order.currency !== product.currency || !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
       (order.environment === 'production' && product.sandboxTest === true) ||
-      order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
+      order.paymentChannel !== 'wechat_virtual_payment' || !isVirtualPaymentClientPlatform(order.clientPlatform, order.environment) ||
       order.providerOrderId === null || order.providerTransactionId === null || order.paidAt === null ||
       order.deliveryStatus !== 'not_ready' || order.deliveredAt !== null
     ) {
@@ -1369,7 +1377,7 @@ export function createVirtualPaymentStore(options = {}) {
       order.unitPriceFen !== product.priceFen || order.orderAmountFen !== product.priceFen || order.paidAmountFen !== product.priceFen ||
       order.currency !== product.currency || !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
       (order.environment === 'production' && product.sandboxTest === true) ||
-      order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
+      order.paymentChannel !== 'wechat_virtual_payment' || !isVirtualPaymentClientPlatform(order.clientPlatform, order.environment) ||
       (requireProviderOrderId && order.providerOrderId === null) || order.providerTransactionId === null || order.paidAt === null ||
       order.entitlementStatus !== 'granted' || order.membershipGrantId === null ||
       order.entitlementTransactionId === null || order.entitlementGrantedAt === null ||
@@ -1524,7 +1532,7 @@ export function createVirtualPaymentStore(options = {}) {
       }
       if (
         query.status !== 'applied' || query.completedAt === null || query.leaseExpiresAt !== null || query.providerEventId === null ||
-        query.observationId === null || query.wechatStatus === null || query.orderType !== 0 ||
+        query.observationId === null || query.wechatStatus === null || !matchesVirtualPaymentOrderType(query.orderType, order) ||
         query.observedEnvironment !== order.environment || query.requestEnv !== order.wechatEnv ||
         !matchesVirtualPaymentEnvironment(query.observedEnvironment, query.requestEnv, query.responseEnvType) ||
         query.observedCurrency !== 'CNY' || query.observedOrderNo !== order.orderNo ||
@@ -2052,6 +2060,9 @@ export function createVirtualPaymentStore(options = {}) {
         [userId, orderNo]
       ))
       if (!order) throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+      if (!matchesVirtualPaymentOrderType(fact.orderType, order) || fact.environment !== order.environment || fact.wechatEnv !== order.wechatEnv) {
+        throw createStoreError('Payment delivery query conflicts with the order.', 'PAYMENT_DELIVERY_QUERY_INVALID', 502)
+      }
       await verifyDeliveryPrerequisites(connection, order, expectedProductId, expectedPriceFen, userId)
       const attemptState = await listDeliveryAttemptsForUpdate(connection, order, userId)
       await verifyDeliveryPaidEvidence(connection, order, userId)
@@ -2244,7 +2255,8 @@ export function createVirtualPaymentStore(options = {}) {
         order.currency !== product.currency || order.environment !== fact.environment || order.wechatEnv !== fact.wechatEnv ||
         !matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) ||
         (order.environment === 'production' && product.sandboxTest === true) ||
-        order.paymentChannel !== 'wechat_virtual_payment' || !CLIENT_PLATFORMS.has(order.clientPlatform) ||
+        order.paymentChannel !== 'wechat_virtual_payment' || !isVirtualPaymentClientPlatform(order.clientPlatform, order.environment) ||
+        (order.clientPlatform === 'ios' && order.providerOrderId !== null && order.providerOrderId !== fact.providerMerchantOrderNo) ||
         (order.providerTransactionId !== null && order.providerTransactionId !== fact.providerTransactionId) ||
         (order.paidAmountFen !== null && order.paidAmountFen !== fact.orderAmountFen) ||
         (order.paidAt !== null && Date.parse(order.paidAt) !== fact.paidAt.getTime())
@@ -2309,15 +2321,18 @@ export function createVirtualPaymentStore(options = {}) {
         ))
       ) throw createStoreError('Payment message cannot be applied.', 'PAYMENT_ORDER_CONFLICT', 409)
 
-      if (order.paymentStatus !== 'paid' || order.providerTransactionId === null || order.paidAmountFen === null || order.paidAt === null) {
+      if (order.paymentStatus !== 'paid' || order.providerTransactionId === null || order.paidAmountFen === null || order.paidAt === null ||
+          (order.clientPlatform === 'ios' && order.providerOrderId === null)) {
         assertAffectedRows(await connection.execute(
           `UPDATE ${ORDERS_TABLE}
            SET payment_status = 'paid', provider_transaction_id = COALESCE(provider_transaction_id, ?),
                paid_amount_fen = COALESCE(paid_amount_fen, ?), paid_at = COALESCE(paid_at, ?),
+               provider_order_id = COALESCE(provider_order_id, ?),
                last_error_code = NULL, version = version + 1
            WHERE id = ? AND user_id = ? AND order_no = ? AND version = ?
              AND payment_status IN ('pending', 'confirming', 'paid')`,
-          [fact.providerTransactionId, fact.orderAmountFen, fact.paidAt, order.id, userId, orderNo, order.version]
+          [fact.providerTransactionId, fact.orderAmountFen, fact.paidAt,
+            order.clientPlatform === 'ios' ? fact.providerMerchantOrderNo : null, order.id, userId, orderNo, order.version]
         ))
         order = normalizeSingleOrder(await connection.execute(
           `SELECT ${SELECT_COLUMNS} FROM ${ORDERS_TABLE} WHERE user_id = ? AND order_no = ? LIMIT 2 FOR UPDATE`,
@@ -2428,7 +2443,7 @@ export function createVirtualPaymentStore(options = {}) {
       !matchesVirtualPaymentEnvironment(input.environment, input.wechatEnv) ||
       (input.environment === 'production' && product.sandboxTest === true) ||
       input.paymentChannel !== 'wechat_virtual_payment' ||
-      !CLIENT_PLATFORMS.has(clientPlatform)
+      !isVirtualPaymentClientPlatform(clientPlatform, input.environment)
     ) {
       throw createStoreError('Payment order input is invalid.', 'PAYMENT_REQUEST_INVALID', 400)
     }
@@ -2526,6 +2541,9 @@ export function createVirtualPaymentStore(options = {}) {
       ))
       if (!lockedOrder) {
         throw createStoreError('Payment order was not found.', 'PAYMENT_ORDER_NOT_FOUND', 404)
+      }
+      if (!matchesVirtualPaymentOrderType(fact.orderType, lockedOrder) || fact.environment !== lockedOrder.environment || fact.wechatEnv !== lockedOrder.wechatEnv) {
+        throw createStoreError('Payment reconciliation fact is invalid.', 'PAYMENT_QUERY_RESULT_INVALID', 502)
       }
       if (
         lockedOrder.productId !== context.expectedProductId ||

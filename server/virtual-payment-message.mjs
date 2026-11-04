@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { normalizeVerifiedWechatQueryFact } from './virtual-payment-reconciliation.mjs'
 
 import {
   getVirtualPaymentConfig,
@@ -175,7 +176,7 @@ export function createWechatGoodsDeliveryCanonicalFact(input) {
   return Object.freeze({ raw, payloadHash, eventKey: `wechat_goods_delivery:${identityHash}` })
 }
 
-export function normalizeWechatGoodsDeliveryMessage(body, order, context = {}) {
+export function validateWechatGoodsDeliveryMessage(body, order, context = {}) {
   if (!hasRequiredFields(body, ROOT_REQUIRED_FIELDS)) throw messageError()
   if (
     body.ToUserName !== context.originalId ||
@@ -205,6 +206,14 @@ export function normalizeWechatGoodsDeliveryMessage(body, order, context = {}) {
       if (Object.hasOwn(goods.TeamInfo, field) && !Number.isSafeInteger(goods.TeamInfo[field])) throw messageError()
     }
   }
+  const nowValue = context.now instanceof Date ? context.now.getTime() : NaN
+  if (!Number.isFinite(nowValue)) throw messageError('Wechat virtual payment message service is unavailable.', 'PAYMENT_SERVICE_UNAVAILABLE', 503)
+  if (body.CreateTime > Math.floor(nowValue / 1000) + 300) throw messageError()
+  return attach
+}
+
+export function normalizeWechatGoodsDeliveryMessage(body, order, context = {}) {
+  const attach = validateWechatGoodsDeliveryMessage(body, order, context)
   let providerMerchantOrderNo = null
   let providerTransactionId = order.providerTransactionId
   let paidAtSeconds = order.paidAt === null ? null : Date.parse(order.paidAt) / 1000
@@ -213,6 +222,20 @@ export function normalizeWechatGoodsDeliveryMessage(body, order, context = {}) {
     providerMerchantOrderNo = requireSafeString(body.WeChatPayInfo.MchOrderNo)
     providerTransactionId = requireSafeString(body.WeChatPayInfo.TransactionId)
     paidAtSeconds = requirePositiveInteger(body.WeChatPayInfo.PaidTime)
+  } else if (order.clientPlatform === 'ios') {
+    // The verified Apple notification identifies the goods, not the payment facts.
+    // Only the server's authenticated query can supply the real references/time.
+    if (order.environment !== 'production' || !context.queryResult) {
+      throw messageError('Payment query facts are required.', 'PAYMENT_MESSAGE_PAYMENT_UNCONFIRMED', 503)
+    }
+    const payment = normalizeVerifiedWechatQueryFact(context.queryResult, order, { now: () => context.now.getTime() })
+    if (payment.targetPaymentStatus !== 'paid' ||
+        (order.providerOrderId !== null && order.providerOrderId !== payment.providerOrderId)) {
+      throw messageError('Payment is not confirmed.', 'PAYMENT_MESSAGE_PAYMENT_UNCONFIRMED', 503)
+    }
+    providerMerchantOrderNo = payment.providerOrderId
+    providerTransactionId = payment.providerTransactionId
+    paidAtSeconds = payment.paidAtSeconds
   }
   if (
     typeof providerTransactionId !== 'string' || !SAFE_PROVIDER_REFERENCE_PATTERN.test(providerTransactionId) ||

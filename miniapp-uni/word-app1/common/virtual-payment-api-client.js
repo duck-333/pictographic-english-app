@@ -82,6 +82,19 @@ export function paymentMessage(error) {
   return '暂时无法确认购买结果，请稍后查询或联系客服'
 }
 
+function supportsIosVirtualPayment(native) {
+  try {
+    const info = native.getAppBaseInfo ? native.getAppBaseInfo() : native.getSystemInfoSync()
+    const version = /^(\d+)\.(\d+)\.(\d+)(?:\.\d+)*$/.exec(info.version || '')
+    if (!version) return false
+    const [, major, minor, patch] = version.map(Number)
+    const supportedVersion = major > 8 || (major === 8 && (minor > 0 || patch >= 68))
+    return supportedVersion && typeof native.canIUse === 'function' && native.canIUse('requestVirtualPayment')
+  } catch (_) {
+    return false
+  }
+}
+
 export function createVirtualPaymentApi(options = {}) {
   const product = (sku) => getVirtualPaymentClientProduct({ env: options.env, sku })
   const runtime = () => {
@@ -116,7 +129,11 @@ export function createVirtualPaymentApi(options = {}) {
     let platform = ''
     if (purchase) {
       try { platform = (native.getDeviceInfo ? native.getDeviceInfo() : native.getSystemInfoSync()).platform } catch (_) {}
-      if (!['android', 'harmony', 'windows'].includes(platform) || typeof native.requestVirtualPayment !== 'function') throw paymentError('PAYMENT_RUNTIME_UNSUPPORTED')
+      if (!['android', 'harmony', 'windows', 'ios'].includes(platform) ||
+          typeof native.requestVirtualPayment !== 'function') throw paymentError('PAYMENT_RUNTIME_UNSUPPORTED')
+      if (platform === 'ios' && (!production || !supportsIosVirtualPayment(native))) {
+        throw paymentError('PAYMENT_RUNTIME_UNSUPPORTED')
+      }
     }
     return { baseUrl, platform, environment: production ? 'production' : 'sandbox', wechatEnv: production ? 0 : 1 }
   }

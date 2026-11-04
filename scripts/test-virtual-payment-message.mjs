@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
+import { MEMBERSHIP_PLANS } from '../miniapp-uni/word-app1/common/membership-products.js'
+import { appleMessageBody, appleQueryResult } from './fixtures/virtual-payment-apple.mjs'
 
 import {
   createWechatGoodsDeliveryCanonicalFact,
@@ -215,3 +217,23 @@ assert.equal(testProductFact.unitPriceFen, 100)
 assert.equal(testProductFact.orderAmountFen, 100)
 
 console.log('virtual payment message validation tests passed')
+
+for (const product of MEMBERSHIP_PLANS) {
+  const snapshot = { ...order, providerOrderId: null, clientPlatform: 'ios', environment: 'production', wechatEnv: 0,
+    internalSku: product.internalSku, productName: product.displayName, unitPriceFen: product.priceFen, orderAmountFen: product.priceFen }
+  const context = { originalId: ORIGINAL_ID, openid: OPENID, userId: '42', now: NOW }
+  const notification = appleMessageBody(snapshot, context)
+  assert(!Object.hasOwn(notification, 'WeChatPayInfo'))
+  assert.throws(() => normalizeWechatGoodsDeliveryMessage(notification, snapshot, context))
+  const queryResult = appleQueryResult(snapshot, NOW)
+  const fact = normalizeWechatGoodsDeliveryMessage(notification, snapshot, { ...context, queryResult })
+  assert.equal(fact.providerMerchantOrderNo, queryResult.wechatOrderId)
+  assert.equal(fact.providerTransactionId, queryResult.wechatPaymentOrderId)
+  assert.equal(fact.paidAtSeconds, queryResult.paidAtSeconds)
+  for (const changes of [{ status: 1, paidFeeFen: 0, paidAtSeconds: 0, wechatPaymentOrderId: null },
+    { orderType: 1 }, { orderType: 8 }, { paidFeeFen: product.priceFen + 1 }, { environmentType: 2 },
+    { orderId: 'VP' + 'B'.repeat(30) }, { wechatPaymentOrderId: null }, { paidAtSeconds: null }]) {
+    assert.throws(() => normalizeWechatGoodsDeliveryMessage(notification, snapshot, { ...context, queryResult: { ...queryResult, ...changes } }))
+  }
+}
+console.log('Apple missing WeChatPayInfo: real query references/time required; unpaid/refund/mismatched facts rejected.')

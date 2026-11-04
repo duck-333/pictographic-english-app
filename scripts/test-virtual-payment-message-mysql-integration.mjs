@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
+import http from 'node:http'
+import { once } from 'node:events'
 import { readFile } from 'node:fs/promises'
 import mysql from 'mysql2/promise'
 import { membershipProductForPrice } from '../miniapp-uni/word-app1/common/membership-products.js'
@@ -12,6 +14,9 @@ import {
 } from '../server/virtual-payment-message.mjs'
 import { createVirtualPaymentService } from '../server/virtual-payment-service.mjs'
 import { createVirtualPaymentStore } from '../server/virtual-payment-store.mjs'
+import { createVirtualPaymentClient } from '../server/virtual-payment-client.mjs'
+import { createVirtualPaymentMessageRoutes } from '../server/virtual-payment-message-routes.mjs'
+import { appleAesRequest, appleMessageBody, appleQueryPayload, appleQueryResult } from './fixtures/virtual-payment-apple.mjs'
 import { runWithGuaranteedCleanup } from './test-virtual-payment-mysql-integration.mjs'
 
 const EXPECTED_HOST = '127.0.0.1'
@@ -625,6 +630,102 @@ async function runScenarios(pool) {
   assert.equal(yearlyReloaded.paidAmountFen, 9800)
   assert.equal(yearlyReloaded.deliveryStatus, 'delivered')
   console.log('MySQL yearly notification: 9800 fen/365 days persisted; concurrent and repeated notifications grant once.')
+  await runAppleMessageScenarios(pool, store)
+
+}
+
+async function runAppleMessageScenarios(pool, store) {
+  const aesKey = Buffer.alloc(32, 17), appId = 'wx1234567890abcdef', token = 'AppleMysqlToken'
+  const env = {
+    NODE_ENV: 'production', VIRTUAL_PAYMENT_ENABLED: 'true', VIRTUAL_PAYMENT_ENV: 'production',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_OFFER_ID: 'fake-production-offer', WECHAT_VIRTUAL_PAYMENT_PRODUCTION_APP_KEY: 'fake-production-key',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_PRODUCT_ID: 'legacy-30',
+    WECHAT_VIRTUAL_PAYMENT_PRODUCTION_MONTHLY_PRODUCT_ID: 'ios-plan-1200', WECHAT_VIRTUAL_PAYMENT_PRODUCTION_YEARLY_PRODUCT_ID: 'ios-plan-9800',
+    VIRTUAL_PAYMENT_WECHAT_MESSAGE_ENABLED: 'true', WECHAT_VIRTUAL_PAYMENT_MESSAGE_TOKEN: token,
+    WECHAT_VIRTUAL_PAYMENT_MESSAGE_ORIGINAL_ID: ORIGINAL_ID, WECHAT_VIRTUAL_PAYMENT_MESSAGE_FORMAT: 'json',
+    WECHAT_VIRTUAL_PAYMENT_MESSAGE_MODE: 'aes', WECHAT_VIRTUAL_PAYMENT_MESSAGE_ENCODING_AES_KEY: aesKey.toString('base64').slice(0, -1),
+    WECHAT_MINIAPP_APPID: appId
+  }
+  let currentUser, queryFails = false, queryChanges = {}, queryCalls = 0
+  const orders = new Map()
+  const client = createVirtualPaymentClient({ env, accessTokenProvider: { async getAccessToken() { return 'fake-token' } },
+    async fetch(url, options) {
+      queryCalls++
+      assert.equal(new URL(url).pathname, '/xpay/query_order')
+      const input = JSON.parse(options.body)
+      assert.equal(input.openid, OPENID); assert.equal(input.env, 0)
+      if (queryFails) throw new Error('fake timeout')
+      return new Response(JSON.stringify(appleQueryPayload(orders.get(input.order_id), T0, queryChanges)), { status: 200 })
+    }
+  })
+  const routes = createVirtualPaymentMessageRoutes({ env, now: () => new Date(T0), virtualPaymentStore: store,
+    virtualPaymentClient: client, identityStore: { async findWechatBindingForPayment(openid) { return openid === OPENID ? { userId: currentUser } : null } } })
+  const server = http.createServer(async (req, res) => {
+    if (!await routes.handle(req, res, new URL(req.url, 'http://local.invalid').pathname)) { res.writeHead(404); res.end() }
+  })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  async function send(order) {
+    const body = appleMessageBody(order, { originalId: ORIGINAL_ID, openid: OPENID, now: T0 })
+    assert.equal(Object.hasOwn(body, 'WeChatPayInfo'), false)
+    const encoded = appleAesRequest(body, { aesKey, appId, token })
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/wechat/virtual-payment/message?${encoded.query}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: encoded.body })
+    await response.text()
+    return response.status
+  }
+  try {
+    for (const [userId, first] of [['1909', 'notification'], ['1910', 'query']]) {
+      currentUser = userId
+      const service = createVirtualPaymentService({ env, store, now: () => T0,
+        paymentSessionService: { async exchangeAndVerifyPaymentSession() { throw new Error('paid recovery must use stored evidence') } },
+        signingService: { createPaymentParameters() { throw new Error('recovery must not sign a new payment') } } })
+      for (const priceFen of [1200, 9800]) {
+        const created = await store.createOrder({ ...orderInput(userId, 'apple-' + first + '-' + priceFen,
+          { productId: 'ios-plan-' + priceFen, priceFen }), environment: 'production', wechatEnv: 0, clientPlatform: 'ios' })
+        const pending = await store.markOrderPending(userId, created.order.orderNo)
+        orders.set(pending.orderNo, pending)
+        const context = { expectedProductId: pending.productId, expectedPriceFen: priceFen }
+        if (first === 'query') {
+          const fact = normalizeVerifiedWechatQueryFact(appleQueryResult(pending, T0), pending, { now: () => T0.getTime() })
+          await store.reconcileVerifiedWechatQuery(userId, pending.orderNo, fact, context)
+          assert.equal(await store.findTrustedWechatQueryPaidEvidence(userId, pending.orderNo), true)
+          assert.equal((await service.reconcileOwnedOrder({ authenticatedUserId: userId, orderNo: pending.orderNo, loginCode: 'unused-code' })).paymentStatus, 'paid')
+        } else {
+          assert.equal(pending.paymentStatus, 'pending'); assert.equal(pending.providerTransactionId, null); assert.equal(pending.paidAt, null)
+          const before = await membershipCounts(pool, userId)
+          queryFails = true
+          assert.equal(await send(pending), 503)
+          queryFails = false
+          for (const changes of [{ status: 1, paid_fee: 0, paid_time: 0, wxpay_order_id: '' }, { paid_fee: priceFen + 1 },
+            { order_type: 1 }, { order_type: 8 }, { env_type: 2 }, { wxpay_order_id: '' }]) {
+            queryChanges = changes
+            assert.notEqual(await send(pending), 200)
+          }
+          queryChanges = {}
+          assert.deepEqual(await membershipCounts(pool, userId), before)
+          assert.equal((await store.findByUserAndOrderNo(userId, pending.orderNo)).paymentStatus, 'pending')
+          const [[events]] = await pool.execute('SELECT COUNT(*) AS count FROM virtual_payment_events WHERE order_no = ?', [pending.orderNo])
+          assert.equal(Number(events.count), 0)
+          assert((await store.listRecoveryOrders(userId, null, { environment: 'production', wechatEnv: 0 })).orders.some(row => row.orderNo === pending.orderNo))
+        }
+        assert.equal(await send(pending), 200)
+        assert.deepEqual(await Promise.all([send(pending), send(pending)]), [200, 200])
+        const paid = await store.findByUserAndOrderNo(userId, pending.orderNo)
+        assert.equal(paid.deliveryStatus, 'delivered'); assert.equal(paid.paidAmountFen, priceFen)
+        assert.equal(paid.providerOrderId, appleQueryResult(pending, T0).wechatOrderId)
+        assert.equal(paid.providerTransactionId, appleQueryResult(pending, T0).wechatPaymentOrderId)
+        assert.equal(await store.findTrustedWechatQueryPaidEvidence(userId, pending.orderNo), true)
+        assert.equal((await service.getOwnedOrder({ authenticatedUserId: userId, orderNo: pending.orderNo })).deliveryStatus, 'delivered')
+      }
+      assert.deepEqual(await membershipCounts(pool, userId), { grants: 2, transactions: 2 })
+      const [grants] = await pool.execute('SELECT days_granted FROM membership_grants WHERE user_id = ? ORDER BY effective_start_at, id', [userId])
+      assert.deepEqual(grants.map(row => Number(row.days_granted)), [30, 365])
+      const [[entitlement]] = await pool.execute('SELECT membership_expire_at FROM user_entitlements WHERE user_id = ?', [userId])
+      assert.equal(entitlement.membership_expire_at.toISOString(), new Date(T0.getTime() + 395 * 86400000).toISOString())
+    }
+    assert(queryCalls > 0)
+    console.log('Apple AES/MySQL: both plans, pending notification-first/query-first, type 7 evidence/recovery, failures without writes, retries and concurrent duplicates grant exactly 395 days.')
+  } finally { server.close(); await once(server, 'close') }
 }
 
 const config = configFrom(process.env)

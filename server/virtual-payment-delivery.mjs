@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 
 import {
   matchesVirtualPaymentEnvironment,
+  matchesVirtualPaymentOrderType,
   VIRTUAL_PAYMENT_PRODUCT,
   virtualPaymentEnvironment,
   virtualPaymentProductForPrice
@@ -52,7 +53,7 @@ export function normalizeVerifiedWechatDeliveryQueryFact(input, order, options =
     typeof order.orderNo !== 'string' || !ORDER_NUMBER_PATTERN.test(order.orderNo) ||
     input.orderId !== order.orderNo ||
     input.environment !== order.environment || input.environmentType !== environmentConfig.expectedWechatEnvironmentType ||
-    input.orderType !== 0 || input.orderFeeFen !== order.orderAmountFen ||
+    !matchesVirtualPaymentOrderType(input.orderType, order) || input.orderFeeFen !== order.orderAmountFen ||
     typeof input.status !== 'number' || !Number.isSafeInteger(input.status) ||
     input.status < 0 || input.status > 10 ||
     typeof input.wechatOrderId !== 'string' || !SAFE_REFERENCE_PATTERN.test(input.wechatOrderId) ||
@@ -144,7 +145,7 @@ export function normalizeVerifiedWechatDeliveryQueryFact(input, order, options =
     providerOrderId: input.wechatOrderId,
     providerTransactionId: input.wechatPaymentOrderId,
     wechatStatus: input.status,
-    orderType: 0,
+    orderType: input.orderType,
     orderAmountFen: order.orderAmountFen,
     paidAmountFen: input.paidFeeFen,
     paidAtSeconds: input.paidAtSeconds,

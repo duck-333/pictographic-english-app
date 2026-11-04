@@ -1,5 +1,6 @@
 import { MEMBERSHIP_PLANS } from '../miniapp-uni/word-app1/common/membership-products.js'
 import assert from 'node:assert/strict'
+import { appleQueryResult } from './fixtures/virtual-payment-apple.mjs'
 
 import { normalizeVerifiedWechatDeliveryQueryFact } from '../server/virtual-payment-delivery.mjs'
 import { createVirtualPaymentService } from '../server/virtual-payment-service.mjs'
@@ -20,7 +21,7 @@ const order = Object.freeze({
   providerTransactionId: 'WXPAY1', paymentStatus: 'paid', entitlementStatus: 'granted',
   deliveryStatus: 'confirming', internalSku: 'membership_30d', productName: '30天学习会员',
   quantity: 1, unitPriceFen: 3000, orderAmountFen: 3000, currency: 'CNY',
-  environment: 'sandbox', wechatEnv: 1, paymentChannel: 'wechat_virtual_payment',
+  environment: 'sandbox', wechatEnv: 1, paymentChannel: 'wechat_virtual_payment', clientPlatform: 'android',
   paidAt: new Date(NOW.getTime() - 3600_000).toISOString(), version: 9
 })
 const query4 = Object.freeze({
@@ -368,3 +369,18 @@ for (const product of MEMBERSHIP_PLANS) for (const environment of ['sandbox', 'p
   assert.throws(() => normalizeVerifiedWechatDeliveryQueryFact({ ...query, orderFeeFen: product.priceFen + 1 }, snapshot, options))
 }
 console.log('Monthly/yearly delivery query validation passed.')
+
+for (const product of MEMBERSHIP_PLANS) {
+  const snapshot = { ...order, clientPlatform: 'ios', environment: 'production', wechatEnv: 0,
+    internalSku: product.internalSku, productName: product.displayName, unitPriceFen: product.priceFen, orderAmountFen: product.priceFen }
+  const query = appleQueryResult(snapshot, NOW, { wechatOrderId: snapshot.providerOrderId,
+    wechatPaymentOrderId: snapshot.providerTransactionId, paidAtSeconds: Date.parse(snapshot.paidAt) / 1000 })
+  const options = { queryOperationId: 'e'.repeat(64), querySequence: 1, claimedOrderVersion: snapshot.version, now: NOW.getTime() }
+  const fact = normalizeVerifiedWechatDeliveryQueryFact(query, snapshot, options)
+  assert.equal(fact.orderType, 7)
+  for (const orderType of [0, 1, 8]) assert.throws(() => normalizeVerifiedWechatDeliveryQueryFact({ ...query, orderType }, snapshot, options))
+  for (const invalidOrder of [{ ...snapshot, clientPlatform: 'android' }, { ...snapshot, environment: 'sandbox', wechatEnv: 1 }]) {
+    assert.throws(() => normalizeVerifiedWechatDeliveryQueryFact(query, invalidOrder, options))
+  }
+}
+console.log('Apple delivery query: type 7 preserved for both plans, refund/platform/environment mismatches rejected.')

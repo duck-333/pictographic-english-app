@@ -268,3 +268,14 @@ for (const value of ['bad/id', SECRET_SENTINELS.WECHAT_VIRTUAL_PAYMENT_SANDBOX_P
     error => error.code === 'VIRTUAL_PAYMENT_CONFIG_INVALID')
 }
 console.log('New membership product ID configuration passed.')
+
+const { isVirtualPaymentClientPlatform } = await import('../server/virtual-payment-config.mjs')
+for (const platform of ['android', 'harmony', 'windows']) {
+  assert.equal(isVirtualPaymentClientPlatform(platform, 'production'), true)
+  assert.equal(isVirtualPaymentClientPlatform(platform, 'sandbox'), true)
+}
+assert.equal(isVirtualPaymentClientPlatform('ios', 'production'), true)
+assert.equal(isVirtualPaymentClientPlatform('ios', 'sandbox'), false)
+for (const platform of ['mac', 'devtools', 'IOS', null, {}]) {
+  assert.equal(isVirtualPaymentClientPlatform(platform, 'production'), false)
+}

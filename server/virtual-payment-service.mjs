@@ -1,6 +1,7 @@
 import { membershipProductForSku } from '../miniapp-uni/word-app1/common/membership-products.js'
 import {
   getVirtualPaymentConfig,
+  isVirtualPaymentClientPlatform,
   isVirtualPaymentProductId,
   VIRTUAL_PAYMENT_PRODUCT,
   virtualPaymentProductForPrice,
@@ -18,7 +19,6 @@ const ALLOWED_CREATE_FIELDS = new Set([
   'sku',
   'platform'
 ])
-const ALLOWED_PLATFORMS = new Set(['android', 'harmony', 'windows'])
 const ALLOWED_RECONCILE_FIELDS = new Set(['authenticatedUserId', 'orderNo', 'loginCode'])
 const ALLOWED_ENTITLEMENT_FIELDS = new Set(['authenticatedUserId', 'orderNo'])
 const ALLOWED_DELIVERY_FIELDS = new Set(['authenticatedUserId', 'orderNo'])
@@ -71,8 +71,8 @@ function normalizeUserId(value) {
   return numeric.toString()
 }
 
-function normalizePlatform(value) {
-  if (typeof value !== 'string' || !ALLOWED_PLATFORMS.has(value)) {
+function normalizePlatform(value, environment) {
+  if (!isVirtualPaymentClientPlatform(value, environment)) {
     throw createServiceError('Payment platform is unsupported.', 'PAYMENT_PLATFORM_UNSUPPORTED', 400)
   }
   return value
@@ -231,7 +231,7 @@ function assertCompleteLocalPaidOrder(order, config, userId, nowProvider) {
     order.environment !== config.environment ||
     order.wechatEnv !== config.wechatEnv ||
     order.paymentChannel !== PAYMENT_CHANNEL ||
-    !ALLOWED_PLATFORMS.has(order.clientPlatform) ||
+    !isVirtualPaymentClientPlatform(order.clientPlatform, order.environment) ||
     !isCanonicalPaidAt(order.paidAt, nowValue) ||
     !isProviderReference(order.providerOrderId) ||
     !isProviderReference(order.providerTransactionId) ||
@@ -349,7 +349,7 @@ export function createVirtualPaymentService(options = {}) {
     const userId = normalizeUserId(input.authenticatedUserId)
     const clientRequestId = normalizeVirtualPaymentClientRequestId(input.clientRequestId)
     assertAllowedUser(config, userId)
-    const platform = normalizePlatform(input.platform)
+    const platform = normalizePlatform(input.platform, config.environment)
 
     let order
     try {

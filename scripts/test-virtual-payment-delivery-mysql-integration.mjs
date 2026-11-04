@@ -68,7 +68,8 @@ function orderInput(userId, requestId, options = {}) {
     userId, clientRequestId: requestId, internalSku: product.internalSku, productId: options.productId || PRODUCT_ID,
     productName: product.displayName, quantity: 1, unitPriceFen: priceFen, orderAmountFen: priceFen,
     currency: 'CNY', environment: 'sandbox', wechatEnv: 1,
-    paymentChannel: 'wechat_virtual_payment', clientPlatform: 'android'
+    paymentChannel: 'wechat_virtual_payment', clientPlatform: 'android',
+    ...(options.clientPlatform === 'ios' ? { clientPlatform: 'ios', environment: 'production', wechatEnv: 0 } : {})
   }
 }
 
@@ -79,9 +80,9 @@ async function createGrantedOrder(store, userId, requestId, suffix, now = T0, op
     orderId: pending.orderNo,
     wechatOrderId: `WX${suffix}`,
     wechatPaymentOrderId: `WXPAY${suffix}`,
-    status: 2, orderType: 0, orderFeeFen: pending.unitPriceFen, paidFeeFen: pending.unitPriceFen,
+    status: 2, orderType: pending.clientPlatform === 'ios' ? 7 : 0, orderFeeFen: pending.unitPriceFen, paidFeeFen: pending.unitPriceFen,
     paidAtSeconds: Math.floor(now.getTime() / 1000) - 3600,
-    providedAtSeconds: 0, environmentType: 2, environment: 'sandbox'
+    providedAtSeconds: 0, environmentType: pending.wechatEnv === 0 ? 1 : 2, environment: pending.environment
   }
   const fact = normalizeVerifiedWechatQueryFact(rawQuery, pending, { now: () => now.getTime() })
   const context = { expectedProductId: pending.productId, expectedPriceFen: pending.unitPriceFen }
@@ -979,6 +980,34 @@ async function runScenarios(pool, singleConnectionPool) {
   const [[yearlyGrant]] = await pool.execute('SELECT duration_seconds FROM membership_grants WHERE source_id = ?', [yearly.order.orderNo])
   assert.equal(Number(yearlyGrant.duration_seconds), 365 * 86400)
   console.log('MySQL yearly delivery: configured SKU, 365-day prerequisite verification and replay without regrant passed.')
+  for (const [userId, priceFen] of [['748', 1200], ['749', 9800]]) {
+    const created = await createGrantedOrder(store, userId, 'apple-delivery-' + userId, 'APPLE' + userId, T0,
+      { priceFen, productId: 'apple-' + priceFen, clientPlatform: 'ios' })
+    const context = { expectedProductId: created.order.productId, expectedPriceFen: priceFen }
+    assert.equal(created.rawQuery.orderType, 7)
+    assert.equal(await store.findTrustedWechatQueryPaidEvidence(userId, created.order.orderNo), true)
+    const before = await membershipSnapshot(pool, userId)
+    const claim = await store.claimDeliveryWork(userId, created.order.orderNo, { ...context, now: clock() })
+    await store.markDeliveryDispatching(userId, created.order.orderNo, claim.attempt.operationId, { ...context, now: clock(1000) })
+    await store.finishDeliveryNotify(userId, created.order.orderNo, claim.attempt.operationId,
+      { kind: 'uncertain', errorCode: 'DELIVERY_NOTIFY_UNCERTAIN', now: clock(2000) })
+    const work = await store.claimDeliveryWork(userId, created.order.orderNo, { ...context, now: clock(70_000) })
+    assert.equal(work.action, 'query')
+    const fact = deliveryFact(created.rawQuery, work.order, 4, Math.floor(clock(60_000).getTime() / 1000), clock(70_000), work.query)
+    assert.equal(fact.orderType, 7)
+    // A correctly hashed type-0 fact still cannot update the locked iOS order.
+    const wrongType = deliveryFact({ ...created.rawQuery, orderType: 0 }, { ...work.order, clientPlatform: 'android' },
+      4, Math.floor(clock(60_000).getTime() / 1000), clock(70_000), work.query)
+    await assert.rejects(store.applyDeliveryQueryFact(userId, created.order.orderNo, wrongType, { ...context, now: clock(70_000) }),
+      error => error.code === 'PAYMENT_DELIVERY_QUERY_INVALID')
+    assert.equal((await store.applyDeliveryQueryFact(userId, created.order.orderNo, fact, { ...context, now: clock(70_000) })).deliveryStatus, 'delivered')
+    const [[raw]] = await pool.execute('SELECT order_type FROM virtual_payment_delivery_queries WHERE order_id = ? AND query_status = ?', [created.order.id, 'applied'])
+    assert.equal(Number(raw.order_type), 7)
+    assert.equal((await store.claimDeliveryWork(userId, created.order.orderNo, { ...context, now: clock(80_000) })).action, 'delivered')
+    assert.equal(await store.findTrustedWechatQueryPaidEvidence(userId, created.order.orderNo), true)
+    assert.equal(await membershipSnapshot(pool, userId), before)
+  }
+  console.log('Apple MySQL: both type-7 query facts, evidence reload, uncertain-delivery recovery and persisted delivery type 7 passed without regrant.')
 }
 
 async function testEntrySchema(connection, config, database) {

@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 
 import {
   matchesVirtualPaymentEnvironment,
+  matchesVirtualPaymentOrderType,
   VIRTUAL_PAYMENT_PRODUCT,
   virtualPaymentEnvironment,
   virtualPaymentProductForPrice
@@ -112,7 +113,9 @@ function requireNullableInteger(value) {
   return requireInteger(value)
 }
 
-export function createWechatQueryCanonicalFact(input) {
+export function createWechatQueryCanonicalFact(input, order) {
+  // Canonicalization alone does not authorize a payment. Store writers also
+  // match the type/environment against their locked, trusted local order.
   const product = virtualPaymentProductForPrice(input && input.orderAmountFen)
   if (
     !isPlainObject(input) ||
@@ -124,7 +127,8 @@ export function createWechatQueryCanonicalFact(input) {
     !ORDER_NUMBER_PATTERN.test(input.orderNo) ||
     typeof input.orderType !== 'number' ||
     !Number.isSafeInteger(input.orderType) ||
-    input.orderType !== 0 ||
+    !(input.orderType === 0 || (input.orderType === 7 && input.environment === 'production')) ||
+    (order !== undefined && !matchesVirtualPaymentOrderType(input.orderType, order)) ||
     !product || (input.environment === 'production' && product.sandboxTest === true)
   ) {
     throw reconciliationError('Wechat payment query fact is invalid.')
@@ -225,7 +229,7 @@ export function normalizeVerifiedWechatQueryFact(input, order, options = {}) {
     throw reconciliationError('Wechat payment query result does not match the order.')
   }
   const providerOrderId = requireProviderId(input.wechatOrderId)
-  if (input.orderType !== 0 || input.orderFeeFen !== order.orderAmountFen) {
+  if (!matchesVirtualPaymentOrderType(input.orderType, order) || input.orderFeeFen !== order.orderAmountFen) {
     throw reconciliationError('Wechat payment query result does not match the order.')
   }
   requireNullableInteger(input.providedAtSeconds)
@@ -272,7 +276,7 @@ export function normalizeVerifiedWechatQueryFact(input, order, options = {}) {
     orderAmountFen: order.orderAmountFen,
     paidAmountFen,
     paidAtSeconds
-  })
+  }, order)
   return Object.freeze({
     source: 'wechat_query',
     environment: order.environment,

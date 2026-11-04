@@ -1,5 +1,24 @@
 # Documentation
 
+## 2026-11-04：Apple支付两项P1修复（待独立复审）
+
+- 状态核对：codex/ios-virtual-payment、HEAD 8c664a1d17a67915768cb5634049bba198ee5a3f；原13个未暂存文件修改保留，暂存区为空。旧首轮iOS测试使用普通支付通知，不能证明Apple报文到账；旧三文件候选已标记不可发布。
+- P1类型7：config复用本地平台/环境判断；reconciliation和delivery验证正式iOS只允许7，既有Android/Harmony/Windows只允许0。Store在事务锁定本地订单后再次校验类型/环境，查询事实按原canonical规则持久化，重读结合本地client_platform恢复原类型并验hash；发货查询表真实保存7。类型1/8及错配均拒绝，不改表。
+- P1缺省WeChatPayInfo：AES签名/解密、OpenID绑定和订单归属、GoodsInfo与配置/本地商品校验后，路由复用既有服务端query_order。以同一OpenID/订单查单并校验类型7、环境、订单、金额和已付款状态，提取真实平台订单号/交易号/付款时间，再走既有通知事务；iOS的provider_order_id也写入原字段，支持后续读取/恢复。没有伪造字段或采用客户端成功回调。超时、未付款或错配不写发放，可重试。
+- 实际验证：10个脚本config、reconciliation、reconciliation-store、reconciliation-routes、entitlement-store、delivery、delivery-routes、message、message-store、message-routes最终均退出0；两项现有delivery/message MySQL集成退出0。新增夹具无WeChatPayInfo且order_type=7，经过独立AES编码→实际路由→实际查询客户端适配器→实际MySQL事务，覆盖两档通知先到/查单先到、失败无权益/仍可恢复、重复并发仅一次发放，各账号月卡+年卡顺延395天。原Android/旧单回归包含在上述脚本。
+- MySQL仅既有127.0.0.1:3308容器/MySQL8.0.46随机隔离库，无残留且容器恢复停止。中间失败来自新夹具漏注入签名依赖及与旧用例共用用户，修正后通过；没有因此改生产代码。前端本轮未改，复用既有构建，不重复沙箱购买或无关全套。
+- 新候选为ios-payment-p1-candidate/ios-payment-p1-server.tar.gz，SHA-256 5019c1a5c030d179a7fdd3463dac439de64fd51c3c90d16232116cbb8ba5c9b9；基线如上加当前未提交改动，逐文件哈希及完整7项清单见candidate.json/server-files.sha256；既有14文件中的其余7项沿用原生产候选，含兼容版权益存储，不带邀请入口/迁移。后续发布前仍须核对生产现场原件，不能用本地候选代替证据。
+- 尚未暂存、提交、部署、上传、真实支付或连接远端。真实iPhone扣款到账、真实微信AES通知、中断恢复和独立针对性复审均待完成。本节取代下方首轮“本地适配完成/三文件候选”的发布结论。
+
+## 2026-11-04：iOS 虚拟支付本地适配
+
+- 根因：virtual-payment-api-client.js、virtual-payment-service.mjs、virtual-payment-store.mjs 均排除 ios。现改为仅正式环境允许 ios；客户端还核对微信 >=8.0.68、requestVirtualPayment API 能力和既有 release 限制。版本要求参考腾讯云开发维护的 https://github.com/TencentCloudBase/skills/blob/main/skills/cloudbase-wechat-integration/references/virtual-payment.md；用户提供版本 8.0.79 / iOS 18.7.8，平台截图显示 IAP 已开通。
+- 两个后端模块复用 config 中同一平台判断；没有改支付签名、价格、会员发放事务或数据库结构。client_platform 已为 VARCHAR(32)。
+- 10 个定向脚本退出 0：miniapp-virtual-payment-client、virtual-payment-config、service、store、reconciliation、reconciliation-store、entitlement-store、delivery、message-store、message-routes。两个已有 MySQL 集成 order/message 新增 iOS 场景并退出 0：两档 INSERT/重读/恢复，30+365=395 天顺延、通知最终发货和重复幂等。仅使用原本机 127.0.0.1:3308 MySQL 8.0.46 容器的随机隔离库，清理后容器恢复停止；未连接远端数据库。
+- production HBuilderX Vue2 构建成功，正式 API https://baxiaota.com、AppID wxf9a29e671fac34d2、1 元入口 false，月卡 1200 分/30 天、年卡 9800 分/365 天已核对产物。全局 Node 24 失败及包装器路径失败的产物保留；成功构建改用 HBuilderX 自带 Node 18.20.0 和正确 Windows 上下文，不改源码配置或依赖、不清理共享缓存。
+- 独立分支基线 8c664a1d17a67915768cb5634049bba198ee5a3f，当前为未提交改动；本轮 fetch 远端连接失败，不声称已核验远端最新。三文件服务端候选与上次正式候选基线一致，未包含 master 的邀请相关入口和权益存储。构建、结果及候选在项目外 ios-build-verification.json / ios-payment-local-candidate 记录。
+- 尚未部署生产、上传小程序、执行微信开发者工具交互或真实 iOS 付款/AES 通知。若已产生 iOS 订单，不能直接回退到拒绝 ios 的服务端，应先暂停新购并保留可处理这些订单的发货/恢复能力；不回滚订单或会员数据。
+
 ## 2026-10-30：会员名称P2修复与真实MySQL补验
 
 - 修复`miniapp-uni/word-app1/pages/mine/index.vue`：`membershipType=monthly`展示“会员”；不新增类型、迁移或按剩余天数猜测套餐，继续展示到期日期。`node scripts/test-miniapp-learning-benefits.mjs`退出0，执行页面实际computed验证年卡、月卡、购书赠送会员均显示“会员”及各自到期日期，购买页与订单的价格／天数仍准确。

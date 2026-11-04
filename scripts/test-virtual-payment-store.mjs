@@ -100,6 +100,8 @@ const pool = {
         unit_price_fen: params[7],
         order_amount_fen: params[8],
         currency: params[9],
+        environment: params[10],
+        wechat_env: params[11],
         client_platform: params[13]
       })
       return [{ affectedRows: 1 }]
@@ -779,3 +781,16 @@ console.log('Virtual payment store tests passed.')
     (error) => error.code === 'PAYMENT_SERVICE_UNAVAILABLE'
   )
 }
+
+for (const [internalSku, priceFen] of [['membership_30d_v2', 1200], ['membership_365d', 9800]]) {
+  const made = await store.createOrder(createInput({
+    internalSku, unitPriceFen: priceFen, orderAmountFen: priceFen,
+    productName: priceFen === 1200 ? '30天学习会员' : '365天学习会员',
+    environment: 'production', wechatEnv: 0, clientPlatform: 'ios'
+  }))
+  assert.equal(made.order.clientPlatform, 'ios')
+  assert.equal(made.order.unitPriceFen, priceFen)
+  assert.equal((await store.findByUserAndOrderNo('42', made.order.orderNo)).clientPlatform, 'ios')
+}
+await assert.rejects(store.createOrder(createInput({ clientPlatform: 'ios' })), { code: 'PAYMENT_REQUEST_INVALID' })
+console.log('iOS Store: both production plans persist/reload; sandbox iOS rejected.')

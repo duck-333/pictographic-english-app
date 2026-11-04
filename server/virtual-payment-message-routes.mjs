@@ -1,5 +1,6 @@
 import { virtualPaymentProductForPrice, virtualPaymentProductId } from './virtual-payment-config.mjs'
 import { getVirtualPaymentConfig } from './virtual-payment-config.mjs'
+import { createVirtualPaymentClient } from './virtual-payment-client.mjs'
 import {
   decryptWechatAesMessage,
   encryptWechatAesMessage,
@@ -9,6 +10,7 @@ import {
 import {
   getVirtualPaymentMessageConfig,
   normalizeWechatGoodsDeliveryMessage,
+  validateWechatGoodsDeliveryMessage,
   parseWechatMessageQuery,
   verifyWechatMessageSignature
 } from './virtual-payment-message.mjs'
@@ -136,12 +138,24 @@ export function createVirtualPaymentMessageRoutes(options = {}) {
         order.environment !== current.paymentConfig.environment || order.wechatEnv !== current.paymentConfig.wechatEnv) {
       throw new Error('message rejected')
     }
-    const fact = normalizeWechatGoodsDeliveryMessage(body, order, {
+    const context = {
       originalId: current.messageConfig.originalId,
       openid: body.OpenId,
       userId: binding.userId,
       now
-    })
+    }
+    // Validate the signed/decrypted notification and ownership before querying.
+    validateWechatGoodsDeliveryMessage(body, order, context)
+    if (!Object.hasOwn(body, 'WeChatPayInfo') && order.clientPlatform === 'ios') {
+      if (order.environment !== 'production') throw new Error('message rejected')
+      try {
+        current.paymentClient ||= options.virtualPaymentClient || createVirtualPaymentClient(options)
+        context.queryResult = await current.paymentClient.queryOrder({ openid: body.OpenId, orderNo: order.orderNo })
+      } catch {
+        throw Object.assign(new Error('Payment query unavailable.'), { code: 'PAYMENT_QUERY_UNAVAILABLE', statusCode: 503 })
+      }
+    }
+    const fact = normalizeWechatGoodsDeliveryMessage(body, order, context)
     await current.store.applyGoodsDeliveryNotification(binding.userId, order.orderNo, fact, { now })
   }
 

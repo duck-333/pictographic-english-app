@@ -127,6 +127,7 @@ function harness(overrides = {}) {
             linked_user_id: state.order.user_id, linked_product_id: state.order.product_id,
             linked_internal_sku: state.order.internal_sku, linked_quantity: state.order.quantity,
             linked_unit_price_fen: state.order.unit_price_fen,
+            linked_client_platform: state.order.client_platform,
             linked_provider_order_id: state.order.provider_order_id,
             linked_provider_transaction_id: state.order.provider_transaction_id,
             order_amount_fen: state.order.order_amount_fen, paid_amount_fen: state.order.paid_amount_fen,
@@ -136,7 +137,7 @@ function harness(overrides = {}) {
         if (sql.includes('FROM virtual_payment_delivery_attempts')) { state.lockOrder.push('attempts'); return [[state.attempt ? { ...state.attempt } : null].filter(Boolean)] }
         if (sql.includes('FROM virtual_payment_delivery_queries')) { state.lockOrder.push('queries'); return [[]] }
         if (sql.startsWith('UPDATE virtual_payment_orders') && sql.includes("SET payment_status = 'paid'")) {
-          state.order = { ...state.order, payment_status: 'paid', provider_transaction_id: state.order.provider_transaction_id || values[0], paid_amount_fen: state.order.paid_amount_fen ?? values[1], paid_at: state.order.paid_at || values[2], version: state.order.version + 1, last_error_code: null }
+          state.order = { ...state.order, payment_status: 'paid', provider_transaction_id: state.order.provider_transaction_id || values[0], paid_amount_fen: state.order.paid_amount_fen ?? values[1], paid_at: state.order.paid_at || values[2], provider_order_id: state.order.provider_order_id || values[3], version: state.order.version + 1, last_error_code: null }
           return [{ affectedRows: 1 }]
         }
         if (sql.startsWith('UPDATE virtual_payment_orders') && sql.includes("SET entitlement_status = 'granted'")) {

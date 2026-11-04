@@ -259,3 +259,43 @@ console.log('Monthly/yearly client selection and legacy price validation passed.
 
 assert.equal(getVirtualPaymentClientProduct({ env: sandboxTestEnv, sku: SANDBOX_MEMBERSHIP_PRODUCT.internalSku }).priceFen, 100)
 assert.equal(getVirtualPaymentClientProduct({ env: sandboxTestEnv, sku: YEARLY_MEMBERSHIP_PRODUCT.internalSku }).priceFen, 9800)
+
+const iosNative = {
+  ...native,
+  getDeviceInfo: () => ({ platform: 'ios' }),
+  getAppBaseInfo: () => ({ version: '8.0.79' }),
+  getAccountInfoSync: () => ({ miniProgram: { envVersion: 'release' } }),
+  canIUse: (apiName) => apiName === 'requestVirtualPayment'
+}
+const iosOptions = { ...options, env: { NODE_ENV: 'production' }, wx: iosNative }
+for (const version of ['8.0.68', '8.0.79', '8.1.0', '9.0.0']) {
+  const supported = createVirtualPaymentApi({ ...iosOptions,
+    wx: { ...iosNative, getAppBaseInfo: () => ({ version }) } })
+  assert.equal(supported.context(true).platform, 'ios')
+}
+for (const version of ['8.0.67', '7.0.99', '', '8.0.x']) {
+  const unsupported = createVirtualPaymentApi({ ...iosOptions,
+    wx: { ...iosNative, getAppBaseInfo: () => ({ version }) } })
+  assert.throws(() => unsupported.context(true), { code: 'PAYMENT_RUNTIME_UNSUPPORTED' })
+}
+for (const wx of [{ ...iosNative, canIUse: () => false }, { ...iosNative, requestVirtualPayment: undefined }]) {
+  assert.throws(() => createVirtualPaymentApi({ ...iosOptions, wx }).context(true), { code: 'PAYMENT_RUNTIME_UNSUPPORTED' })
+}
+for (const envVersion of ['develop', 'trial']) {
+  const restricted = createVirtualPaymentApi({ ...iosOptions,
+    wx: { ...iosNative, getAccountInfoSync: () => ({ miniProgram: { envVersion } }) } })
+  assert.throws(() => restricted.context(true), { code: 'PAYMENT_SANDBOX_UNAVAILABLE' })
+}
+const iosApi = createVirtualPaymentApi(iosOptions)
+const iosOwner = iosApi.context(true)
+for (const product of [MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT]) {
+  await iosApi.create(iosOwner, 'ios-' + product.internalSku, undefined, undefined, product.internalSku)
+  assert.equal(requests.at(-1).url, 'https://baxiaota.com/api/user/virtual-payment/orders')
+  assert.equal(requests.at(-1).data.platform, 'ios')
+  assert.equal(requests.at(-1).data.sku, product.internalSku)
+  const signed = { ...params, signData: JSON.stringify({ env: 0, buyQuantity: 1,
+    currencyType: 'CNY', goodsPrice: product.priceFen, outTradeNo: orderNo }) }
+  assert.equal(await iosApi.invoke(iosOwner, signed, orderNo, undefined, product), 'unknown')
+  assert.equal(nativeCalls.at(-1).signData, signed.signData)
+}
+console.log('iOS production client: version/capability, release-only, both plans and payment invocation passed.')
