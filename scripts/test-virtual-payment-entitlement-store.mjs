@@ -58,6 +58,7 @@ function harness(overrides = {}) {
           provider_transaction_id: row.provider_transaction_id, payload_hash: Buffer.from(evidenceCanonical.payloadHash),
           processing_status: 'processed', received_count: 1, processed_at: NOW, attempt_count: 1,
           last_error_code: null, linked_order_id: row.id, linked_order_no: row.order_no,
+          linked_client_platform: row.client_platform,
           linked_provider_order_id: row.provider_order_id,
           linked_provider_transaction_id: row.provider_transaction_id,
           order_amount_fen: row.order_amount_fen, paid_amount_fen: row.paid_amount_fen,

@@ -157,6 +157,27 @@ async function testOrderStore(pool) {
     assert.equal(reloaded.internalSku, product.internalSku)
     assert.equal(reloaded.unitPriceFen, product.priceFen)
   }
+  for (const product of MEMBERSHIP_PLANS) {
+    const created = await planStore.createOrder(input('107', 'ios-' + product.internalSku, {
+      internalSku: product.internalSku, productId: 'ios-' + product.internalSku,
+      productName: product.displayName, unitPriceFen: product.priceFen, orderAmountFen: product.priceFen,
+      clientPlatform: 'ios', environment: 'production', wechatEnv: 0
+    }))
+    assert.equal(created.order.clientPlatform, 'ios')
+    assert.equal((await planStore.findByUserAndOrderNo('107', created.order.orderNo)).clientPlatform, 'ios')
+    const [[raw]] = await pool.execute(
+      'SELECT client_platform, environment, wechat_env, unit_price_fen FROM virtual_payment_orders WHERE order_no = ?',
+      [created.order.orderNo]
+    )
+    assert.equal(raw.client_platform, 'ios')
+    assert.equal(raw.environment, 'production')
+    assert.equal(Number(raw.wechat_env), 0)
+    assert.equal(Number(raw.unit_price_fen), product.priceFen)
+  }
+  const iosRecovery = await planStore.listRecoveryOrders('107', null, { environment: 'production', wechatEnv: 0 })
+  assert.equal(iosRecovery.orders.length, 2)
+  assert.equal((await planStore.listRecoveryOrders('107', null, { environment: 'sandbox', wechatEnv: 1 })).orders.length, 0)
+  console.log('iOS MySQL orders: both plans, raw persistence, reload and production-only recovery passed.')
   console.log('MySQL plans: monthly 1200/yearly 9800 order INSERT, raw SELECT and Store reload passed.')
 }
 

@@ -7,6 +7,8 @@ import { EventEmitter } from 'node:events'
 
 import { createApiHandler } from '../server/index.mjs'
 import { createVirtualPaymentMessageRoutes, readRawJsonBody } from '../server/virtual-payment-message-routes.mjs'
+import { createVirtualPaymentClient } from '../server/virtual-payment-client.mjs'
+import { appleAesRequest, appleMessageBody, appleQueryPayload } from './fixtures/virtual-payment-apple.mjs'
 
 const TOKEN = 'RouteMessageToken1'
 const ORIGINAL_ID = 'gh_route_original'
@@ -150,7 +152,7 @@ async function start(overrides = {}) {
     env: overrides.env || config(), nodeEnv: overrides.nodeEnv,
     now: () => new Date(NOW), virtualPaymentStore, identityStore,
     messageAesResponse: overrides.messageAesResponse,
-    virtualPaymentClient: { async notifyProvideGoods() { state.notifyCalls += 1 } },
+    virtualPaymentClient: overrides.virtualPaymentClient || { async notifyProvideGoods() { state.notifyCalls += 1 } },
     store: { async getWordCount() { return 0 } }, userStore: {}, wechatLoginClient: {}
   })
   const server = http.createServer(handler)
@@ -487,3 +489,58 @@ for (const product of MEMBERSHIP_PLANS) {
   } finally { await close(fixture) }
 }
 console.log('Monthly/yearly notification routes use their own configured product IDs.')
+
+for (const product of MEMBERSHIP_PLANS) {
+  const productId = 'apple-' + product.internalSku
+  const snapshot = { ...order, providerOrderId: null, paymentStatus: 'pending',
+    clientPlatform: 'ios', environment: 'production', wechatEnv: 0,
+    internalSku: product.internalSku, productId, productName: product.displayName,
+    unitPriceFen: product.priceFen, orderAmountFen: product.priceFen }
+  const env = productionConfig({
+    [product.durationSeconds === 30 * 86400 ? 'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_MONTHLY_PRODUCT_ID' : 'WECHAT_VIRTUAL_PAYMENT_PRODUCTION_YEARLY_PRODUCT_ID']: productId
+  })
+  let queryCalls = 0, queryOverrides = {}, queryFails = false
+  const client = createVirtualPaymentClient({ env, accessTokenProvider: { async getAccessToken() { return 'fake-access-token' } },
+    async fetch(url, options) {
+      queryCalls++
+      assert.equal(new URL(url).pathname, '/xpay/query_order')
+      assert.deepEqual(JSON.parse(options.body), { openid: OPENID, order_id: ORDER_NO, env: 0 })
+      if (queryFails) throw new Error('fake query timeout')
+      return new Response(JSON.stringify(appleQueryPayload(snapshot, NOW, queryOverrides)), { status: 200 })
+    }
+  })
+  const fixture = await start({ env, order: snapshot, virtualPaymentClient: client,
+    messageAesResponse: { randomBytes: size => Buffer.alloc(size, 12) } })
+  const notification = appleMessageBody(snapshot, { originalId: ORIGINAL_ID, openid: OPENID, now: NOW })
+  const encoded = appleAesRequest(notification, { aesKey: AES_KEY, appId: APP_ID, token: TOKEN })
+  const send = () => post(fixture, encoded.body, { query: encoded.query })
+  try {
+    for (const changes of [{ order_type: 1 }, { order_type: 8 }, { order_type: 0 }, { paid_fee: product.priceFen + 1 },
+      { order_fee: product.priceFen + 1 }, { env_type: 2 }, { status: 1, paid_fee: 0, paid_time: 0, wxpay_order_id: '' },
+      { wxpay_order_id: '' }, { paid_time: 0 }, { order_id: 'VP' + 'B'.repeat(30) }]) {
+      queryOverrides = changes
+      assert.notEqual((await send()).response.status, 200)
+      assert.equal(fixture.state.applyCalls, 0)
+      assert.equal(fixture.state.grants, 0)
+    }
+    queryFails = true
+    assert.equal((await send()).response.status, 503)
+    assert.equal(fixture.state.applyCalls, 0)
+    queryFails = false; queryOverrides = {}
+    const beforeInvalid = queryCalls
+    const wrongGoods = appleAesRequest({ ...notification, GoodsInfo: { ...notification.GoodsInfo, ProductId: 'wrong-goods' } },
+      { aesKey: AES_KEY, appId: APP_ID, token: TOKEN })
+    assert.equal((await post(fixture, wrongGoods.body, { query: wrongGoods.query })).response.status, 400)
+    assert.equal(queryCalls, beforeInvalid, 'reject mismatched goods before querying')
+    assert.equal((await post(fixture, encoded.body, { query: encoded.query.replace(/msg_signature=[^&]+/, 'msg_signature=' + '0'.repeat(40)) })).response.status, 401)
+    assert.equal(queryCalls, beforeInvalid, 'reject failed AES signature before querying')
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const result = await send()
+      assert.equal(result.response.status, 200)
+      assert.deepEqual(independentlyDecryptAesResponse(JSON.parse(result.text)).body, { ErrCode: 0, ErrMsg: 'success' })
+    }
+    assert.equal(fixture.state.grants, 1)
+    assert.equal(fixture.state.lastFact.providerTransactionId, appleQueryPayload(snapshot, NOW).order.wxpay_order_id)
+  } finally { await close(fixture) }
+}
+console.log('Apple AES routes: pending orders without WeChatPayInfo query real server facts; failure/mismatch grants nothing, retry succeeds.')

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 
 import { normalizeVerifiedWechatQueryFact } from '../server/virtual-payment-reconciliation.mjs'
+import { MEMBERSHIP_PLANS } from '../miniapp-uni/word-app1/common/membership-products.js'
+import { appleQueryResult } from './fixtures/virtual-payment-apple.mjs'
 import { createVirtualPaymentStore } from '../server/virtual-payment-store.mjs'
 
 const ORDER_NO = 'VPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
@@ -59,7 +61,8 @@ function normalizedOrder(source) {
     currency: source.currency,
     environment: source.environment,
     wechatEnv: source.wechat_env,
-    paymentChannel: source.payment_channel
+    paymentChannel: source.payment_channel,
+    clientPlatform: source.client_platform
   }
 }
 
@@ -130,6 +133,7 @@ function createTransactionHarness(options = {}) {
             ...eventRow,
             linked_order_id: orderRow.id,
             linked_order_no: orderRow.order_no,
+            linked_client_platform: orderRow.client_platform,
             linked_provider_order_id: orderRow.provider_order_id,
             linked_provider_transaction_id: orderRow.provider_transaction_id,
             order_amount_fen: orderRow.order_amount_fen,
@@ -595,3 +599,22 @@ assert.equal(conditionalFailure.counters.rollback, 1)
 assert.equal(conditionalFailure.counters.release, 1)
 
 console.log('virtual payment reconciliation store tests passed')
+
+for (const product of MEMBERSHIP_PLANS) {
+  const fields = { client_platform: 'ios', environment: 'production', wechat_env: 0,
+    internal_sku: product.internalSku, product_name: product.displayName, product_id: 'apple-' + product.internalSku,
+    unit_price_fen: product.priceFen, order_amount_fen: product.priceFen }
+  const snapshot = normalizedOrder(row(fields))
+  const query = appleQueryResult({ ...snapshot, orderNo: ORDER_NO }, NOW)
+  const fact = normalizeVerifiedWechatQueryFact(query, snapshot, { now: () => NOW.getTime() })
+  const context = { expectedProductId: fields.product_id, expectedPriceFen: product.priceFen }
+  const harness = createTransactionHarness({ order: fields })
+  await harness.store.reconcileVerifiedWechatQuery('42', ORDER_NO, fact, context)
+  assert.equal(await harness.store.findTrustedWechatQueryPaidEvidence('42', ORDER_NO), true)
+  const wrongType = normalizeVerifiedWechatQueryFact({ ...query, orderType: 0 }, { ...snapshot, clientPlatform: 'android' }, { now: () => NOW.getTime() })
+  const rejected = createTransactionHarness({ order: fields })
+  await assert.rejects(() => rejected.store.reconcileVerifiedWechatQuery('42', ORDER_NO, wrongType, context), error => error.code === 'PAYMENT_QUERY_RESULT_INVALID')
+  assert.equal(rejected.counters.orderUpdates, 0)
+  assert.equal(rejected.counters.eventInserts, 0)
+}
+console.log('Apple Store: type 7 evidence persisted/rebuilt; canonical type 0 cannot be applied to an iOS order.')

@@ -636,3 +636,21 @@ const oldResult = await legacyResume.service.createOrResumeOrder(request({ sku: 
 assert.equal(oldResult.product.priceFen, 3000)
 assert.equal(oldResult.product.durationSeconds, 30 * 86400)
 console.log('Monthly/yearly create, history resume and missing configuration passed.')
+
+for (const product of [MONTHLY_MEMBERSHIP_PRODUCT, YEARLY_MEMBERSHIP_PRODUCT]) {
+  const ios = createHarness({ env: productionEnv() })
+  const intent = request({ platform: 'ios', sku: product.internalSku })
+  await ios.service.createOrResumeOrder(intent)
+  const inserted = ios.calls.find(call => call[0] === 'create')[1]
+  assert.equal(inserted.clientPlatform, 'ios')
+  assert.equal(inserted.environment, 'production')
+  assert.equal(inserted.wechatEnv, 0)
+  assert.equal(inserted.unitPriceFen, product.priceFen)
+  await ios.service.createOrResumeOrder(intent)
+  assert.equal(ios.calls.filter(call => call[0] === 'create').length, 1)
+  assert.equal((await ios.service.getOwnedOrder({ authenticatedUserId: '42', orderNo: ORDER_NO })).orderNo, ORDER_NO)
+}
+const sandboxIos = createHarness()
+await assert.rejects(sandboxIos.service.createOrResumeOrder(request({ platform: 'ios' })), { code: 'PAYMENT_PLATFORM_UNSUPPORTED' })
+assert.deepEqual(sandboxIos.calls, [])
+console.log('iOS service: production monthly/yearly creation, resume, owned-order read and sandbox rejection passed.')

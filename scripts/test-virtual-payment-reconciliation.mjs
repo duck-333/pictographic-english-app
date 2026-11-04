@@ -1,6 +1,7 @@
 import { MEMBERSHIP_PLANS } from '../miniapp-uni/word-app1/common/membership-products.js'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
+import { appleQueryResult } from './fixtures/virtual-payment-apple.mjs'
 
 import {
   createWechatQueryCanonicalFact,
@@ -476,6 +477,7 @@ function createFormalEvidenceRow(status) {
     last_error_code: null,
     linked_order_id: 1,
     linked_order_no: ORDER_NO,
+    linked_client_platform: 'android',
     linked_provider_order_id: 'WXORDERPAID123',
     linked_provider_transaction_id: 'WXPAYPAID123',
     order_amount_fen: 3000,
@@ -681,3 +683,24 @@ for (const product of MEMBERSHIP_PLANS) for (const environment of ['sandbox', 'p
   assert.throws(() => normalizeVerifiedWechatQueryFact({ ...query, paidFeeFen: product.priceFen + 1 }, snapshot, { now: () => NOW }))
 }
 console.log('Monthly/yearly query amounts validated in both environments.')
+
+for (const product of MEMBERSHIP_PLANS) {
+  const snapshot = order({ internalSku: product.internalSku, productName: product.displayName,
+    unitPriceFen: product.priceFen, orderAmountFen: product.priceFen,
+    clientPlatform: 'ios', environment: 'production', wechatEnv: 0 })
+  const query = appleQueryResult(snapshot, new Date(NOW))
+  const fact = normalizeVerifiedWechatQueryFact(query, snapshot, { now: () => NOW })
+  assert.equal(fact.orderType, 7)
+  for (const orderType of [0, 1, 8]) assert.throws(() => normalizeVerifiedWechatQueryFact({ ...query, orderType }, snapshot))
+  for (const invalidOrder of [
+    { ...snapshot, clientPlatform: 'android' }, { ...snapshot, clientPlatform: 'windows' },
+    { ...snapshot, environment: 'sandbox', wechatEnv: 1 }, { ...snapshot, wechatEnv: 1 }
+  ]) assert.throws(() => normalizeVerifiedWechatQueryFact(query, invalidOrder))
+  assert.throws(() => createWechatQueryCanonicalFact({ ...JSON.parse(createWechatQueryCanonicalFact({
+    source: fact.source, environment: fact.environment, wechatEnv: fact.wechatEnv, orderNo: fact.orderNo,
+    providerOrderId: fact.providerOrderId, providerTransactionId: fact.providerTransactionId,
+    wechatStatus: fact.wechatStatus, meaning: fact.meaning, targetPaymentStatus: fact.targetPaymentStatus,
+    orderType: 7, orderAmountFen: fact.orderAmountFen, paidAmountFen: fact.paidAmountFen, paidAtSeconds: fact.paidAtSeconds
+  }, snapshot).raw), orderType: 8 }, snapshot))
+}
+console.log('Apple query type 7: both plans accepted; refund types and platform/environment mismatches rejected.')

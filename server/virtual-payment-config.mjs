@@ -46,6 +46,17 @@ export function matchesVirtualPaymentEnvironment(environment, wechatEnv, environ
     (environmentType === undefined || expected.expectedWechatEnvironmentType === environmentType))
 }
 
+export function isVirtualPaymentClientPlatform(platform, environment) {
+  return ['android', 'harmony', 'windows'].includes(platform) ||
+    (platform === 'ios' && environment === 'production')
+}
+
+export function matchesVirtualPaymentOrderType(orderType, order) {
+  return Boolean(order && matchesVirtualPaymentEnvironment(order.environment, order.wechatEnv) &&
+    isVirtualPaymentClientPlatform(order.clientPlatform, order.environment) &&
+    orderType === (order.clientPlatform === 'ios' ? 7 : 0))
+}
+
 export const virtualPaymentProductForPrice = membershipProductForPrice
 
 export function isVirtualPaymentProductId(value) {
