@@ -261,9 +261,9 @@ export default {
     },
     membershipStatusText() {
       const status = this.entitlement ? String(this.entitlement.membershipStatus || 'none') : 'none'
-      if (status === 'active') return '有效'
-      if (status === 'expired') return '已过期'
       if (status === 'cancelled') return '已取消'
+      if (this.membershipActive) return '有效'
+      if (this.membershipExpired) return '已到期'
       return '未开通'
     },
     membershipActive() {
