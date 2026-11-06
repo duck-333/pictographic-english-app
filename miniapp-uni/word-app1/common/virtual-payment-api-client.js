@@ -95,6 +95,10 @@ function supportsIosVirtualPayment(native) {
   }
 }
 
+function observeDiagnostic(report, ...args) {
+  try { if (report) report(...args) } catch (_) {}
+}
+
 export function createVirtualPaymentApi(options = {}) {
   const product = (sku) => getVirtualPaymentClientProduct({ env: options.env, sku })
   const runtime = () => {
@@ -150,7 +154,7 @@ export function createVirtualPaymentApi(options = {}) {
         current.environment !== owner.environment || current.wechatEnv !== owner.wechatEnv) throw paymentError('PAYMENT_CONTEXT_CHANGED')
     return current
   }
-  async function request(owner, method, path, data, run) {
+  async function request(owner, method, path, data, run, reportHttp) {
     if (run) run.check()
     assertContext(owner)
     const requestImpl = options.request || ((args) => uni.request(args))
@@ -166,6 +170,7 @@ export function createVirtualPaymentApi(options = {}) {
             if (settled) return
             try { assertContext(owner) } catch (error) { finish(reject, error); return }
             const body = response.data
+            observeDiagnostic(reportHttp, { httpStatus: response.statusCode, code: body && body.code })
             if (response.statusCode >= 200 && response.statusCode < 300 && body && body.ok === true) finish(resolve, body)
             else finish(reject, paymentError(response.statusCode === 401 ? 'UNAUTHORIZED' : String(body && body.code || 'PAYMENT_RESPONSE_INVALID')))
           },
@@ -189,17 +194,17 @@ export function createVirtualPaymentApi(options = {}) {
       return validateRecoveryPage(result, cursor)
     },
     async prepare(owner) { assertContext(owner, true); const code = await freshCode(); assertContext(owner, true); return code },
-    async create(owner, clientRequestId, preparedCode, run, sku = product().internalSku) {
+    async create(owner, clientRequestId, preparedCode, run, sku = product().internalSku, reportHttp) {
       const current = assertContext(owner, true)
       const loginCode = preparedCode || await freshCode()
       assertContext(owner, true)
-      return request(owner, 'POST', ROOT, { clientRequestId, loginCode, sku, platform: current.platform }, run)
+      return request(owner, 'POST', ROOT, { clientRequestId, loginCode, sku, platform: current.platform }, run, reportHttp)
     },
-    get(owner, orderNo, run) { return request(owner, 'GET', orderPath(orderNo), undefined, run) },
-    async reconcile(owner, orderNo, run) {
+    get(owner, orderNo, run, reportHttp) { return request(owner, 'GET', orderPath(orderNo), undefined, run, reportHttp) },
+    async reconcile(owner, orderNo, run, reportHttp) {
       const loginCode = await freshCode()
       assertContext(owner)
-      return request(owner, 'POST', `${orderPath(orderNo)}/reconcile`, { loginCode }, run)
+      return request(owner, 'POST', `${orderPath(orderNo)}/reconcile`, { loginCode }, run, reportHttp)
     },
     entitlement(owner, orderNo, run) { return request(owner, 'POST', `${orderPath(orderNo)}/entitlement`, {}, run) },
     delivery(owner, orderNo, run) { return request(owner, 'POST', `${orderPath(orderNo)}/delivery`, {}, run) },
@@ -209,18 +214,45 @@ export function createVirtualPaymentApi(options = {}) {
       assertContext(owner)
       return result
     },
-    invoke(owner, params, orderNo, run, selectedProduct = product()) {
-      if (run) run.check()
-      assertContext(owner, true)
-      validatePaymentParams(params, orderNo, selectedProduct.priceFen, owner.wechatEnv)
+    invoke(owner, params, orderNo, run, selectedProduct = product(), report) {
+      try {
+        if (run) run.check()
+        assertContext(owner, true)
+        validatePaymentParams(params, orderNo, selectedProduct.priceFen, owner.wechatEnv)
+      } catch (error) {
+        observeDiagnostic(report, 'invokeCheck', { passed: false, code: error?.code })
+        throw error
+      }
+      observeDiagnostic(report, 'invokeCheck', { passed: true })
       return new Promise((resolve) => {
         let settled = false, unsubscribe = () => {}
         const finish = (hint) => { if (settled) return; settled = true; clearTimeout(timer); unsubscribe(); resolve(hint) }
-        const timer = setTimeout(() => finish('unknown'), options.paymentTimeout || 15000)
-        if (run) unsubscribe = run.onCancel(() => finish('unknown'))
-        try { runtime().requestVirtualPayment({ mode: params.mode, signData: params.signData, paySig: params.paySig, signature: params.signature,
-          success() { finish('unknown') }, fail(error) { finish(error && error.errCode === -2 ? 'cancelled' : 'unknown') }
-        }) } catch (_) { finish('unknown') }
+        const reportNative = (step, result) => {
+          try {
+            observeDiagnostic(report, step, { errCode: result?.errCode, errMsg: result?.errMsg || result?.message })
+          } catch (_) {}
+        }
+        const timer = setTimeout(() => {
+          if (!settled) observeDiagnostic(report, 'nativeTimeout')
+          finish('unknown')
+        }, options.paymentTimeout || 15000)
+        if (run) unsubscribe = run.onCancel(() => {
+          if (!settled) observeDiagnostic(report, 'nativeExit')
+          finish('unknown')
+        })
+        try {
+          const native = runtime()
+          observeDiagnostic(report, 'nativeCall')
+          native.requestVirtualPayment({ mode: params.mode, signData: params.signData, paySig: params.paySig, signature: params.signature,
+            success(result) { reportNative('nativeSuccess', result); finish('unknown') },
+            fail(error) { reportNative('nativeFail', error); finish(error && error.errCode === -2 ? 'cancelled' : 'unknown') },
+            complete(result) { reportNative('nativeComplete', result) }
+          })
+          observeDiagnostic(report, 'nativeReturned')
+        } catch (error) {
+          reportNative('nativeThrow', error)
+          finish('unknown')
+        }
       })
     }
   }

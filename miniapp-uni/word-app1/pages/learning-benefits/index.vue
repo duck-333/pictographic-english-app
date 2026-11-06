@@ -35,6 +35,7 @@
         <text class="note">{{ statusText(record) }}</text>
         <button v-if="!isFinished(record)" class="secondary" :disabled="busy || !queryAllowed" @tap="query(record)">查询购买结果</button>
         <button v-if="!record.mayHaveInvoked" class="secondary" :disabled="busy || !purchaseAllowed" @tap="buy(record.clientRequestId)">继续未完成的购买</button>
+        <button v-if="diagnosticIds.includes(record.clientRequestId)" class="secondary" @tap="copyDiagnostic(record)">复制诊断信息</button>
       </view>
     </view>
   </view>
@@ -49,7 +50,8 @@ import { paymentMessage } from '../../common/virtual-payment-api-client.js'
 export default {
   data() {
     return { loggedIn: false, purchaseAllowed: false, queryAllowed: false, busy: false, records: [], entitlement: null, products: MEMBERSHIP_PLANS, selectedSku: MONTHLY_MEMBERSHIP_PRODUCT.internalSku, monthlyDuration: MONTHLY_MEMBERSHIP_PRODUCT.durationSeconds,
-      availabilityMessage: '', message: '', nextCursor: null, discoveryFailed: false, loadSequence: 0, pageEpoch: 0, pageVisible: true, pageDisposed: false }
+      availabilityMessage: '', message: '', nextCursor: null, discoveryFailed: false, loadSequence: 0, pageEpoch: 0, pageVisible: true, pageDisposed: false,
+      diagnosticIds: [] }
   },
   computed: {
     selectedProduct() { return this.products.find((p) => p.internalSku === this.selectedSku) || this.products[0] },
@@ -95,6 +97,15 @@ export default {
     reloadRecords() {
       if (this.pageDisposed || !this.pageVisible) return
       try { this.records = this.purchase.list() } catch (error) { this.records = []; this.message = paymentMessage(error) }
+      try { this.diagnosticIds = this.purchase.diagnosticIds?.() || [] } catch (_) { this.diagnosticIds = [] }
+    },
+    copyDiagnostic(record) {
+      const failed = () => { try { uni.showToast({ title: '复制诊断信息失败', icon: 'none' }) } catch (_) {} }
+      try {
+        const data = this.purchase.diagnosticText(record.clientRequestId)
+        if (!data) { failed(); return }
+        uni.setClipboardData({ data, fail: failed })
+      } catch (_) { failed() }
     },
     async refresh() {
       if (this.pageDisposed || !this.pageVisible) return
@@ -102,6 +113,7 @@ export default {
       this.loggedIn = Boolean(getAuthSession())
       this.entitlement = null
       this.records = []
+      this.diagnosticIds = []
       this.purchaseAllowed = false
       this.queryAllowed = false
       this.availabilityMessage = ''
