@@ -1,5 +1,6 @@
 import { MONTHLY_MEMBERSHIP_PRODUCT, LEGACY_MEMBERSHIP_PRODUCT, membershipProductForPrice, membershipPriceText, membershipDays } from './membership-products.js'
 import { createVirtualPaymentApi, paymentError, validatePaymentParams, validateRecoveryPage } from './virtual-payment-api-client.js'
+import { createPaymentDiagnostics } from './virtual-payment-diagnostics.js'
 
 export function purchaseConfirmation(priceText = membershipPriceText(MONTHLY_MEMBERSHIP_PRODUCT), product = MONTHLY_MEMBERSHIP_PRODUCT) {
   const days = membershipDays(product)
@@ -34,8 +35,10 @@ export function recordMessage(record) {
 }
 export function createPurchaseController(options = {}) {
   const api = options.api || createVirtualPaymentApi()
-  const storage = options.storage || { get: (key) => uni.getStorageSync(key), set: (key, value) => uni.setStorageSync(key, value) }
+  const deviceStorage = { get: (key) => uni.getStorageSync(key), set: (key, value) => uni.setStorageSync(key, value) }
+  const storage = options.storage || deviceStorage
   const now = options.now || Date.now
+  const diagnostics = createPaymentDiagnostics(options.diagnosticStorage || deviceStorage, now)
   let visible = true
   let epoch = 0, disposed = false, currentRun = null
   let discoveryIncomplete = false
@@ -151,14 +154,27 @@ export function createPurchaseController(options = {}) {
       typeof value[flag] !== 'boolean' || value[flag] !== (value.deliveryStatus === status))) throw paymentError('PAYMENT_RESPONSE_INVALID')
     return value
   }
+  async function observedRequest(owner, record, step, request) {
+    let http
+    try {
+      return await request(details => {
+        http = details
+        diagnostics.record(owner, record, `${step}Http`, details)
+      })
+    } catch (error) {
+      diagnostics.record(owner, record, `${step}Error`, { httpStatus: http?.httpStatus, code: http?.code || error?.code })
+      throw error
+    }
+  }
   async function recover(owner, record, run) {
     if (!record.orderNo || !active(owner, run)) return record
-    let order = await api.get(owner, record.orderNo, run)
+    run.onPaymentExit = () => diagnostics.record(owner, record, 'pageExit')
+    let order = await observedRequest(owner, record, 'get', report => api.get(owner, record.orderNo, run, report))
     active(owner, run)
     order = validateSummary(order, record)
     record = savedProduct(record, order)
     if (order.entitlementStatus !== 'granted' && ['pending', 'confirming'].includes(order.paymentStatus)) {
-      order = await api.reconcile(owner, record.orderNo, run)
+      order = await observedRequest(owner, record, 'reconcile', report => api.reconcile(owner, record.orderNo, run, report))
       active(owner, run)
       order = validateReconcile(order, record)
     }
@@ -192,7 +208,11 @@ export function createPurchaseController(options = {}) {
     const listeners = new Set()
     const run = { epoch, check() { if (disposed || !visible || epoch !== run.epoch) throw STALE },
       onCancel(fn) { listeners.add(fn); return () => listeners.delete(fn) },
-      cancel() { for (const fn of listeners) fn(); listeners.clear() } }
+      cancel() {
+        for (const fn of listeners) fn()
+        listeners.clear()
+        if (run.onPaymentExit) run.onPaymentExit()
+      } }
     currentRun = run
     run.promise = Promise.resolve().then(() => {
       if (disposed || !visible || run.epoch !== epoch) throw STALE
@@ -210,21 +230,35 @@ export function createPurchaseController(options = {}) {
     if (currentRun) { currentRun.cancel(); if (running === currentRun) running = null; currentRun = null }
   }
   async function pay(owner, record, loginCode, run) {
+    run.onPaymentExit = () => diagnostics.record(owner, record, 'pageExit')
     active(owner, run)
     api.assertContext(owner, true)
     if (record.mayHaveInvoked) return recover(owner, record, run)
-    const created = await api.create(owner, record.clientRequestId, loginCode, run, (recordProduct(record) || LEGACY_MEMBERSHIP_PRODUCT).internalSku)
+    const created = await observedRequest(owner, record, 'create', report => api.create(owner, record.clientRequestId,
+      loginCode, run, (recordProduct(record) || LEGACY_MEMBERSHIP_PRODUCT).internalSku, report))
     active(owner, run)
-    if (!created || !/^VP[A-F0-9]{30}$/.test(created.orderNo) || (record.orderNo && created.orderNo !== record.orderNo)) throw paymentError('PAYMENT_RESPONSE_INVALID')
-    record = save(owner, savedProduct({ ...record, orderNo: created.orderNo }, created))
-    validateCreate(created, record, owner)
+    diagnostics.record(owner, record, 'createResponse', {
+      orderNo: created?.orderNo, sku: created?.product?.internalSku, priceFen: created?.product?.priceFen,
+      paymentStatus: created?.paymentStatus, entitlementStatus: created?.entitlementStatus,
+      deliveryStatus: created?.deliveryStatus, hasPaymentParams: Boolean(created?.paymentParams)
+    })
+    try {
+      if (!created || !/^VP[A-F0-9]{30}$/.test(created.orderNo) || (record.orderNo && created.orderNo !== record.orderNo)) throw paymentError('PAYMENT_RESPONSE_INVALID')
+      record = save(owner, savedProduct({ ...record, orderNo: created.orderNo }, created))
+      validateCreate(created, record, owner)
+    } catch (error) {
+      diagnostics.record(owner, record, 'createCheck', { passed: false, code: error?.code })
+      throw error
+    }
+    diagnostics.record(owner, record, 'createCheck', { passed: true })
     if (record.mayHaveInvoked) return recover(owner, record, run)
     if (!['initializing', 'pending'].includes(created.paymentStatus) || created.entitlementStatus !== 'not_ready' || created.deliveryStatus !== 'not_ready') return recover(owner, record, run)
     // Durable write BEFORE entering the native API. A crash after this line is
     // unknown, even when native payment was not actually reached.
     record = publish(owner, { ...record, mayHaveInvoked: true }, 'unknown')
     active(owner, run)
-    const hint = await api.invoke(owner, created.paymentParams, record.orderNo, run, recordProduct(record) || LEGACY_MEMBERSHIP_PRODUCT)
+    const hint = await api.invoke(owner, created.paymentParams, record.orderNo, run,
+      recordProduct(record) || LEGACY_MEMBERSHIP_PRODUCT, (step, details) => diagnostics.record(owner, record, step, details))
     active(owner, run)
     record = publish(owner, record, hint === 'cancelled' ? 'cancelled' : 'unknown')
     return recover(owner, record, run)
@@ -258,6 +292,11 @@ export function createPurchaseController(options = {}) {
       })
     },
     list() { return records(api.context()).slice().reverse() },
+    diagnosticReport(clientRequestId) {
+      let owner
+      try { owner = api.context() } catch (_) { return { status: 'context_unavailable' } }
+      return diagnostics.report(owner, clientRequestId)
+    },
     pause, resume() { if (!disposed) visible = true }, dispose() { pause(); disposed = true },
     query(clientRequestId) {
       return single(async (run) => {
