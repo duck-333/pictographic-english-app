@@ -123,7 +123,6 @@ export function createPaymentDiagnostics(storage, now) {
         .map(step => [step, safeEvent(row.steps[step])]))
     }))
   }
-  function owned(owner) { return read().filter(row => row.scope === scope(owner)) }
   return {
     record(owner, record, step, details = {}) {
       try {
@@ -141,16 +140,17 @@ export function createPaymentDiagnostics(storage, now) {
         storage.set(STORAGE_KEY, rows.slice(-MAX_RECORDS))
       } catch (_) {}
     },
-    ids(owner) {
-      try { return owned(owner).map(row => row.clientRequestId) } catch (_) { return [] }
-    },
-    text(owner, clientRequestId) {
+    report(owner, clientRequestId) {
+      let row
       try {
-        const row = owned(owner).find(item => item.clientRequestId === clientRequestId)
-        if (!row) return ''
+        const ownerScope = scope(owner)
+        row = read().find(item => item.scope === ownerScope && item.clientRequestId === clientRequestId)
+      } catch (_) { return { status: 'read_failed' } }
+      if (!row) return { status: 'not_found' }
+      try {
         const { scope: ignored, ...report } = row
-        return JSON.stringify(report, null, 2)
-      } catch (_) { return '' }
+        return { status: 'ok', text: JSON.stringify(report, null, 2) }
+      } catch (_) { return { status: 'serialize_failed' } }
     }
   }
 }

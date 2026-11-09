@@ -35,7 +35,12 @@
         <text class="note">{{ statusText(record) }}</text>
         <button v-if="!isFinished(record)" class="secondary" :disabled="busy || !queryAllowed" @tap="query(record)">查询购买结果</button>
         <button v-if="!record.mayHaveInvoked" class="secondary" :disabled="busy || !purchaseAllowed" @tap="buy(record.clientRequestId)">继续未完成的购买</button>
-        <button v-if="diagnosticIds.includes(record.clientRequestId)" class="secondary" @tap="copyDiagnostic(record)">复制诊断信息</button>
+        <button class="secondary" @tap="viewDiagnostic(record)">查看诊断</button>
+        <button class="secondary" @tap="copyDiagnostic(record)">复制诊断信息</button>
+        <view v-if="diagnosticView && diagnosticView.clientRequestId === record.clientRequestId">
+          <text class="diagnostic-text" :user-select="true">{{ diagnosticView.text }}</text>
+          <button class="secondary" @tap="diagnosticView = null">收起诊断</button>
+        </view>
       </view>
     </view>
   </view>
@@ -43,7 +48,7 @@
 
 <script>
 import { MEMBERSHIP_PLANS, MONTHLY_MEMBERSHIP_PRODUCT, membershipProductForPrice, membershipDays, membershipPriceText } from '../../common/membership-products.js'
-import { getAuthSession } from '../../common/auth-store.js'
+import { getAuthSession, subscribeAuthSession } from '../../common/auth-store.js'
 import { createPurchaseController, recordMessage } from '../../common/virtual-payment-purchase.js'
 import { paymentMessage } from '../../common/virtual-payment-api-client.js'
 
@@ -51,7 +56,7 @@ export default {
   data() {
     return { loggedIn: false, purchaseAllowed: false, queryAllowed: false, busy: false, records: [], entitlement: null, products: MEMBERSHIP_PLANS, selectedSku: MONTHLY_MEMBERSHIP_PRODUCT.internalSku, monthlyDuration: MONTHLY_MEMBERSHIP_PRODUCT.durationSeconds,
       availabilityMessage: '', message: '', nextCursor: null, discoveryFailed: false, loadSequence: 0, pageEpoch: 0, pageVisible: true, pageDisposed: false,
-      diagnosticIds: [] }
+      diagnosticView: null }
   },
   computed: {
     selectedProduct() { return this.products.find((p) => p.internalSku === this.selectedSku) || this.products[0] },
@@ -64,6 +69,10 @@ export default {
       title: '象形英语｜以形释义解码单词',
       path: '/pages/index/index'
     }
+  },
+  onLoad() {
+    if (this.unsubscribeDiagnosticSession) return
+    this.unsubscribeDiagnosticSession = subscribeAuthSession(() => { this.diagnosticView = null })
   },
   onShow() {
     if (this.pageDisposed) return
@@ -84,8 +93,17 @@ export default {
     this.purchase.resume()
     this.refresh()
   },
-  onHide() { this.pageVisible = false; this.pageEpoch++; this.loadSequence++; if (this.purchase) this.purchase.pause() },
-  onUnload() { this.pageDisposed = true; this.pageVisible = false; this.pageEpoch++; this.loadSequence++; if (this.purchase) this.purchase.dispose() },
+  onHide() { this.diagnosticView = null; this.pageVisible = false; this.pageEpoch++; this.loadSequence++; if (this.purchase) this.purchase.pause() },
+  onUnload() {
+    this.unsubscribeDiagnosticSession?.()
+    this.unsubscribeDiagnosticSession = null
+    this.diagnosticView = null
+    this.pageDisposed = true
+    this.pageVisible = false
+    this.pageEpoch++
+    this.loadSequence++
+    if (this.purchase) this.purchase.dispose()
+  },
   methods: {
     days: membershipDays,
     price: membershipPriceText,
@@ -97,15 +115,34 @@ export default {
     reloadRecords() {
       if (this.pageDisposed || !this.pageVisible) return
       try { this.records = this.purchase.list() } catch (error) { this.records = []; this.message = paymentMessage(error) }
-      try { this.diagnosticIds = this.purchase.diagnosticIds?.() || [] } catch (_) { this.diagnosticIds = [] }
+    },
+    diagnosticNotice(title) {
+      try { uni.showToast({ title, icon: 'none' }) } catch (_) {}
+    },
+    viewDiagnostic(record) {
+      if (this.pageDisposed || !this.pageVisible || !record) return
+      this.diagnosticView = null
+      const result = this.purchase.diagnosticReport(record.clientRequestId)
+      if (result.status !== 'ok') {
+        this.diagnosticNotice({
+          not_found: '未找到该订单诊断',
+          read_failed: '诊断缓存读取失败',
+          serialize_failed: '诊断文本生成失败',
+          context_unavailable: '当前账号或环境不可用'
+        }[result.status])
+        return
+      }
+      this.diagnosticView = { clientRequestId: record.clientRequestId, text: result.text }
+      return result.text
     },
     copyDiagnostic(record) {
-      const failed = () => { try { uni.showToast({ title: '复制诊断信息失败', icon: 'none' }) } catch (_) {} }
-      try {
-        const data = this.purchase.diagnosticText(record.clientRequestId)
-        if (!data) { failed(); return }
-        uni.setClipboardData({ data, fail: failed })
-      } catch (_) { failed() }
+      const data = this.viewDiagnostic(record)
+      if (!data) return
+      const view = this.diagnosticView
+      const failed = () => {
+        if (this.diagnosticView === view) this.diagnosticNotice('剪贴板写入失败，可查看诊断')
+      }
+      try { uni.setClipboardData({ data, fail: failed }) } catch (_) { failed() }
     },
     async refresh() {
       if (this.pageDisposed || !this.pageVisible) return
@@ -113,7 +150,7 @@ export default {
       this.loggedIn = Boolean(getAuthSession())
       this.entitlement = null
       this.records = []
-      this.diagnosticIds = []
+      this.diagnosticView = null
       this.purchaseAllowed = false
       this.queryAllowed = false
       this.availabilityMessage = ''
@@ -181,4 +218,5 @@ export default {
 button[disabled] { opacity: .55; }
 .section-title { font-size: 32rpx; font-weight: 700; margin-bottom: 16rpx; }
 .record { border-top: 1rpx solid #e2edf5; padding-top: 22rpx; margin-top: 22rpx; }
+.diagnostic-text { display: block; margin-top: 16rpx; padding: 16rpx; background: #f4f9ff; font-size: 24rpx; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 </style>

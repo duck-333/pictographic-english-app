@@ -292,11 +292,10 @@ export function createPurchaseController(options = {}) {
       })
     },
     list() { return records(api.context()).slice().reverse() },
-    diagnosticIds() {
-      try { return diagnostics.ids(api.context()) } catch (_) { return [] }
-    },
-    diagnosticText(clientRequestId) {
-      try { return diagnostics.text(api.context(), clientRequestId) } catch (_) { return '' }
+    diagnosticReport(clientRequestId) {
+      let owner
+      try { owner = api.context() } catch (_) { return { status: 'context_unavailable' } }
+      return diagnostics.report(owner, clientRequestId)
     },
     pause, resume() { if (!disposed) visible = true }, dispose() { pause(); disposed = true },
     query(clientRequestId) {

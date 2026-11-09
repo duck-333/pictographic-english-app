@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { clearAuthSession, saveAuthSession } from '../miniapp-uni/word-app1/common/auth-store.js'
 import { createVirtualPaymentApi } from '../miniapp-uni/word-app1/common/virtual-payment-api-client.js'
 import { createPaymentDiagnostics } from '../miniapp-uni/word-app1/common/virtual-payment-diagnostics.js'
 import { createPurchaseController } from '../miniapp-uni/word-app1/common/virtual-payment-purchase.js'
@@ -11,6 +12,7 @@ const script = vue.match(/<script>([\s\S]*?)<\/script>/)[1]
   .replace(/from '([^']+)'/g, (_, path) => `from '${new URL(path, pageUrl).href}'`)
 const page = (await import(`data:text/javascript,${encodeURIComponent(script)}`)).default
 assert(vue.includes('@tap="copyDiagnostic(record)"'))
+assert(vue.includes('@tap="viewDiagnostic(record)"'))
 
 const diagnosticsKey = 'pictographic:purchase-diagnostics:v1'
 const orderNo = 'VP' + 'A'.repeat(30)
@@ -108,10 +110,25 @@ function assertPrivate(text) {
   const reopened = view(h.open())
   page.onShow.call(reopened)
   const record = reopened.records[0]
-  assert(reopened.diagnosticIds.includes(record.clientRequestId))
-  let clipboard, failures = 0
-  globalThis.uni = { setClipboardData: ({ data }) => { clipboard = data }, showToast: () => { failures++ } }
+  const notices = []
+  let clipboard, clipboardFail, copyCalls = 0
+  globalThis.uni = {
+    setClipboardData({ data, fail }) {
+      assert.equal(typeof data, 'string')
+      assert.equal(typeof fail, 'function')
+      copyCalls++
+      clipboard = data
+    },
+    showToast: ({ title }) => notices.push(title)
+  }
+  reopened.viewDiagnostic(record)
+  assert.equal(copyCalls, 0)
+  assert.equal(reopened.diagnosticView.clientRequestId, record.clientRequestId)
+  const text = reopened.diagnosticView.text
+  assertPrivate(text)
   reopened.copyDiagnostic(record)
+  assert.equal(copyCalls, 1)
+  assert.equal(clipboard, text)
   const report = JSON.parse(clipboard)
   assert.equal(report.orderNo, orderNo)
   assert.equal(report.environment, 'production')
@@ -146,21 +163,33 @@ function assertPrivate(text) {
   assertPrivate(clipboard)
   assert.equal(JSON.parse(clipboard).steps.nativeFail.errMsg, '错误详情已隐藏')
   const purchaseState = reopened.purchase.list()
-  uni.setClipboardData = ({ fail }) => fail({ errMsg: leaked })
+  uni.setClipboardData = ({ fail }) => { clipboardFail = fail }
   reopened.copyDiagnostic(record)
+  const visible = reopened.diagnosticView.text
+  clipboardFail({ errMsg: leaked })
+  assert.equal(reopened.diagnosticView.text, visible)
+  assertPrivate(visible)
   uni.setClipboardData = () => { throw new Error(leaked) }
   reopened.copyDiagnostic(record)
-  assert.equal(failures, 2)
+  assert.deepEqual(notices, ['剪贴板写入失败，可查看诊断', '剪贴板写入失败，可查看诊断'])
+  assert.equal(reopened.diagnosticView.text, visible)
   assert.deepEqual(reopened.purchase.list(), purchaseState)
+  assert.deepEqual(h.calls, ['create', 'native', 'get', 'reconcile'])
+  page.onHide.call(reopened)
+  assert.equal(reopened.diagnosticView, null)
+  page.onShow.call(reopened)
+  reopened.viewDiagnostic(reopened.records[0])
+  assert.equal(reopened.diagnosticView.text, visible)
   h.switchAccount()
-  assert.equal(reopened.purchase.diagnosticText(record.clientRequestId), '')
-  assert.deepEqual(reopened.purchase.diagnosticIds(), [])
+  reopened.copyDiagnostic(record)
+  assert.equal(reopened.diagnosticView, null)
+  assert.equal(notices.at(-1), '未找到该订单诊断')
 }
 
 for (const [native, step] of [['throw', 'nativeThrow'], ['wait', 'nativeTimeout']]) {
   const h = fixture({ native, timeout: 5 }), controller = h.open()
   await assert.rejects(controller.buy(), { code: failureCode })
-  const { steps } = JSON.parse(controller.diagnosticText(controller.list()[0].clientRequestId))
+  const { steps } = JSON.parse(controller.diagnosticReport(controller.list()[0].clientRequestId).text)
   assert(steps[step])
   assert(!steps.nativeExit)
   assert.equal(steps.reconcileError.httpStatus, 503)
@@ -207,12 +236,15 @@ for (const [native, step] of [['throw', 'nativeThrow'], ['wait', 'nativeTimeout'
   ]
   for (const [input, expectedCode, expectedMessage] of cases) {
     diagnostics.record(owner, record, 'nativeFail', input)
-    const exported = diagnostics.text(owner, record.clientRequestId)
+    const exported = diagnostics.report(owner, record.clientRequestId).text
     const { nativeFail } = JSON.parse(exported).steps
     assert.equal(nativeFail.errCode, expectedCode, input.errMsg)
     assert.equal(nativeFail.errMsg, expectedMessage, input.errMsg)
     assertPrivate(exported)
     assert(!exported.includes('current environment does not match'))
+  }
+  for (const other of [{ environment: 'sandbox' }, { baseUrl: 'https://fixture.invalid' }, { userId: '43' }]) {
+    assert.deepEqual(diagnostics.report({ ...owner, ...other }, record.clientRequestId), { status: 'not_found' })
   }
 }
 
@@ -225,7 +257,7 @@ for (const [native, step] of [['throw', 'nativeThrow'], ['wait', 'nativeTimeout'
   h.lateNativeError()
   assert.deepEqual(h.calls, ['create', 'native'])
   const reopened = h.open()
-  const { steps } = JSON.parse(reopened.diagnosticText(reopened.list()[0].clientRequestId))
+  const { steps } = JSON.parse(reopened.diagnosticReport(reopened.list()[0].clientRequestId).text)
   assert(steps.pageExit && steps.nativeExit && !steps.nativeTimeout)
   assert.equal(steps.nativeFail.errCode, -15014)
   assert.equal(steps.nativeComplete.errCode, -15014)
@@ -234,7 +266,7 @@ for (const [native, step] of [['throw', 'nativeThrow'], ['wait', 'nativeTimeout'
 {
   const h = fixture({ invalidCreate: true }), controller = h.open()
   await assert.rejects(controller.buy(), { code: 'PAYMENT_RESPONSE_INVALID' })
-  const { steps } = JSON.parse(controller.diagnosticText(controller.list()[0].clientRequestId))
+  const { steps } = JSON.parse(controller.diagnosticReport(controller.list()[0].clientRequestId).text)
   assert.equal(steps.createCheck.passed, false)
   assert(!steps.nativeCall)
   assert.deepEqual(h.calls, ['create'])
@@ -245,7 +277,40 @@ for (const failure of [{ brokenStorage: true }, { brokenWrite: true }]) {
   await assert.rejects(controller.buy(), { code: failureCode })
   assert.deepEqual(h.calls, ['create', 'native', 'get', 'reconcile'])
   assert.equal(controller.list()[0].hint, 'unknown')
-  assert.equal(controller.diagnosticText(controller.list()[0].clientRequestId), '')
+  const screen = view(controller)
+  let notice
+  globalThis.uni = {
+    setClipboardData: () => assert.fail('Clipboard should not receive a missing report'),
+    showToast: ({ title }) => { notice = title }
+  }
+  screen.copyDiagnostic(controller.list()[0])
+  assert.equal(screen.diagnosticView, null)
+  assert.equal(notice, failure.brokenStorage ? '诊断缓存读取失败' : '未找到该订单诊断')
+}
+
+{
+  const h = fixture(), controller = h.open()
+  await assert.rejects(controller.buy(), { code: failureCode })
+  const screen = view(controller)
+  let notice, clipboardCalls = 0
+  globalThis.uni = {
+    setClipboardData: () => { clipboardCalls++ },
+    showToast: ({ title }) => { notice = title }
+  }
+  const record = controller.list()[0]
+  const stringify = JSON.stringify
+  try {
+    JSON.stringify = (value, replacer, space) => {
+      if (space === 2) throw new Error(leaked)
+      return stringify(value, replacer, space)
+    }
+    screen.copyDiagnostic(record)
+  } finally { JSON.stringify = stringify }
+  assert.equal(screen.diagnosticView, null)
+  assert.equal(clipboardCalls, 0)
+  assert.equal(notice, '诊断文本生成失败')
+  screen.viewDiagnostic(record)
+  assertPrivate(screen.diagnosticView.text)
 }
 
 {
@@ -253,8 +318,58 @@ for (const failure of [{ brokenStorage: true }, { brokenWrite: true }]) {
   const owner = { environment: 'production', baseUrl: 'https://baxiaota.com', userId: '42' }
   for (let i = 0; i < 12; i++) diagnostics.record(owner, { clientRequestId: `purchase-limit-${i}` }, 'nativeCall')
   assert.equal(h.storage.get(diagnosticsKey).length, 10)
-  assert.equal(diagnostics.text(owner, 'purchase-limit-0'), '')
-  assert(diagnostics.text(owner, 'purchase-limit-11'))
+  assert.deepEqual(diagnostics.report(owner, 'purchase-limit-0'), { status: 'not_found' })
+  assert(diagnostics.report(owner, 'purchase-limit-11').text)
+}
+
+{
+  const h = fixture(), controller = h.open()
+  await assert.rejects(controller.buy(), { code: failureCode })
+  const record = controller.list()[0]
+  const screen = view(controller)
+  globalThis.uni = { getStorageSync: h.storage.get, setStorageSync: h.storage.set,
+    removeStorageSync: key => h.disk.delete(key) }
+  const clock = { now: Date.now, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout }
+  let now = clock.now(), expireSession
+  try {
+    Date.now = () => now
+    globalThis.setTimeout = callback => { expireSession = callback; return {} }
+    globalThis.clearTimeout = () => { expireSession = undefined }
+    const save = id => saveAuthSession({ token: secrets.token, user: { id }, expiresAt: new Date(now + 1000).toISOString() })
+    save('42')
+    page.onLoad.call(screen)
+    const unsubscribe = screen.unsubscribeDiagnosticSession
+    page.onLoad.call(screen)
+    assert.equal(screen.unsubscribeDiagnosticSession, unsubscribe)
+
+    screen.viewDiagnostic(record)
+    assert(screen.diagnosticView?.text)
+    now += 1000
+    expireSession()
+    assert.equal(screen.diagnosticView, null, 'expiry timer must close the open diagnostic')
+
+    save('42')
+    screen.viewDiagnostic(record)
+    assert(screen.diagnosticView?.text)
+    clearAuthSession()
+    assert.equal(screen.diagnosticView, null, 'logout must close the open diagnostic')
+
+    save('42')
+    screen.viewDiagnostic(record)
+    assert(screen.diagnosticView?.text)
+    save('43')
+    assert.equal(screen.diagnosticView, null, 'account switch must close the open diagnostic')
+
+    page.onUnload.call(screen)
+    assert.equal(screen.unsubscribeDiagnosticSession, null)
+    assert.equal(unsubscribe(), false, 'auth listener must already be removed')
+  } finally {
+    screen.unsubscribeDiagnosticSession?.()
+    clearAuthSession()
+    Date.now = clock.now
+    globalThis.setTimeout = clock.setTimeout
+    globalThis.clearTimeout = clock.clearTimeout
+  }
 }
 
 delete globalThis.wx
@@ -262,3 +377,5 @@ delete globalThis.uni
 console.log('Payment diagnostics: native fail + reconcile 503 survive reopen and clipboard export, with redaction, isolation and bounded storage.')
 console.log('Validation failure, synchronous throw, timeout, page exit, late callbacks and diagnostic I/O failures passed.')
 console.log('P2: errMsg-only categories, bounded explicit error codes, field precedence and reopened export passed.')
+console.log('Existing order: view without clipboard, copy failure fallback, reopen, and distinct missing/read/serialization messages passed.')
+console.log('Open diagnostic clears on session expiry, logout and account switch; the page releases its single subscription on unload.')
