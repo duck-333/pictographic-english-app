@@ -107,10 +107,37 @@ function getNowMs(now) {
   return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : Date.now()
 }
 
-function createWechatAccessTokenError(message, code = 'WECHAT_ACCESS_TOKEN_UNAVAILABLE', statusCode = 502) {
+// Internal diagnostic projection shared with the payment client and its log sink.
+// Never copy arbitrary messages, response objects, URLs, or nested causes.
+export function safeWechatErrorDiagnostic(value = {}, fromError = false) {
+  try {
+    // Read metadata and each field once, inside the same exception boundary.
+    const metadata = fromError ? value?.paymentDiagnostic : value
+    const { stage, reason, httpStatus, wechatErrcode } = metadata || {}
+    const stages = ['access_token', 'query_request', 'wechat_business', 'query_response', 'local_validation']
+    const reasons = ['unclassified', 'config_missing', 'network_error', 'timeout', 'http_error',
+      'invalid_response', 'response_too_large', 'wechat_rejected', 'data_not_found', 'local_error']
+    const result = {
+      stage: stages.includes(stage) ? stage : 'local_validation',
+      reason: reasons.includes(reason) ? reason : 'unclassified'
+    }
+    if (Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599) result.httpStatus = httpStatus
+    if (Number.isSafeInteger(wechatErrcode)) result.wechatErrcode = wechatErrcode
+    return result
+  } catch {
+    return { stage: 'local_validation', reason: 'unclassified' }
+  }
+}
+
+function createWechatAccessTokenError(message, code = 'WECHAT_ACCESS_TOKEN_UNAVAILABLE', statusCode = 502, diagnostic = {}) {
   const error = new Error(message)
   error.code = code
   error.statusCode = statusCode
+  try {
+    error.paymentDiagnostic = safeWechatErrorDiagnostic({ stage: 'access_token', reason:
+      code === 'WECHAT_ACCESS_TOKEN_TIMEOUT' ? 'timeout' :
+        code === 'WECHAT_ACCESS_TOKEN_CONFIG_MISSING' ? 'config_missing' : 'invalid_response', ...diagnostic })
+  } catch { error.paymentDiagnostic = safeWechatErrorDiagnostic() }
   return error
 }
 
@@ -164,7 +191,9 @@ function requestWechatAccessTokenResponse(url, options = {}) {
           } catch {
             // The controlled response error remains authoritative.
           }
-          rejectSafely(createWechatAccessTokenError('Wechat access token response is invalid.'))
+          rejectSafely(createWechatAccessTokenError('Wechat access token response is invalid.', undefined, undefined, {
+            httpStatus: statusCode, reason: Number.isInteger(statusCode) && (statusCode < 200 || statusCode >= 300) ? 'http_error' : 'invalid_response'
+          }))
           return
         }
         let raw = ''
@@ -184,7 +213,7 @@ function requestWechatAccessTokenResponse(url, options = {}) {
             } catch {
               // The controlled size error remains authoritative.
             }
-            rejectSafely(createWechatAccessTokenError('Wechat access token response is too large.'))
+            rejectSafely(createWechatAccessTokenError('Wechat access token response is too large.', undefined, undefined, { httpStatus: statusCode, reason: 'response_too_large' }))
             return
           }
           raw += chunk
@@ -196,19 +225,19 @@ function requestWechatAccessTokenResponse(url, options = {}) {
           })
         })
         res.on('error', () => {
-          rejectSafely(createWechatAccessTokenError('Wechat access token response failed.'))
+          rejectSafely(createWechatAccessTokenError('Wechat access token response failed.', undefined, undefined, { httpStatus: statusCode, reason: 'network_error' }))
         })
         res.on('aborted', () => {
-          rejectSafely(createWechatAccessTokenError('Wechat access token response failed.'))
+          rejectSafely(createWechatAccessTokenError('Wechat access token response failed.', undefined, undefined, { httpStatus: statusCode, reason: 'network_error' }))
         })
         res.on('close', () => {
           if (!settled) {
-            rejectSafely(createWechatAccessTokenError('Wechat access token response failed.'))
+            rejectSafely(createWechatAccessTokenError('Wechat access token response failed.', undefined, undefined, { httpStatus: statusCode, reason: 'network_error' }))
           }
         })
       })
     } catch {
-      rejectSafely(createWechatAccessTokenError('Wechat access token service is unavailable.'))
+      rejectSafely(createWechatAccessTokenError('Wechat access token service is unavailable.', undefined, undefined, { reason: 'network_error' }))
       return
     }
 
@@ -225,7 +254,7 @@ function requestWechatAccessTokenResponse(url, options = {}) {
       ))
     })
     req.on('error', () => {
-      rejectSafely(createWechatAccessTokenError('Wechat access token service is unavailable.'))
+      rejectSafely(createWechatAccessTokenError('Wechat access token service is unavailable.', undefined, undefined, { reason: 'network_error' }))
     })
     req.end()
   })
@@ -253,8 +282,9 @@ export function createWechatAccessTokenProvider(options = {}) {
         timeout: options.timeout,
         request: options.request
       })
-    } catch {
-      throw createWechatAccessTokenError('Wechat access token service is unavailable.')
+    } catch (error) {
+      throw createWechatAccessTokenError('Wechat access token service is unavailable.', undefined, undefined,
+        safeWechatErrorDiagnostic(error, true))
     }
 
     if (
@@ -266,18 +296,18 @@ export function createWechatAccessTokenProvider(options = {}) {
       !response.body ||
       Buffer.byteLength(response.body, 'utf8') > ACCESS_TOKEN_MAX_RESPONSE_BYTES
     ) {
-      throw createWechatAccessTokenError('Wechat access token response is invalid.')
+      throw createWechatAccessTokenError('Wechat access token response is invalid.', undefined, undefined, { httpStatus: response?.statusCode })
     }
 
     let payload
     try {
       payload = JSON.parse(response.body)
     } catch {
-      throw createWechatAccessTokenError('Wechat access token response is invalid.')
+      throw createWechatAccessTokenError('Wechat access token response is invalid.', undefined, undefined, { httpStatus: response.statusCode })
     }
 
     if (!isPlainObject(payload)) {
-      throw createWechatAccessTokenError('Wechat access token response is invalid.')
+      throw createWechatAccessTokenError('Wechat access token response is invalid.', undefined, undefined, { httpStatus: response.statusCode })
     }
     if (Object.hasOwn(payload, 'errcode')) {
       if (
@@ -286,12 +316,15 @@ export function createWechatAccessTokenProvider(options = {}) {
         !Number.isInteger(payload.errcode) ||
         payload.errcode !== 0
       ) {
-        throw createWechatAccessTokenError('Wechat access token request failed.')
+        throw createWechatAccessTokenError('Wechat access token request failed.', undefined, undefined, {
+          httpStatus: response.statusCode, wechatErrcode: payload.errcode,
+          reason: Number.isSafeInteger(payload.errcode) && payload.errcode !== 0 ? 'wechat_rejected' : 'invalid_response'
+        })
       }
     }
 
     if (!isSafeWechatString(payload.access_token, { maximumLength: MAX_ACCESS_TOKEN_LENGTH })) {
-      throw createWechatAccessTokenError('Wechat access token response is invalid.')
+      throw createWechatAccessTokenError('Wechat access token response is invalid.', undefined, undefined, { httpStatus: response.statusCode })
     }
     if (
       typeof payload.expires_in !== 'number' ||
@@ -300,7 +333,7 @@ export function createWechatAccessTokenProvider(options = {}) {
       payload.expires_in <= 0 ||
       payload.expires_in > MAX_ACCESS_TOKEN_EXPIRES_IN_SECONDS
     ) {
-      throw createWechatAccessTokenError('Wechat access token response is invalid.')
+      throw createWechatAccessTokenError('Wechat access token response is invalid.', undefined, undefined, { httpStatus: response.statusCode })
     }
 
     const nowMs = getNowMs(now)
