@@ -1,6 +1,6 @@
 import { getVirtualPaymentConfig } from './virtual-payment-config.mjs'
 import { createVirtualPaymentSigningService } from './virtual-payment-signing.mjs'
-import { createWechatAccessTokenProvider } from './wechat-login.mjs'
+import { createWechatAccessTokenProvider, safeWechatErrorDiagnostic } from './wechat-login.mjs'
 
 const WECHAT_API_ORIGIN = 'https://api.weixin.qq.com'
 const QUERY_ORDER_PATH = '/xpay/query_order'
@@ -12,10 +12,24 @@ const WECHAT_ORDER_NUMBER_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
 const SAFE_OPENID_PATTERN = /^[^\s\u0000-\u001f\u007f]{1,128}$/u
 const KNOWN_ORDER_STATUSES = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
 
-function createClientError(message, code = 'VIRTUAL_PAYMENT_CLIENT_FAILED', statusCode = 502) {
+function createClientError(message, code = 'VIRTUAL_PAYMENT_CLIENT_FAILED', statusCode = 502, diagnostic) {
   const error = new Error(message)
   error.code = code
   error.statusCode = statusCode
+  const defaults = {
+    VIRTUAL_PAYMENT_CLIENT_TIMEOUT: ['query_request', 'timeout'],
+    VIRTUAL_PAYMENT_CLIENT_UNAVAILABLE: ['query_request', 'network_error'],
+    VIRTUAL_PAYMENT_HTTP_ERROR: ['query_request', 'http_error'],
+    VIRTUAL_PAYMENT_WECHAT_ERROR: ['wechat_business', 'wechat_rejected'],
+    VIRTUAL_PAYMENT_RESPONSE_INVALID: ['query_response', 'invalid_response'],
+    VIRTUAL_PAYMENT_QUERY_STATUS_UNKNOWN: ['query_response', 'invalid_response'],
+    VIRTUAL_PAYMENT_RESPONSE_TOO_LARGE: ['query_response', 'response_too_large'],
+    WECHAT_ACCESS_TOKEN_UNAVAILABLE: ['access_token', 'unclassified']
+  }
+  const [stage, reason] = defaults[code] || ['local_validation', 'local_error']
+  try {
+    error.paymentDiagnostic = safeWechatErrorDiagnostic({ stage, reason, ...diagnostic })
+  } catch { error.paymentDiagnostic = safeWechatErrorDiagnostic() }
   return error
 }
 
@@ -109,24 +123,31 @@ function createRequestBody(reference, wechatEnv) {
 async function fetchWithTimeout(fetchImpl, url, options, timeoutMs, consumeResponse) {
   const controller = new AbortController()
   let timeoutId
+  let responseHttpStatus
   const timeoutPromise = new Promise((resolve, reject) => {
     timeoutId = setTimeout(() => {
       controller.abort()
-      reject(createClientError('Wechat virtual payment request timed out.', 'VIRTUAL_PAYMENT_CLIENT_TIMEOUT', 504))
+      reject(createClientError('Wechat virtual payment request timed out.', 'VIRTUAL_PAYMENT_CLIENT_TIMEOUT', 504,
+        { httpStatus: responseHttpStatus }))
     }, timeoutMs)
   })
   try {
     return await Promise.race([
       Promise.resolve().then(async () => {
         const response = await fetchImpl(url, { ...options, signal: controller.signal })
-        return consumeResponse(response, controller.signal)
+        try {
+          const status = response?.status
+          if (Number.isInteger(status) && status >= 100 && status <= 599) responseHttpStatus = status
+        } catch {}
+        return consumeResponse(response, controller.signal, responseHttpStatus)
       }),
       timeoutPromise
     ])
   } catch (error) {
     if (error && error.code === 'VIRTUAL_PAYMENT_CLIENT_TIMEOUT') throw error
     if (error && typeof error.code === 'string' && error.code.startsWith('VIRTUAL_PAYMENT_')) throw error
-    throw createClientError('Wechat virtual payment service is unavailable.', 'VIRTUAL_PAYMENT_CLIENT_UNAVAILABLE', 503)
+    throw createClientError('Wechat virtual payment service is unavailable.', 'VIRTUAL_PAYMENT_CLIENT_UNAVAILABLE', 503,
+      { httpStatus: responseHttpStatus })
   } finally {
     clearTimeout(timeoutId)
   }
@@ -139,7 +160,7 @@ async function readWechatResponseBody(response, signal) {
   }
   if (response.status < 200 || response.status >= 300) {
     try { await response.body?.cancel() } catch {}
-    throw createClientError('Wechat virtual payment request failed.', 'VIRTUAL_PAYMENT_HTTP_ERROR')
+    throw createClientError('Wechat virtual payment request failed.', 'VIRTUAL_PAYMENT_HTTP_ERROR', undefined, { httpStatus: response.status })
   }
   let contentLengthValue
   try {
@@ -247,7 +268,11 @@ async function readWechatJson(response, signal) {
     throw createClientError('Wechat virtual payment response is invalid.', 'VIRTUAL_PAYMENT_RESPONSE_INVALID')
   }
   if (payload.errcode !== 0) {
-    throw createClientError('Wechat virtual payment request was rejected.', 'VIRTUAL_PAYMENT_WECHAT_ERROR')
+    throw createClientError('Wechat virtual payment request was rejected.', 'VIRTUAL_PAYMENT_WECHAT_ERROR', undefined, {
+      httpStatus: response.status, wechatErrcode: payload.errcode,
+      reason: typeof payload.errmsg === 'string' && /^(?:数据不存在|data not exist|data does not exist|order not found)[.!。]?$/i.test(payload.errmsg.trim())
+        ? 'data_not_found' : 'wechat_rejected'
+    })
   }
   return payload
 }
@@ -336,8 +361,10 @@ export function createVirtualPaymentClient(options = {}) {
     let accessToken
     try {
       accessToken = await accessTokenProvider.getAccessToken()
-    } catch {
-      throw createClientError('Wechat access token is unavailable.', 'WECHAT_ACCESS_TOKEN_UNAVAILABLE', 503)
+    } catch (error) {
+      const diagnostic = safeWechatErrorDiagnostic(error, true)
+      throw createClientError('Wechat access token is unavailable.', 'WECHAT_ACCESS_TOKEN_UNAVAILABLE', 503,
+        { ...diagnostic, stage: 'access_token' })
     }
     if (typeof accessToken !== 'string' || !accessToken || /[\u0000-\u001f\u007f]/.test(accessToken)) {
       throw createClientError('Wechat access token is unavailable.', 'WECHAT_ACCESS_TOKEN_UNAVAILABLE', 503)
@@ -352,12 +379,19 @@ export function createVirtualPaymentClient(options = {}) {
       },
       ...(requestBody === undefined ? {} : { body: requestBody }),
       redirect: 'error'
-    }, timeoutMs, async (response, signal) => {
+    }, timeoutMs, async (response, signal, httpStatus) => {
+      try { if (options.onResponseStatus) options.onResponseStatus(httpStatus) } catch {}
       if (options.expectEmptyResponse) {
         await requireEmptyWechatResponse(response, signal)
         return null
       }
-      return readWechatJson(response, signal)
+      try {
+        return await readWechatJson(response, signal)
+      } catch (error) {
+        // Preserve the original controlled error and add only the response status.
+        try { error.paymentDiagnostic = safeWechatErrorDiagnostic({ ...safeWechatErrorDiagnostic(error, true), httpStatus }) } catch {}
+        throw error
+      }
     })
   }
 
@@ -366,8 +400,16 @@ export function createVirtualPaymentClient(options = {}) {
     const reference = normalizeOrderReference(input, { requireOpenid: true })
     const requestBody = JSON.stringify(createRequestBody(reference, config.wechatEnv))
     const paySig = signingService.signQueryOrderPayload(requestBody)
-    const payload = await postWechat(QUERY_ORDER_PATH, requestBody, { pay_sig: paySig })
-    return normalizeQueryOrderResponse(payload, config)
+    let httpStatus
+    const payload = await postWechat(QUERY_ORDER_PATH, requestBody, { pay_sig: paySig }, {
+      onResponseStatus: status => { httpStatus = status }
+    })
+    try {
+      return normalizeQueryOrderResponse(payload, config)
+    } catch (error) {
+      try { error.paymentDiagnostic = safeWechatErrorDiagnostic({ ...safeWechatErrorDiagnostic(error, true), httpStatus }) } catch {}
+      throw error
+    }
   }
 
   async function notifyProvideGoods(input = {}) {

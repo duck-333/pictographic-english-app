@@ -10,6 +10,7 @@ import {
 import { normalizeVerifiedWechatDeliveryQueryFact } from './virtual-payment-delivery.mjs'
 import { normalizeVerifiedWechatQueryFact } from './virtual-payment-reconciliation.mjs'
 import { normalizeVirtualPaymentClientRequestId } from './virtual-payment-store.mjs'
+import { safeWechatErrorDiagnostic } from './wechat-login.mjs'
 
 const PAYMENT_CHANNEL = 'wechat_virtual_payment'
 const ALLOWED_CREATE_FIELDS = new Set([
@@ -550,7 +551,17 @@ export function createVirtualPaymentService(options = {}) {
         openid: paymentSession.openid,
         orderNo: order.orderNo
       })
-    } catch {
+    } catch (error) {
+      try {
+        const line = JSON.stringify({
+          at: new Date().toISOString(), event: 'virtual_payment_query_failed', operation: 'reconcile',
+          orderNo: order.orderNo, environment: config.environment, wechatEnv: config.wechatEnv,
+          ...safeWechatErrorDiagnostic(error, true)
+        })
+        const result = (options.queryDiagnosticLogger || console.error)(line)
+        // Diagnostic sink failures must not change the existing query result.
+        if (result && typeof result.catch === 'function') result.catch(() => {})
+      } catch {}
       throw createServiceError('Wechat payment query is unavailable.', 'PAYMENT_QUERY_UNAVAILABLE', 503)
     }
     let fact
