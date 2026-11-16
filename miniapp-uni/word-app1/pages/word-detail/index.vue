@@ -44,7 +44,7 @@
             </view>
           </button>
         </view>
-        <text class="meaning">{{ word.meaning }}</text>
+        <text class="meaning"><text v-for="(segment, index) in meaningSegments" :key="index" :class="{ 'meaning-pos': segment.italic }">{{ segment.text }}</text></text>
         <text v-if="word.bookPage" class="book-page">书中索引：第 {{ word.bookPage }} 页</text>
         <view v-if="canAccessFullContent" class="hero-actions">
           <button
@@ -449,6 +449,35 @@ export default {
     this.stopPronunciationAudio()
   },
   computed: {
+    meaningSegments() {
+      const meaning = this.word ? this.word.meaning || '' : ''
+      // 只匹配义项开头；句点后紧跟英文单词的内容（如 n.example）不作词性处理。
+      const pattern = /(^|[；;])(\s*)(n|v|vt|vi|adj|adv|prep|pron|conj|interj|art|num)\.(?![A-Za-z0-9_])/g
+      const segments = []
+      let cursor = 0
+      let seenPartOfSpeech = false
+      let match
+      while ((match = pattern.exec(meaning)) !== null) {
+        // 后续词性前的分号仅用于分行，同一词性内部的分号保持原样。
+        const separator = match[1] && seenPartOfSpeech ? match.index : -1
+        const start = match.index + match[1].length + match[2].length
+        const end = pattern.lastIndex
+        const textEnd = separator >= 0 ? separator : start
+        if (textEnd > cursor) {
+          segments.push({ text: meaning.slice(cursor, textEnd), italic: false })
+        }
+        if (separator >= 0) {
+          segments.push({ text: '\n' + match[2], italic: false })
+        }
+        segments.push({ text: meaning.slice(start, end), italic: true })
+        seenPartOfSpeech = true
+        cursor = end
+      }
+      if (cursor < meaning.length) {
+        segments.push({ text: meaning.slice(cursor), italic: false })
+      }
+      return segments
+    },
     typeBadgeText() {
       const sourceCardType = this.word && this.word.cardType ? this.word.cardType : '单词'
       const normalizedSourceCardType = String(sourceCardType).trim().toLowerCase()
@@ -1691,6 +1720,10 @@ export default {
   color: rgba(255, 255, 255, 0.86);
   font-size: 28rpx;
   line-height: 1.65;
+}
+
+.meaning-pos {
+  font-style: italic;
 }
 
 .book-page {
