@@ -212,18 +212,17 @@
                 @pause="handleVideoPause"
                 @timeupdate="handleVideoTimeUpdate"
                 @ended="handleVideoEnded"
+              ></video>
+              <view
+                v-if="shouldShowFullVideoPrompt"
+                class="full-video-prompt"
+                @tap.stop="playFullVideoFromPrompt"
               >
-                <cover-view
-                  v-if="shouldShowFullVideoPrompt"
-                  class="full-video-prompt"
-                  @tap.stop="playFullVideoFromPrompt"
-                >
-                  <cover-view class="full-video-prompt-button" @tap.stop="playFullVideoFromPrompt">
-                    观看完整讲解视频
-                  </cover-view>
-                  <cover-view class="full-video-prompt-note">{{ fullVideoHintText }}</cover-view>
-                </cover-view>
-              </video>
+                <view class="full-video-prompt-button" @tap.stop="playFullVideoFromPrompt">
+                  观看完整讲解视频
+                </view>
+                <view class="full-video-prompt-note">{{ fullVideoHintText }}</view>
+              </view>
             </view>
             <view v-if="!isFullVideoMode" class="segment-control-panel">
               <button class="segment-play-button" hover-class="button-pressed" @tap.stop="toggleActiveClipPlayback">
@@ -2134,6 +2133,7 @@ export default {
 
 .lesson-video-wrap {
   position: relative;
+  z-index: 0;
   margin-top: 24rpx;
   border-radius: 24rpx;
   overflow: hidden;

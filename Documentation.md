@@ -1,5 +1,11 @@
 # Documentation
 
+## 2026-11-17：视频结束提示遮挡底部导航的局部修复
+
+- 详情页将嵌套在 video 内的原生 cover-view 提示改为同容器内的普通 view 兄弟节点；视频容器使用局部 z-index: 0 和既有 overflow: hidden，底部导航样式不变。提示条件、事件绑定、播放和权限脚本不变。
+- `npm.cmd run check:miniapp`、页面脚本语法和模拟视频上下文检查通过（片段结束、完整视频启动、切换片段）；HBuilderX 5.07 本地 production/mp-weixin 编译通过，无编译错误或警告，保留既有 Browserslist 过期提示。产物：`miniapp-uni/word-app1/unpackage/dist/video-prompt-local-20261117/mp-weixin`。
+- 用户已确认 Android / iPhone 真机验收全部通过：遮罩不遮挡底部导航，导航和完整视频按钮可点击，切换片段及完整视频播放正常。本次仅本地提交，未推送、上传或部署，未改动参赛文档。
+
 ## 2026-10-30：会员名称P2修复与真实MySQL补验
 
 - 修复`miniapp-uni/word-app1/pages/mine/index.vue`：`membershipType=monthly`展示“会员”；不新增类型、迁移或按剩余天数猜测套餐，继续展示到期日期。`node scripts/test-miniapp-learning-benefits.mjs`退出0，执行页面实际computed验证年卡、月卡、购书赠送会员均显示“会员”及各自到期日期，购买页与订单的价格／天数仍准确。
