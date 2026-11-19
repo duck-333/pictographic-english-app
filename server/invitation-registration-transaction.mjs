@@ -26,21 +26,15 @@ export async function completeInvitedPhoneRegistrationInTransaction(transactionC
   requireMethod(entitlementStore, 'ensureRegistrationBonusInTransaction')
   const hasCandidateReceipt = typeof input.candidateReceipt === 'string' && input.candidateReceipt.length > 0
   if (hasCandidateReceipt) {
-    requireMethod(identityStore, 'verifyWechatBindingOwnerInTransaction')
     requireMethod(invitationStore, 'locateRegistrationRewardParticipantsInTransaction')
     requireMethod(invitationStore, 'reserveRegistrationRewardInTransaction')
   }
 
   const identityParticipants = await identityStore.locateWechatPhoneIdentityParticipantsInTransaction(
     context, input.preparedIdentity)
-  const candidateContinuityVerified = hasCandidateReceipt &&
-    await identityStore.verifyWechatBindingOwnerInTransaction(context, {
-      userId: input.candidateSessionUserId,
-      openid: input.candidateOpenid
-    })
-  const effectiveCandidateSubject = candidateContinuityVerified
-    ? input.trustedCandidateSubject
-    : `wechat-session-mismatch:${String(input.candidateSessionUserId || '')}`
+  // Subject is derived from this request's server-verified code2Session result.
+  // No pre-existing user/session is needed for a first phone registration.
+  const effectiveCandidateSubject = input.trustedCandidateSubject
   const invitationParticipants = hasCandidateReceipt
     ? await invitationStore.locateRegistrationRewardParticipantsInTransaction(context, {
         candidateReceipt: input.candidateReceipt,
@@ -50,18 +44,8 @@ export async function completeInvitedPhoneRegistrationInTransaction(transactionC
   if (typeof testHooks.beforeUnifiedUserLock === 'function') await testHooks.beforeUnifiedUserLock()
   await lockDatabaseUsersInTransaction(context, [
     ...(identityParticipants.userIds || []),
-    invitationParticipants.inviterUserId,
-    hasCandidateReceipt ? input.candidateSessionUserId : null
+    invitationParticipants.inviterUserId
   ].filter(Boolean), { allowMissing: true })
-
-  const lockedCandidateContinuityVerified = candidateContinuityVerified &&
-    await identityStore.verifyWechatBindingOwnerInTransaction(context, {
-      userId: input.candidateSessionUserId,
-      openid: input.candidateOpenid
-    })
-  const reservationCandidateSubject = lockedCandidateContinuityVerified
-    ? effectiveCandidateSubject
-    : `wechat-session-mismatch:${String(input.candidateSessionUserId || '')}`
 
   const identity = await identityStore.resolveWechatPhoneIdentityInTransaction(context, input.preparedIdentity)
   const registrationBonus = identity.isFirstPhoneRegistration
@@ -71,7 +55,7 @@ export async function completeInvitedPhoneRegistrationInTransaction(transactionC
     ? await invitationStore.reserveRegistrationRewardInTransaction(context, {
         inviteeUserId: identity.id,
         candidateReceipt: input.candidateReceipt,
-        trustedCandidateSubject: reservationCandidateSubject,
+        trustedCandidateSubject: effectiveCandidateSubject,
         isFirstPhoneRegistration: identity.isFirstPhoneRegistration === true
       })
     : Object.freeze({ invitationId: null, relationStatus: null, rewardStatus: 'NO_REWARD',
@@ -83,7 +67,8 @@ export async function completeInvitedPhoneRegistrationInTransaction(transactionC
 const INVITED_REGISTRATION_RETRY_CODES = Object.freeze([
   'IDENTITY_PHONE_BINDING_CONCURRENT_CONFLICT',
   'IDENTITY_WECHAT_BINDING_CONCURRENT_CONFLICT',
-  'IDENTITY_PARTICIPANTS_CHANGED'
+  'IDENTITY_PARTICIPANTS_CHANGED',
+  'INVITATION_CANDIDATE_CHANGED'
 ])
 
 function sanitizeIdentityConflict(error) {

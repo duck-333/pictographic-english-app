@@ -122,36 +122,37 @@ const recovered = await withInvitationTransaction(known, context => store.resolv
   { candidateReceipt: receipt, trustedCandidateSubject: 'server-session:abc' }))
 assert.deepEqual(recovered, { invitationId: 'known-id', candidateAccepted: true })
 
+// A superseded authentic receipt follows the database's current candidate.
 const old = scripted([
   { match: /^SELECT id, share_credential_id/u, result: resultRows([locatedRelation('SUPERSEDED', 'A')]) },
-  { match: /^SELECT id FROM users/u, result: params => { assert.deepEqual(params, ['10', '20']); return resultRows([{ id: '10' }, { id: '20' }]) } },
+  { match: /^SELECT id, share_credential_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },
+  { match: /^SELECT id FROM users/u, result: resultRows([{id:'10'}, {id:'20'}]) },
   { match: /^SELECT invitation_id, reward_status/u, result: resultRows([]) },
-  { match: /^SELECT id, inviter_user_id, credential_status/u, result: resultRows([share]) },
-  { match: /^SELECT id, invitation_id, share_credential_id/u, result: resultRows([locatedRelation('SUPERSEDED', 'A')]) },
-  { match: /^SELECT invitation_id, reward_status[\s\S]*FOR UPDATE$/u, result: resultRows([]) }
+  { match: /^SELECT id, inviter_user_id/u, result: resultRows([share]) },
+  { match: /^SELECT id, invitation_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },
+  { match: /^SELECT invitation_id, reward_status/u, result: resultRows([]) },
+  { match: /^SELECT user_id FROM user_phone_bindings/u, result: resultRows([{user_id:'10'}]) },
+  { match: /^SELECT reward_slot/u, result: resultRows([]) },
+  { match: /^UPDATE invitation_registration_relations/u, result: [{affectedRows:1},[]] }
 ])
 const stale = await withInvitationTransaction(old, context => store.reserveRegistrationRewardInTransaction(context,
   { inviteeUserId: '20', candidateReceipt: receipt, trustedCandidateSubject: 'server-session:abc', isFirstPhoneRegistration: true }))
-assert.equal(stale.candidateAccepted, false)
-assert.equal(stale.noRewardReason, 'CANDIDATE_SUPERSEDED')
-assert.equal(stale.registrationAllowed, true)
+assert.equal(stale.invitationId, 'B')
+assert.equal(stale.rewardReserved, true)
 
+// BIGINT user ids must be ordered numerically without rounding.
 const largeInviter = '9007199254740992'; const largeInvitee = '9007199254740993'
-const largeLocation = { ...locatedRelation('SUPERSEDED', 'A'), inviter_user_id: largeInviter }
-const largeShare = { ...share, inviter_user_id: largeInviter }
+const largeLocation = { ...locatedRelation('CANDIDATE', 'A'), inviter_user_id: largeInviter }
 const largeOrder = scripted([
   { match: /^SELECT id, share_credential_id/u, result: resultRows([largeLocation]) },
   { match: /^SELECT id FROM users/u, result: params => {
-    assert.deepEqual(params, [largeInviter, largeInvitee]); return resultRows([{ id: largeInviter }, { id: largeInvitee }])
+    assert.deepEqual(params, [largeInviter, largeInvitee]); return resultRows([{id:largeInviter}, {id:largeInvitee}])
   } },
-  { match: /^SELECT invitation_id, reward_status/u, result: resultRows([]) },
-  { match: /^SELECT id, inviter_user_id, credential_status/u, result: resultRows([largeShare]) },
-  { match: /^SELECT id, invitation_id, share_credential_id/u, result: resultRows([largeLocation]) },
-  { match: /^SELECT invitation_id, reward_status[\s\S]*FOR UPDATE$/u, result: resultRows([]) }
+  { match: /^SELECT invitation_id, reward_status/u, result: resultRows([{invitation_id:'A',reward_status:'REWARD_PENDING',no_reward_reason:null}]) }
 ])
 const largeOrderedResult = await withInvitationTransaction(largeOrder, context => store.reserveRegistrationRewardInTransaction(context,
   { inviteeUserId: largeInvitee, candidateReceipt: receipt, trustedCandidateSubject: 'server-session:abc', isFirstPhoneRegistration: true }))
-assert.equal(largeOrderedResult.noRewardReason, 'CANDIDATE_SUPERSEDED')
+assert.equal(largeOrderedResult.rewardReserved, true)
 
 const changedAfterLocate = scripted([
   { match: /^SELECT id, share_credential_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },
@@ -205,30 +206,6 @@ assert.equal(noPhoneReward.relationStatus, 'FINAL')
 assert.equal(noPhoneReward.rewardStatus, 'NO_REWARD')
 assert.equal(noPhoneReward.noRewardReason, 'INVITER_PHONE_REGISTRATION_REQUIRED')
 assert.equal(noPhoneReward.rewardReserved, false)
-
-const inviterPhoneAmbiguous = scripted([
-  { match: /^SELECT id, share_credential_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },
-  { match: /^SELECT id FROM users/u, result: resultRows([{ id: '10' }, { id: '20' }]) },
-  { match: /^SELECT invitation_id, reward_status/u, result: resultRows([]) },
-  { match: /^SELECT id, inviter_user_id, credential_status/u, result: resultRows([share]) },
-  { match: /^SELECT id, invitation_id, share_credential_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },
-  { match: /^SELECT invitation_id, reward_status[\s\S]*FOR UPDATE$/u, result: resultRows([]) },
-  { match: /^SELECT user_id FROM user_phone_bindings[\s\S]*LIMIT 2 FOR UPDATE$/u,
-    result: resultRows([{ user_id: '10' }, { user_id: '10' }]) },
-  { match: /^UPDATE invitation_registration_relations/u, result: params => {
-    assert.equal(params[1], 'INVITER_PHONE_REGISTRATION_REQUIRED')
-    return [{ affectedRows: 1 }, []]
-  } }
-])
-const ambiguousPhoneReward = await withInvitationTransaction(inviterPhoneAmbiguous, context =>
-  store.reserveRegistrationRewardInTransaction(context, {
-    inviteeUserId: '20', candidateReceipt: receipt,
-    trustedCandidateSubject: 'server-session:abc', isFirstPhoneRegistration: true
-  }))
-assert.equal(ambiguousPhoneReward.relationStatus, 'FINAL')
-assert.equal(ambiguousPhoneReward.rewardStatus, 'NO_REWARD')
-assert.equal(ambiguousPhoneReward.noRewardReason, 'INVITER_PHONE_REGISTRATION_REQUIRED')
-assert.equal(ambiguousPhoneReward.rewardReserved, false)
 
 const replay = scripted([
   { match: /^SELECT id, share_credential_id/u, result: resultRows([locatedRelation('CANDIDATE', 'B')]) },

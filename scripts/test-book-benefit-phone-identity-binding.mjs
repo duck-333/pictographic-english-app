@@ -148,6 +148,11 @@ function createFakeConnection(sharedState, options = {}) {
       const compactSql = sql.replace(/\s+/g, ' ').trim()
       const state = activeState()
 
+      if (/^SELECT user_id FROM user_phone_bindings/u.test(compactSql)) {
+        return [state.phoneBindings.filter(binding => String(binding.user_id) === String(values[0])).slice(0, 1)]
+      }
+      if (/^SELECT user_id FROM entitlement_transactions/u.test(compactSql)) return [[]]
+
       if (/^SELECT id FROM `users` WHERE id IN/i.test(compactSql)) {
         return [values.map(id => ({ id }))]
       }

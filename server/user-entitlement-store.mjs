@@ -1623,6 +1623,30 @@ export function createUserEntitlementStore(options = {}) {
     }
   }
 
+  async function grantInvitationRewardInTransaction(transactionContext, input = {}) {
+    const connection = requireDatabaseTransactionContext(transactionContext)
+    const userId = normalizeUserId(input.userId)
+    const invitationId = normalizeRequiredSourceId(input.invitationId)
+    const idempotencyKey = `invitation-reward:${invitationId}`
+    const entitlement = await ensureUserEntitlementInTransaction(connection, userId)
+    const existing = await findTransactionByIdempotencyKey(connection, idempotencyKey, { forUpdate: true })
+    if (existing) {
+      const [facts] = await connection.execute(`SELECT (expires_at = DATE_ADD(created_at, INTERVAL 1 YEAR)) AS exact_year
+        FROM entitlement_transactions WHERE idempotency_key=?`, [idempotencyKey])
+      if (existing.userId !== userId || existing.transactionType !== 'SHARE_REWARD' || existing.amount !== 30 ||
+          existing.source !== 'share' || existing.sourceId !== invitationId || Number(facts[0]?.exact_year) !== 1) {
+        throw createIdempotencyConflictError()
+      }
+      return { transaction: existing, entitlement, idempotent: true }
+    }
+    const window = await getRegistrationBonusDatabaseWindow(connection)
+    return await applyQuotaGrantInTransaction(connection, normalizeQuotaGrant({
+      userId, amount: 30, transactionType: 'SHARE_REWARD', source: 'share', sourceId: invitationId,
+      idempotencyKey, createdAt: window.grantedAt, expiresAt: window.expiresAt,
+      operatorType: 'system', operatorId: 'invitation-reward', reason: 'Qualified invitation registration reward.'
+    }), entitlement)
+  }
+
   async function deductQuota(input = {}) {
     const userId = normalizeUserId(input.userId)
     const amount = normalizePositiveInteger(input.amount, 'Quota deduct amount', 'QUOTA_DEDUCT_AMOUNT_INVALID')
@@ -2681,6 +2705,7 @@ export function createUserEntitlementStore(options = {}) {
     ensureRegistrationBonus,
     ensureRegistrationBonusInTransaction,
     grantQuota,
+    grantInvitationRewardInTransaction,
     lockMembershipScheduleInTransaction,
     verifyMembershipGrantInTransaction,
     grantMembershipDurationInTransaction,

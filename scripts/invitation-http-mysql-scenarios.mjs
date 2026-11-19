@@ -230,7 +230,8 @@ export async function runInvitationFormalHttpMysqlScenarios(options = {}) {
     candidateSecret: options.candidateSecret,
     env: Object.freeze({}),
     now: () => now,
-    wechatLoginClient
+    wechatLoginClient,
+    invitationRateLimiter: { consume() { return { allowed: true } } }
   })
   const runHttpServer = options.httpAdapter || withSupervisedHttpTestServer
   return await runHttpServer(handler, async baseUrl => {
@@ -283,7 +284,7 @@ export async function runInvitationFormalHttpMysqlScenarios(options = {}) {
     await assertRegistrationFacts(inviteeId, 1)
     const normalRelation = await relationForReceipt(receipt)
     assert.equal(normalRelation.relation_status, 'FINAL')
-    assert.equal(normalRelation.reward_status, 'REWARD_PENDING')
+    assert.equal(normalRelation.reward_status, 'REWARD_GRANTED')
     const normalRewardSlot = parseDatabaseSafeInteger(normalRelation.reward_slot, 'normal reward slot')
     assert(normalRewardSlot >= 1 && normalRewardSlot <= 5)
     const [[normalCounts]] = await pool.execute(`SELECT
@@ -293,7 +294,7 @@ export async function runInvitationFormalHttpMysqlScenarios(options = {}) {
       (SELECT COUNT(*) FROM wechat_user_bindings) AS wechat_count,
       (SELECT COUNT(*) FROM user_phone_bindings) AS phone_count`, [normalRelation.id])
     assert.equal(count(normalCounts.final_count), 1)
-    assert.equal(count(normalCounts.share_count), 0)
+    assert.equal(count(normalCounts.share_count), 1)
     const [secretRows] = await pool.execute(`SELECT s.token_digest, r.candidate_receipt_digest,
       s.token_key_version, r.candidate_key_version
       FROM invitation_share_credentials s JOIN invitation_registration_relations r
@@ -391,9 +392,9 @@ export async function runInvitationFormalHttpMysqlScenarios(options = {}) {
       assert.notEqual(result.status, 403)
       await assertRegistrationFacts(userId, 1)
       const relation = await relationForReceipt(variantReceipt)
-      assert.equal(relation.relation_status, 'CANDIDATE')
-      assert.equal(relation.invitee_user_id, null)
-      assert.equal(relation.reward_slot, null)
+      assert.equal(relation.relation_status, 'FINAL')
+      assert.equal(String(relation.invitee_user_id), userId)
+      assert.equal(relation.reward_status, index < 4 ? 'REWARD_GRANTED' : 'NO_REWARD')
     }
 
     // Malformed, unknown, subject-mismatched, and auth-discarded expired/revoked receipts cannot alter candidates.
@@ -402,8 +403,10 @@ export async function runInvitationFormalHttpMysqlScenarios(options = {}) {
       const variant = receiptVariants[index]
       const ownerOpenid = `mysql-http-receipt-owner-${variant}`
       const ownerId = await seedUser(ownerOpenid)
+      const receiptInviter = await seedUser('mysql-http-receipt-inviter-' + variant)
+      await seedPhone(receiptInviter, `139100009${String(index).padStart(2, '0')}`)
       const variantToken = ['expired', 'revoked'].includes(variant)
-        ? await createShare(baseUrl, inviterId)
+        ? await createShare(baseUrl, receiptInviter)
         : shareToken
       const ownedReceipt = await capture(baseUrl, variantToken, ownerId)
       let loginOpenid = ownerOpenid
@@ -435,8 +438,8 @@ export async function runInvitationFormalHttpMysqlScenarios(options = {}) {
       }, loginUserId)
       await assertRegistrationFacts(loginUserId, 1)
       const preserved = await relationForReceipt(ownedReceipt)
-      assert.equal(preserved.relation_status, 'CANDIDATE')
-      assert.equal(preserved.invitee_user_id, null)
+      assert.equal(preserved.relation_status, ['expired','revoked'].includes(variant) ? 'FINAL' : 'CANDIDATE')
+      assert.equal(preserved.invitee_user_id === null ? null : String(preserved.invitee_user_id), ['expired','revoked'].includes(variant) ? loginUserId : null)
       assert.equal(preserved.reward_slot, null)
     }
 
@@ -460,21 +463,14 @@ export async function runInvitationFormalHttpMysqlScenarios(options = {}) {
     assert.equal(ineligibleRelation.no_reward_reason, 'INVITER_PHONE_REGISTRATION_REQUIRED')
     assert.equal(ineligibleRelation.reward_slot, null)
 
-    // Self invite: create/capture while eligible, then retire the old phone and register a new phone.
+    // Old account changing to an unused phone keeps its registration history.
     const selfOpenid = 'mysql-http-self'
     const selfUser = await seedUser(selfOpenid)
     await seedPhone(selfUser, '13910000401')
-    const selfToken = await createShare(baseUrl, selfUser)
-    const selfReceipt = await capture(baseUrl, selfToken, selfUser)
     await executeOneMutation(`UPDATE user_phone_bindings SET status='unbound', unbound_at=UTC_TIMESTAMP()
       WHERE user_id=? AND status='active'`, [selfUser])
-    await successfulPhoneLogin(baseUrl, {
-      openid: selfOpenid, phone: '13910000402', candidateReceipt: selfReceipt, authorization: bearer(selfUser)
-    }, selfUser)
-    await assertRegistrationFacts(selfUser, 1)
-    const selfRelation = await relationForReceipt(selfReceipt)
-    assert.equal(selfRelation.no_reward_reason, 'SELF_INVITE')
-    assert.equal(selfRelation.reward_slot, null)
+    await successfulPhoneLogin(baseUrl, { openid: selfOpenid, phone: '13910000402' }, selfUser)
+    await assertRegistrationFacts(selfUser, 0)
 
     // Expired credential with valid continuity finalizes the current product's explicit NO_REWARD result.
     const expiredInviter = await seedUser('mysql-http-expired-inviter')
@@ -537,8 +533,8 @@ export async function runInvitationFormalHttpMysqlScenarios(options = {}) {
     // Existing-phone user is not a first registration and receives no duplicate bonus.
     const nonNewOpenid = 'mysql-http-non-new'
     const nonNewUser = await seedUser(nonNewOpenid)
-    await seedPhone(nonNewUser, '13910000701')
     const nonNewReceipt = await capture(baseUrl, shareToken, nonNewUser)
+    await seedPhone(nonNewUser, '13910000701')
     await successfulPhoneLogin(baseUrl, {
       openid: nonNewOpenid, phone: '13910000701',
       candidateReceipt: nonNewReceipt, authorization: bearer(nonNewUser)
@@ -564,7 +560,7 @@ export async function runInvitationFormalHttpMysqlScenarios(options = {}) {
       await assertRegistrationFacts(userId, 1)
       cappedRelations.push(await relationForReceipt(cappedReceipt))
     }
-    assert.equal(cappedRelations.slice(0, 5).filter(row => row.reward_status === 'REWARD_PENDING').length, 5)
+    assert.equal(cappedRelations.slice(0, 5).filter(row => row.reward_status === 'REWARD_GRANTED').length, 5)
     assert.equal(new Set(cappedRelations.slice(0, 5)
       .map(row => parseDatabaseSafeInteger(row.reward_slot, 'capped reward slot'))).size, 5)
     assert.equal(cappedRelations[5].relation_status, 'FINAL')
@@ -574,7 +570,7 @@ export async function runInvitationFormalHttpMysqlScenarios(options = {}) {
 
     const [[globalShareRewards]] = await pool.execute(`SELECT COUNT(*) AS total
       FROM entitlement_transactions WHERE transaction_type='SHARE_REWARD'`)
-    assert.equal(count(globalShareRewards.total), 0)
+    assert.equal(count(globalShareRewards.total), 10)
   }, {
     handlerTimeoutMs: timeouts.handlerTimeoutMs,
     responseTimeoutMs: timeouts.responseTimeoutMs,

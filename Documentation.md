@@ -1,5 +1,18 @@
 # Documentation
 
+## 2026-11-19：邀请服务器第一阶段
+
+- 分支 codex/membership-monthly-yearly，基线HEAD 7ebffedbb976b25a19add89b8aaf9c8e82bcb050；开始时暂存区为空，已有未跟踪 docs/competition/ 保留且未读取。
+- 新增实际发奖与恢复服务、本人summary；候选支持服务器核验wx.login后匿名保存，不提前建号；注册按最终账号/手机号历史判首次，纠正老账号换新号的误判。
+- 身份/注册30次/最终归属/奖励占位同事务；提交后独立事务原子增加邀请人30次、写SHARE_REWARD和已发标记。失败保持待发并退避重试；同一稳定幂等键复用到账时间和日历年期限。
+- 011已可支持无账号候选及所需唯一约束，无新迁移、依赖或生产配置修改。完整接口与前端code使用方式见 [邀请服务器第一阶段](docs/INVITATION_SERVER_PHASE1.md)。
+- 本轮验证：隔离Docker MySQL 8.0.46 / 127.0.0.1:3309，随机库、迁移/运行分权用户及001—011迁移，test-invitation-mysql-integration.mjs最终通过；包含新增匿名HTTP、原子失败、重启恢复、即时/恢复竞争、丢响应回放、名额竞争、同微信两号码并发、精确到期及2024-02-29至2025-02-28日历年、消费/过期统计。
+- 17个相关回归脚本全部通过：invitation-registration-api、registration-service、registration-transaction、store、registration-full-chain、reward-service、shared-identity-entitlement-transaction、identity-store、wechat-phone-login-api、user-auth-api、membership-entitlement-mvp、membership-grant-transaction-core、content-quota-core、featured-text-access、book-benefit-phone-identity-binding、invitation-migration、database-transaction-context。运行方式为node --test --test-concurrency=1加对应scripts/test-*.mjs；首次16/17通过，购书SQL替身适配新增历史读后单独补跑通过，未重复全量。
+- 真实并发补测中，原两方插入屏障把事务死锁重试当成第三方到达而失败；仅调整测试钩子使首次两方同步、已完成屏障不阻挡重试，保留屏障本身的异常检查；隔离MySQL完整补跑通过。mock测试不作为真实事务证据。
+- 沙箱拒绝本地端口连接后经授权在沙箱外执行上述本机测试；未使用任何生产连接。本轮无需微信开发者工具编译，因为没有修改小程序；微信API真实code交换和真机授权流程未验证。
+- 小程序接入、开发者工具/真机未验证；线上运行版本、迁移011执行情况、两个邀请HMAC配置、平台审核继续待核实。本轮不提交或部署。
+
+
 ## 2026-11-17：视频结束提示遮挡底部导航的局部修复
 
 - 详情页将嵌套在 video 内的原生 cover-view 提示改为同容器内的普通 view 兄弟节点；视频容器使用局部 z-index: 0 和既有 overflow: hidden，底部导航样式不变。提示条件、事件绑定、播放和权限脚本不变。

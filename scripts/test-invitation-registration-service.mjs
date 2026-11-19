@@ -55,6 +55,7 @@ function createConnection(options = {}) {
       if (/^SELECT user_id FROM user_phone_bindings/u.test(sql)) {
         return [options.phoneRegistered === false ? [] : [{ user_id: params[0] }], []]
       }
+      if (/^SELECT reward_slot/u.test(sql) || /^SELECT user_id FROM wechat_user_bindings/u.test(sql)) return [[], []]
       throw new Error(`Unexpected SQL: ${sql}`)
     }
   }
@@ -189,7 +190,7 @@ function createPool(connection) {
   assert.equal(reserveInput.inviteeUserId, '30')
   assert.equal(reserveInput.trustedCandidateSubject, `wechat-miniapp-v1:13:${APP_ID}:14:openid-current`)
   assert(contexts.every(context => context === contexts[0]))
-  assert.equal(pool.acquisitions, 1, 'the composed transaction must acquire only one connection')
+  assert.equal(pool.acquisitions, 2, 'registration and post-commit reward use separate transactions')
 }
 
 {
@@ -220,7 +221,7 @@ function createPool(connection) {
     preparedIdentity: Object.freeze({}), openid: 'openid-current', authenticatedUserId: '60', candidateReceipt: 'stolen'
   })
   assert.equal(result.registrationBonus.granted, true)
-  assert.match(receivedSubject, /^wechat-session-mismatch:/u)
+  assert.equal(receivedSubject, createTrustedWechatCandidateSubject(APP_ID, 'openid-current'))
 }
 
 {

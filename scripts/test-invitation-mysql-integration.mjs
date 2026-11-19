@@ -10,6 +10,7 @@ import {
 } from '../server/invitation-registration-transaction.mjs'
 import { createUserEntitlementStore } from '../server/user-entitlement-store.mjs'
 import { runInvitationFormalHttpMysqlScenarios } from './invitation-http-mysql-scenarios.mjs'
+import { runInvitationRewardMysqlScenarios } from './invitation-reward-mysql-scenarios.mjs'
 import {
   cleanupInvitationMysqlTest,
   throwInvitationMysqlTestErrors
@@ -76,6 +77,12 @@ async function runBarrierParticipant(barrier, operation) {
     barrier.abort(error)
     throw error
   }
+}
+
+async function waitInitialRace(barrier) {
+  // Synchronize the two initial attempts. A legitimate deadlock retry must not
+  // re-enter the already completed two-party barrier as a third participant.
+  if (barrier && (!barrier.settled || barrier.aborted)) await barrier.wait()
 }
 
 function throwUnexpectedConcurrentFailures(results, allowedCodes, message) {
@@ -171,6 +178,7 @@ try {
     candidateSecret: crypto.randomBytes(32).toString('hex')
   })
   await runInvitationFormalHttpMysqlScenarios({ pool, ...formalSecrets, now: new Date() })
+  await runInvitationRewardMysqlScenarios({ pool, ...formalSecrets, now: () => new Date() })
 
   const directTokenSecret = crypto.randomBytes(32).toString('hex')
   const directCandidateSecret = crypto.randomBytes(32).toString('hex')
@@ -183,8 +191,8 @@ try {
     pool,
     enableTestHooks: true,
     testHooks: {
-      async beforePhoneBindingInsert() { if (activePhoneInsertBarrier) await activePhoneInsertBarrier.wait() },
-      async beforeWechatBindingInsert() { if (activeWechatInsertBarrier) await activeWechatInsertBarrier.wait() }
+      async beforePhoneBindingInsert() { await waitInitialRace(activePhoneInsertBarrier) },
+      async beforeWechatBindingInsert() { await waitInitialRace(activeWechatInsertBarrier) }
     },
     phoneHashSecret: directPhoneSecret,
     campaignPhoneIdentityFactory: async normalizedPhone => ({
@@ -200,7 +208,7 @@ try {
     enableTestHooks: true,
     testHooks: {
       async beforeUnifiedUserLock() {
-        if (activeBeforeUnifiedUserLockBarrier) await activeBeforeUnifiedUserLockBarrier.wait()
+        await waitInitialRace(activeBeforeUnifiedUserLockBarrier)
       }
     }
   }
@@ -296,7 +304,7 @@ try {
     candidateReceipt: candidateA.candidateReceipt, trustedCandidateSubject: replacementSubject,
     inviteeUserId: '211', isFirstPhoneRegistration: true
   }))
-  assert.equal(staleA.noRewardReason, 'CANDIDATE_SUPERSEDED')
+  assert.equal(staleA.invitationId, candidateB.invitationId)
   assert.equal(staleA.registrationAllowed, true)
   const finalB = await inTransaction(pool, (context) => store.reserveRegistrationRewardInTransaction(context, {
     candidateReceipt: candidateB.candidateReceipt, trustedCandidateSubject: replacementSubject,

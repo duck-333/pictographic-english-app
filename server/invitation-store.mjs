@@ -163,10 +163,17 @@ export function createInvitationStore(options = {}) {
     const subject = security.digestTrustedCandidateSubject(input.trustedCandidateSubject)
     let receipt
     try { receipt = security.digestCandidateReceipt(input.candidateReceipt) } catch { return null }
-    const located = rows(await connection.execute(`SELECT id, share_credential_id, inviter_user_id, relation_status
-      FROM ${RELATION} WHERE candidate_receipt_digest = ? AND candidate_subject_digest = ? LIMIT 2`, [receipt, subject]))
+    const proofs = rows(await connection.execute(`SELECT id, share_credential_id, inviter_user_id, relation_status
+      FROM ${RELATION}
+      WHERE candidate_receipt_digest = ? AND candidate_subject_digest = ? LIMIT 2`, [receipt, subject]))
+    if (proofs.length !== 1) return null
+    // Any authentic receipt for this subject proves continuity; the database's
+    // current candidate determines attribution, even if the client kept an older receipt.
+    if (proofs[0].relation_status !== 'SUPERSEDED') return Object.freeze({ row: proofs[0], receipt, subject })
+    const located = rows(await connection.execute(`SELECT id, share_credential_id, inviter_user_id, relation_status,
+      candidate_receipt_digest FROM ${RELATION} WHERE active_candidate_subject_digest = ? LIMIT 2`, [subject]))
     if (located.length !== 1) return null
-    return Object.freeze({ row: located[0], receipt, subject })
+    return Object.freeze({ row: located[0], receipt: located[0].candidate_receipt_digest, subject })
   }
 
   async function locateRegistrationRewardParticipantsInTransaction(value, input = {}) {
@@ -205,7 +212,9 @@ export function createInvitationStore(options = {}) {
     const lockedExisting = rows(await connection.execute(`SELECT invitation_id, reward_status, no_reward_reason FROM ${RELATION}
       WHERE invitee_user_id = ? AND relation_status = 'FINAL' LIMIT 2 FOR UPDATE`, [invitee]))
     if (lockedExisting.length === 1) return finalResult(lockedExisting[0])
-    if (row.relation_status !== 'CANDIDATE') return rejectedCandidate('CANDIDATE_SUPERSEDED')
+    if (row.relation_status !== 'CANDIDATE') {
+      throw failure('Candidate changed during registration.', 'INVITATION_CANDIDATE_CHANGED', 409)
+    }
     let reason = input.isFirstPhoneRegistration === true ? null : 'NOT_FIRST_PHONE_REGISTRATION'
     if (!reason && String(row.inviter_user_id) === invitee) reason = 'SELF_INVITE'
     if (!reason && (share.credential_status !== 'ACTIVE' || share.revoked_at !== null)) reason = 'INVITATION_REVOKED'
@@ -216,7 +225,7 @@ export function createInvitationStore(options = {}) {
       else {
         const activePhoneBindings = rows(await connection.execute(`SELECT user_id FROM user_phone_bindings
           WHERE user_id = ? AND status = 'active' LIMIT 2 FOR UPDATE`, [inviter]))
-        if (activePhoneBindings.length !== 1 || String(activePhoneBindings[0].user_id) !== inviter) {
+        if (!activePhoneBindings.length || String(activePhoneBindings[0].user_id) !== inviter) {
           reason = 'INVITER_PHONE_REGISTRATION_REQUIRED'
         } else {
           const slots = rows(await connection.execute(`SELECT reward_slot FROM ${RELATION}

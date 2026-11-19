@@ -989,7 +989,16 @@ export function createIdentityStore(options = {}) {
     }
 
     const isNew = resolution.action === 'create_user'
-    const isFirstPhoneRegistration = !bindings.phoneBinding
+    // Phone bindings are retained (including inactive history). A different unused
+    // number must not make an already registered account new again.
+    let hasAccountRegistrationHistory = false
+    if (!isNew) {
+      const [history] = await connection.execute(`SELECT user_id FROM user_phone_bindings WHERE user_id = ? LIMIT 1 FOR UPDATE`, [resolution.userId])
+      const [bonuses] = await connection.execute(`SELECT user_id FROM entitlement_transactions
+        WHERE user_id = ? AND transaction_type = 'REGISTER_BONUS' LIMIT 1 FOR UPDATE`, [resolution.userId])
+      hasAccountRegistrationHistory = history.length > 0 || bonuses.length > 0
+    }
+    const isFirstPhoneRegistration = !bindings.phoneBinding && !hasAccountRegistrationHistory
     let userId
     try {
       userId = isNew

@@ -272,6 +272,11 @@ function sendPhoneLoginError(res, error) {
 }
 
 const INVITATION_PUBLIC_ERRORS = Object.freeze({
+  INVITER_REWARD_LIMIT_REACHED: [409, 'Invitation reward limit reached.'],
+  INVITATION_RELATION_LOCKED: [409, 'Phone registration is already complete.'],
+  WECHAT_CODE_REQUIRED: [400, 'Login code is required.'],
+  WECHAT_CODE_INVALID: [400, 'Login code is invalid.'],
+  WECHAT_RATE_LIMITED: [429, 'Wechat login is rate limited.'],
   INVITATION_PHONE_REGISTRATION_REQUIRED: [409, 'Phone registration is required.'],
   INVITATION_CREDENTIAL_INVALID: [400, 'Invitation credential is invalid.'],
   INVITATION_CREDENTIAL_REVOKED: [400, 'Invitation credential is invalid.'],
@@ -285,11 +290,6 @@ function invitationRequestError(message = 'Invitation request is invalid.') {
   error.code = 'INVITATION_REQUEST_INVALID'
   error.statusCode = 400
   return error
-}
-
-function isInvitationSessionUserId(value) {
-  const text = typeof value === 'string' ? value : ''
-  return /^[1-9]\d{0,19}$/u.test(text) && BigInt(text) <= 18446744073709551615n
 }
 
 function requireExactBodyFields(body, allowedFields, requiredFields = []) {
@@ -1068,6 +1068,9 @@ function summarizePublishedWords(words) {
 }
 
 export function createApiHandler(options = {}) {
+  const invitationRateLimiter = options.invitationRateLimiter || createLocalContentRateLimiter({
+    limits: { basicIp: { ratePerMinute: 30, capacity: 10 } }
+  })
   const store = options.store || createRuntimeWordStore(options)
   const userStore = options.userStore || createUserStore(options)
   const shouldCreateDefaultUserEntitlementStore = !options.userEntitlementStore && !options.userStore && !options.identityStore
@@ -1124,6 +1127,14 @@ export function createApiHandler(options = {}) {
     }
 
     try {
+      if (pathname.startsWith('/api/user/invitations/')) {
+        const limited = await invitationRateLimiter.consume('basicIp', getContentClientIp(req))
+        if (!limited.allowed) {
+          res.setHeader('Retry-After', String(limited.retryAfter || 1))
+          sendNoStoreJson(res, 429, { ok: false, code: 'INVITATION_RATE_LIMITED', message: 'Please retry later.' }, true)
+          return
+        }
+      }
       const limiter = options.contentRateLimiter
       if (limiter && contentRoute) {
         const group = contentDetail && hasAuthorizationHeader(req) ? 'fullIp' : 'basicIp'
@@ -1459,13 +1470,6 @@ export function createApiHandler(options = {}) {
           requestId = normalizeRequestId(body.requestId)
           const wechatIdentity = await wechatLoginClient.code2Session(body.loginCode)
           const phoneIdentity = await wechatLoginClient.phoneCode2Number(body.phoneCode)
-          let authenticatedUserId = ''
-          if (typeof body.candidateReceipt === 'string' && body.candidateReceipt) {
-            const authResult = requireUserAuth(req, userAuthOptions)
-            if (authResult.ok && isInvitationSessionUserId(authResult.userId)) {
-              authenticatedUserId = authResult.userId
-            }
-          }
           const preparedIdentity = await invitationRegistrationService.prepareWechatPhoneIdentity({
             openid: wechatIdentity.openid,
             unionid: wechatIdentity.unionid,
@@ -1474,8 +1478,7 @@ export function createApiHandler(options = {}) {
           const registration = await invitationRegistrationService.completePhoneRegistration({
             preparedIdentity,
             openid: wechatIdentity.openid,
-            authenticatedUserId,
-            candidateReceipt: authenticatedUserId && typeof body.candidateReceipt === 'string'
+            candidateReceipt: typeof body.candidateReceipt === 'string'
               ? body.candidateReceipt
               : ''
           })
@@ -1487,6 +1490,10 @@ export function createApiHandler(options = {}) {
             token: session.token,
             tokenType: 'Bearer',
             expiresAt: session.expiresAt,
+            invitation: registration.invitation ? {
+              status: registration.invitation.rewardStatus,
+              reason: registration.invitation.noRewardReason || null
+            } : { status: 'NO_REWARD', reason: 'CANDIDATE_MISSING' },
             user: {
               id: user.id,
               hasWechatBinding: true,
@@ -1518,6 +1525,7 @@ export function createApiHandler(options = {}) {
           sendNoStoreJson(res, 200, {
             ok: true,
             token: result.token,
+            createdAt: result.createdAt instanceof Date ? result.createdAt.toISOString() : String(result.createdAt),
             expiresAt: result.expiresAt instanceof Date ? result.expiresAt.toISOString() : String(result.expiresAt)
           }, true)
         } catch (error) {
@@ -1528,15 +1536,23 @@ export function createApiHandler(options = {}) {
       }
 
       if (req.method === 'POST' && pathname === '/api/user/invitations/candidates') {
-        const authResult = requireUserAuth(req, userAuthOptions)
-        if (!authResult.ok) {
-          sendNoStoreJson(res, authResult.statusCode, { ok: false, code: 'UNAUTHORIZED', message: 'Unauthorized' }, true)
-          return
-        }
         try {
-          const body = requireExactBodyFields(await readJsonBody(req), new Set(['token']), ['token'])
+          const body = requireExactBodyFields(await readJsonBody(req), new Set(['token', 'loginCode']), ['token'])
+          let identityInput
+          if (body.loginCode) {
+            if (typeof body.loginCode !== 'string') throw invitationRequestError()
+            const wechatIdentity = await wechatLoginClient.code2Session(body.loginCode)
+            identityInput = { openid: wechatIdentity.openid }
+          } else {
+            const authResult = requireUserAuth(req, userAuthOptions)
+            if (!authResult.ok) {
+              sendNoStoreJson(res, 401, { ok: false, code: 'UNAUTHORIZED', message: 'Unauthorized' }, true)
+              return
+            }
+            identityInput = { authenticatedUserId: authResult.userId }
+          }
           const result = await invitationRegistrationService.captureCandidate({
-            authenticatedUserId: authResult.userId,
+            ...identityInput,
             token: body.token
           })
           sendNoStoreJson(res, 200, {
@@ -1548,6 +1564,22 @@ export function createApiHandler(options = {}) {
           }, true)
         } catch (error) {
           logInvitationError('candidate', error)
+          sendInvitationError(res, error)
+        }
+        return
+      }
+
+      if (req.method === 'GET' && pathname === '/api/user/invitations/summary') {
+        const authResult = requireUserAuth(req, userAuthOptions)
+        if (!authResult.ok) {
+          sendNoStoreJson(res, 401, { ok: false, code: 'UNAUTHORIZED', message: 'Unauthorized' }, true)
+          return
+        }
+        try {
+          const summary = await invitationRegistrationService.getSummary({ authenticatedUserId: authResult.userId })
+          sendNoStoreJson(res, 200, { ok: true, ...summary }, true)
+        } catch (error) {
+          logInvitationError('summary', error)
           sendInvitationError(res, error)
         }
         return
@@ -2108,14 +2140,31 @@ export function startServer(options = {}) {
     jwtSecret: options.jwtSecret,
     nodeEnv: options.nodeEnv
   })
+  const invitationRegistrationService = options.invitationRegistrationService || createInvitationRegistrationService(options)
   const server = http.createServer(createApiHandler({
     ...options,
+    invitationRegistrationService,
     contentRateLimiter: options.contentRateLimiter || createLocalContentRateLimiter(),
     store
   }))
 
   server.listen(port, host, () => {
     console.log(`Pictographic English API running at http://${host}:${port}`)
+  })
+  const env = options.env || process.env
+  // Existing opt-in is the two server-only HMAC settings. Missing/bad invitation
+  // configuration must never prevent the HTTP/login service from starting.
+  if (options.invitationRewardsEnabled !== false &&
+      (options.tokenSecret || env.INVITATION_TOKEN_HMAC_SECRET) &&
+      (options.candidateSecret || env.INVITATION_CANDIDATE_HMAC_SECRET)) {
+    try { invitationRegistrationService.startRewardRecovery?.() } catch {
+      console.warn('invitation-recovery startup failed code=INVITATION_SERVICE_UNAVAILABLE')
+    }
+  }
+  server.on('close', () => {
+    try { invitationRegistrationService.stopRewardRecovery?.() } catch {
+      console.warn('invitation-recovery shutdown failed code=INVITATION_SERVICE_UNAVAILABLE')
+    }
   })
 
   return server

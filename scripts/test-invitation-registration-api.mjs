@@ -19,7 +19,8 @@ async function withServer(options, run) {
     invitationRegistrationService: options.invitationRegistrationService,
     wechatLoginClient: options.wechatLoginClient || {},
     jwtSecret: JWT_SECRET,
-    now: () => NOW
+    now: () => NOW,
+    invitationRateLimiter: options.invitationRateLimiter || { consume() { return { allowed: true } } }
   }))
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -82,7 +83,7 @@ function assertNoStore(response) {
   const service = {
     async createShareCredential(input) {
       calls.push(input)
-      return { credentialId: 'private-id', token: 'ivt1.return-once', expiresAt: new Date('2026-10-03T00:00:00Z') }
+      return { credentialId: 'private-id', token: 'ivt1.return-once', createdAt: NOW, expiresAt: new Date('2026-10-03T00:00:00Z') }
     },
     async captureCandidate(input) {
       calls.push(input)
@@ -97,7 +98,7 @@ function assertNoStore(response) {
     const share = await request(baseUrl, '/api/user/invitations/share-credentials', {}, auth('10'))
     assert.equal(share.response.status, 200)
     assertNoStore(share.response)
-    assert.deepEqual(share.body, { ok: true, token: 'ivt1.return-once', expiresAt: '2026-10-03T00:00:00.000Z' })
+    assert.deepEqual(share.body, { ok: true, token: 'ivt1.return-once', createdAt: NOW.toISOString(), expiresAt: '2026-10-03T00:00:00.000Z' })
 
     const candidate = await request(baseUrl, '/api/user/invitations/candidates', { token: 'ivt1.return-once' }, auth('20'))
     assert.equal(candidate.response.status, 200)
@@ -140,7 +141,7 @@ function assertNoStore(response) {
     assert.equal(ordinary.response.status, 200)
     assertNoStore(ordinary.response)
     assert.equal(completeCalls[0].candidateReceipt, '')
-    assert(!JSON.stringify(ordinary.body).includes('REWARD_PENDING'))
+    assert.equal(ordinary.body.invitation.status, 'REWARD_PENDING')
     assert(!JSON.stringify(ordinary.body).includes('private'))
 
     const withoutAuth = await request(baseUrl, '/api/auth/wechat-phone-login', {
@@ -149,8 +150,8 @@ function assertNoStore(response) {
     assert.equal(withoutAuth.response.status, 200)
     assertNoStore(withoutAuth.response)
     assert.equal(completeCalls.length, 2)
-    assert.equal(completeCalls[1].candidateReceipt, '')
-    assert.equal(completeCalls[1].authenticatedUserId, '')
+    assert.equal(completeCalls[1].candidateReceipt, 'icr1.receipt')
+    assert.equal(completeCalls[1].authenticatedUserId, undefined)
 
     for (const authorization of [expiredAuth('30'), wrongSignatureAuth('30'), auth('not-a-user-id')]) {
       const degraded = await request(baseUrl, '/api/auth/wechat-phone-login', {
@@ -159,8 +160,8 @@ function assertNoStore(response) {
       assert.equal(degraded.response.status, 200)
       assertNoStore(degraded.response)
       const call = completeCalls.at(-1)
-      assert.equal(call.candidateReceipt, '')
-      assert.equal(call.authenticatedUserId, '')
+      assert.equal(call.candidateReceipt, 'icr1.receipt')
+      assert.equal(call.authenticatedUserId, undefined)
     }
 
     const invited = await request(baseUrl, '/api/auth/wechat-phone-login', {
@@ -168,7 +169,7 @@ function assertNoStore(response) {
     }, auth('30'))
     assert.equal(invited.response.status, 200)
     assertNoStore(invited.response)
-    assert.equal(completeCalls.at(-1).authenticatedUserId, '30')
+    assert.equal(completeCalls.at(-1).authenticatedUserId, undefined)
     assert.equal(completeCalls.at(-1).openid, 'server-openid')
     assert.equal(completeCalls.at(-1).candidateReceipt, 'icr1.receipt')
 
@@ -205,6 +206,37 @@ function assertNoStore(response) {
     })
     assert(!JSON.stringify(result.body).includes('ER_DUP_ENTRY'))
     assert(!JSON.stringify(result.body).includes('table'))
+  })
+}
+
+{
+  const calls = []
+  await withServer({
+    wechatLoginClient: { async code2Session(code) { assert.equal(code, 'candidate-only-code'); return { openid: 'verified-anonymous' } } },
+    invitationRegistrationService: {
+      async captureCandidate(input) { calls.push(input); return { candidateReceipt: 'icr1.anonymous', candidateCapturedAt: NOW } },
+      async getSummary(input) { calls.push(input); throw new Error('private SQL connection failure') }
+    }
+  }, async baseUrl => {
+    const candidate = await request(baseUrl, '/api/user/invitations/candidates', { token: 'ivt1.token', loginCode: 'candidate-only-code' })
+    assert.equal(candidate.response.status, 200)
+    assert.deepEqual(calls[0], { openid: 'verified-anonymous', token: 'ivt1.token' })
+    const unauthorized = await fetch(baseUrl + '/api/user/invitations/summary')
+    assert.equal(unauthorized.status, 401)
+    const summary = await fetch(baseUrl + '/api/user/invitations/summary?userId=other', { headers: { Authorization: auth('31') } })
+    assert.equal(summary.status, 503)
+    assertNoStore(summary)
+    assert.equal((await summary.json()).code, 'INVITATION_SERVICE_UNAVAILABLE')
+    assert.deepEqual(calls[1], { authenticatedUserId: '31' })
+  })
+  await withServer({
+    invitationRegistrationService: {},
+    invitationRateLimiter: { consume() { return { allowed: false, retryAfter: 2 } } }
+  }, async baseUrl => {
+    const limited = await request(baseUrl, '/api/user/invitations/candidates', { token: 'ivt1.token', loginCode: 'unused' })
+    assert.equal(limited.response.status, 429)
+    assert.equal(limited.response.headers.get('retry-after'), '2')
+    assert.equal((limited.body).code, 'INVITATION_RATE_LIMITED')
   })
 }
 

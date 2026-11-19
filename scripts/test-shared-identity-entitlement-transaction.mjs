@@ -56,6 +56,7 @@ const identityConnection = {
       return [[{ user_id: '20', openid: 'openid-20', unionid: null }], []]
     }
     if (/SELECT user_id, phone_hash/u.test(sql)) return [[], []]
+    if (/^SELECT user_id FROM (user_phone_bindings|entitlement_transactions)/u.test(sql)) return [[], []]
     if (/INSERT INTO `user_phone_bindings`/u.test(sql)) return [{ affectedRows: 1, insertId: 1 }, []]
     throw new Error(`Unexpected identity SQL: ${sql}`)
   }
@@ -82,6 +83,7 @@ const unknownIdentityDuplicateConnection = {
       return [[{ user_id: '20', openid: 'openid-20', unionid: null }], []]
     }
     if (/SELECT user_id, phone_hash/u.test(sql)) return [[], []]
+    if (/^SELECT user_id FROM (user_phone_bindings|entitlement_transactions)/u.test(sql)) return [[], []]
     if (/INSERT INTO `user_phone_bindings`/u.test(sql)) {
       unknownIdentityDuplicateAttempts += 1
       const error = new Error("Duplicate entry for key 'unrelated_identity_constraint'")

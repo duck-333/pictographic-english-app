@@ -113,6 +113,9 @@ function createMemoryDatabase(seed = {}) {
       database.calls.push({ sql: compact, params: copyValue(params) })
       const state = this.working || database.state
 
+      if (/^SELECT user_id FROM wechat_user_bindings WHERE openid=/u.test(compact)) return rows(state.wechat.filter(item => item.openid === params[0]))
+      if (/^SELECT user_id FROM user_phone_bindings WHERE user_id\s*=/u.test(compact) && !compact.includes("status = 'active'")) return rows(state.phones.filter(item => item.user_id === String(params[0])))
+      if (/^SELECT user_id FROM entitlement_transactions/u.test(compact)) return rows(state.transactions.filter(item => item.user_id === String(params[0]) && item.transaction_type === 'REGISTER_BONUS'))
       if (compact === 'SELECT UTC_TIMESTAMP(3) AS database_now') return rows([{ database_now: NOW }])
       if (/^SELECT UTC_TIMESTAMP\(\) AS granted_at/u.test(compact)) {
         return rows([{ granted_at: NOW, expires_at: new Date('2027-09-27T00:00:00.000Z') }])
@@ -483,7 +486,7 @@ for (const variant of ['missing', 'expired', 'bad-signature', 'invalid-sub', 'ma
     assertSuccessfulPhoneLogin(result, '51')
   })
   assert.equal(db.state.transactions.length, 1)
-  assert.equal(db.state.relations[0].relation_status, 'CANDIDATE')
+  assert.equal(db.state.relations[0].relation_status, variant === 'malformed' ? 'CANDIDATE' : 'FINAL')
 }
 
 // JWT/WeChat discontinuity and unknown-subject receipt neither touch nor reveal the other candidate.

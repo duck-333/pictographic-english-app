@@ -1,5 +1,7 @@
 # Pictographic English Local API
 
+> 2026-11-19 本地服务器第一阶段已补齐实际发奖、恢复重试、匿名候选和本人统计。当前接口/事务/测试口径见 [邀请服务器第一阶段](../docs/INVITATION_SERVER_PHASE1.md)。下文历史批次记录保留；线上版本、011执行、HMAC及审核仍待核实。
+
 ## Admin published-word refresh (2026-10-03)
 
 `GET /api/admin/words` requires the existing Admin API Token and returns every published word as a complete normalized record. It uses `publishedOnly: true` without the public 20-item limit. It does not return draft, unpublished, or archived records and does not mutate word data.
