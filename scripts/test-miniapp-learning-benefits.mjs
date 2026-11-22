@@ -11,7 +11,7 @@ const benefits = await read('pages/learning-benefits/index.vue')
 const mine = await read('pages/mine/index.vue')
 const detail = await read('pages/word-detail/index.vue')
 for (const text of ['购买学习会员', '月卡', '年卡', '一次性购买，非自动续费', '会员期间不限学习次数', '购买后从原到期时间顺延', '查询上次购买结果', '仍要另购']) assert(benefits.includes(text))
-assert(!benefits.includes('邀请'))
+assert(benefits.includes('<invitation-card'))
 assert(benefits.includes('uni.showModal') && benefits.includes('result.confirm === true'))
 assert(benefits.includes('this.purchase.pause()'))
 assert(benefits.includes(':disabled="busy || !purchaseAllowed"'))
@@ -25,7 +25,7 @@ for (const [name, source] of [['benefits', benefits], ['mine', mine], ['detail',
 }
 assert((await read('main.js')).includes("import Vue from 'vue'"))
 // Execute the page's actual script methods/lifecycle, without a browser or real API.
-const script = benefits.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/from '([^']+)'/g, (_, path) => `from '${new URL(path, new URL('pages/learning-benefits/index.vue', root)).href}'`)
+const script = benefits.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/import InvitationCard from '[^']+'/, 'const InvitationCard = {}').replace(/from '([^']+)'/g, (_, path) => `from '${new URL(path, new URL('pages/learning-benefits/index.vue', root)).href}'`)
 const component = (await import(`data:text/javascript,${encodeURIComponent(script)}`)).default
 const page = component.data()
 for (const [name, fn] of Object.entries(component.methods)) page[name] = fn.bind(page)
@@ -164,7 +164,7 @@ console.log('Yearly selection, original order labels and regular pricing passed.
 // The snapshot type is a compatibility marker, not the purchased plan name.
 const mineScript = mine.match(/<script>([\s\S]*?)<\/script>/)[1]
   .replace(/^import[\s\S]*?from\s+'[^']+'\s*$/gm, '')
-const mineComponent = (await import(`data:text/javascript,${encodeURIComponent('const BottomNav = {};\n' + mineScript)}`)).default
+const mineComponent = (await import(`data:text/javascript,${encodeURIComponent('const BottomNav = {}, InvitationCard = {}, InvitationNotice = {};\n' + mineScript)}`)).default
 for (const [source, expiry] of [
   ['yearly', '2027-10-30T00:00:00.000Z'],
   ['monthly', '2026-11-29T00:00:00.000Z'],

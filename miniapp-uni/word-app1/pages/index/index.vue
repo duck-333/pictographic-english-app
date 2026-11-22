@@ -1,5 +1,6 @@
 ﻿<template>
   <view class="page">
+    <invitation-notice />
     <view class="content">
       <view class="hero">
         <view class="top-row">
@@ -209,6 +210,8 @@
 </template>
 
 <script>
+import InvitationNotice from '../../components/InvitationNotice.vue'
+import { receiveInvitation } from '../../common/invitation-state.js'
 import BottomNav from '../../components/BottomNav.vue'
 import BaxiaotaEntry from '../../components/BaxiaotaEntry.vue'
 import {
@@ -245,6 +248,7 @@ const TODAY_PART_STYLES = [
 
 export default {
   components: {
+    InvitationNotice,
     BottomNav,
     BaxiaotaEntry
   },
@@ -275,6 +279,7 @@ export default {
       missingDescription: ''
     }
   },
+  onLoad(options) { receiveInvitation(options || {}).catch(() => {}) },
   onShow() {
     this.todayWordActive = true
     this.gameEntryActive = true

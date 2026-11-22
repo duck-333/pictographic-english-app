@@ -1,5 +1,7 @@
 <template>
   <view class="page">
+    <invitation-notice />
+    <text v-if="invitationResultMessage" class="book-benefit-description">{{ invitationResultMessage }}</text>
     <view class="profile-card">
       <view class="avatar-fallback">象</view>
       <view class="profile-main">
@@ -10,14 +12,14 @@
 
     <view class="section auth-card">
       <view class="auth-copy">
-        <text class="setting-title">{{ authLoggedIn ? '账号信息' : '手机号快捷登录' }}</text>
+        <text class="setting-title">{{ authLoggedIn && hasPhoneBinding ? '账号信息' : '手机号快捷登录' }}</text>
         <text class="setting-desc">
           {{ authDescription }}
         </text>
       </view>
       <view class="auth-actions">
         <button
-          v-if="!authLoggedIn"
+          v-if="!authLoggedIn || !hasPhoneBinding"
           class="login-button"
           :class="{ disabled: authLoading }"
           hover-class="button-pressed"
@@ -28,7 +30,7 @@
           {{ authLoading ? '登录中' : '手机号快捷登录' }}
         </button>
         <button
-          v-else
+          v-if="authLoggedIn"
           class="logout-button"
           hover-class="button-pressed"
           @tap="handleLogout"
@@ -94,6 +96,8 @@
         </view>
       </view>
     </view>
+
+    <view id="invitation-section"><invitation-card ref="invitationCard" @refresh-entitlement="refreshData" /></view>
 
     <view class="section">
       <text class="section-title">获取学习权益</text>
@@ -173,6 +177,9 @@
 </template>
 
 <script>
+import InvitationCard from '../../components/InvitationCard.vue'
+import InvitationNotice from '../../components/InvitationNotice.vue'
+import { invitationShareMessage, invitationRegistrationMessage } from '../../common/invitation-api-client.js'
 import BottomNav from '../../components/BottomNav.vue'
 import { loginWithWechatPhone } from '../../common/auth-api-client.js'
 import { redeemBookBenefitCode } from '../../common/book-benefit-api-client.js'
@@ -188,10 +195,11 @@ import {
 
 export default {
   components: {
-    BottomNav
+    BottomNav, InvitationCard, InvitationNotice
   },
   data() {
     return {
+      invitationResultMessage: '',
       state: getUserState(),
       recentWordCount: 0,
       favoriteWordCount: 0,
@@ -235,7 +243,7 @@ export default {
       if (this.hasPhoneBinding && this.phoneMasked) {
         return `手机号：${this.phoneMasked}`
       }
-      return '学习账号已建立'
+      return '请完成手机号快捷注册后使用邀请权益。'
     },
     syncDescription() {
       return this.authLoggedIn
@@ -299,7 +307,10 @@ export default {
   },
   onShow() {
     this.refreshData()
+    if (this.$refs.invitationCard) this.$refs.invitationCard.refresh()
   },
+  onHide() { if (this.$refs.invitationCard) this.$refs.invitationCard.pause() },
+  onShareAppMessage(event) { return invitationShareMessage(event, this.$refs.invitationCard) },
   methods: {
     openLearningBenefits() { uni.navigateTo({ url: '/pages/learning-benefits/index' }) },
     async refreshData() {
@@ -453,7 +464,11 @@ export default {
       }
       this.authLoading = true
       try {
-        this.authSession = await loginWithWechatPhone(phoneCode)
+        const session = await loginWithWechatPhone(phoneCode)
+        this.authSession = session
+        this.invitationResultMessage = invitationRegistrationMessage(session.invitation)
+        await this.$nextTick()
+        if (this.$refs.invitationCard) await this.$refs.invitationCard.refresh()
         await this.refreshData()
         uni.showToast({
           title: '登录成功',
@@ -469,6 +484,7 @@ export default {
       }
     },
     handleLogout() {
+      this.invitationResultMessage = ''
       clearAuthSession()
       this.authSession = null
       this.entitlement = null
@@ -488,6 +504,8 @@ export default {
     },
     getLoginErrorMessage(error) {
       const code = error && error.code ? String(error.code) : ''
+      if (code === 'INVITATION_CAPTURE_RETRY') return '好友邀请尚未保存，请先重试后重新授权'
+      if (code === 'AUTH_SESSION_CHANGED') return '账号已切换，请重新登录'
       if (code === 'WECHAT_CODE_INVALID' || code === 'WECHAT_CODE_MISSING') return '登录状态已过期，请重试'
       if (code === 'WECHAT_PHONE_CODE_REQUIRED' || code === 'WECHAT_PHONE_CODE_INVALID') return '手机号授权已失效，请重新授权'
       if (code === 'IDENTITY_CONFLICT') return '账号绑定状态需要人工处理，请联系客服'

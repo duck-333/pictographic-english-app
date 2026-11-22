@@ -25,7 +25,7 @@
 
 - 注册前推荐请求：`{ token:分享凭证, loginCode:本次wx.login返回的全新code }`，无需Authorization。
 - 服务端code2Session核验微信身份，仅保存候选；不调用微信身份建号接口。兼容旧的已登录 `{token}` 请求，但不要求前端先走此路径。
-- 成功：`{ ok:true, candidateReceipt, candidateCapturedAt }`。
+- 成功：`{ ok:true, candidateReceipt, candidateCapturedAt, expiresAt }`。2026-11-22接入最小补充：expiresAt直接来自原分享凭证的服务器到期时间，不能按候选捕获时间再加7天；既有字段不变。
 - 回执为服务器随机生成的高熵凭证，数据库只存HMAC摘要；subject为服务器确认的 `appid + openid` 无歧义编码，再用候选专用密钥摘要。客户端不传用户/邀请人ID。
 - 已完成手机号注册409 / INVITATION_RELATION_LOCKED。无效、撤销、过期分享凭证统一400 / INVITATION_CREDENTIAL_INVALID，事务回滚保留旧有效候选；微信code无效400 / WECHAT_CODE_INVALID；微信限频429 / WECHAT_RATE_LIMITED；其他服务故障503。
 - 注册前最后一次有效捕获取代此前候选。即使客户端提交该身份的较早真实回执，也从数据库当前候选决定归属。跨微信身份回执无效。

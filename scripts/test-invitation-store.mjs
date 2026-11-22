@@ -103,6 +103,7 @@ const generated = scripted([
 const candidateA = await withInvitationTransaction(generated, context => store.captureNewValidCandidateInTransaction(context,
   { token, trustedCandidateSubject: 'server-session:abc' }))
 assert.match(candidateA.candidateReceipt, /^icr1\./u)
+assert.equal(candidateA.expiresAt.toISOString(), share.expires_at.toISOString(), 'candidate expiry must equal original server credential expiry, not capture time plus seven days')
 generated.done()
 await assert.rejects(() => withInvitationTransaction(scripted([]), context => store.captureNewValidCandidateInTransaction(context,
   { token: 'invalid', trustedCandidateSubject: 'server-session:abc' })), error => error.code === 'INVITATION_CREDENTIAL_INVALID')

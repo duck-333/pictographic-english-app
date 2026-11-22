@@ -1,5 +1,33 @@
 # Documentation
 
+## 2026-11-22 第二阶段独立复审 P2 定向修复
+
+- P2-1：common/invitation-state.js将既有epoch与会话快照组合成isOperationCurrent并传入候选API；common/invitation-api-client.js在wx.login返回后、候选HTTP发送前检查，失效则直接结束。保留完成后检查，finally仅由当前task清理和通知，旧A不发送、不重试、不改写B的状态。
+- P2-2：pages/mine/index.vue在实际手机号登录成功、会话保存后等待$nextTick，再显式调用现有InvitationCard.refresh；同账号hasPhoneBinding变化即刷新注册状态和统计。InvitationCard及saveAuthSession通知规则未改。
+- 新增scripts/test-miniapp-invitation-p2.mjs：修复前两项均复现失败；修复后，与既有test-miniapp-invitations.mjs一起运行，3/3测试通过。A的wx.login人为延迟，在B保存成功/进行中/失败三种状态再释放A，断言候选HTTP只有B且B回执、进行中、错误不变；P2-2走父页面handlePhoneLogin真实成功链，$nextTick后ref才可用，同user ID通知数0、统计请求1、组件registered=true且可准备邀请。
+- 定向命令：node --test scripts/test-miniapp-invitation-p2.mjs scripts/test-miniapp-invitations.mjs。两客户端/状态模块、mine SFC、两定向脚本语法及git diff --check通过；未跑服务器或数据库回归，原资格/事务/发奖/expiresAt结论保持。
+- 最终HBuilderX 5.07 Vue2/mp-weixin开发版构建：北京时间2026-11-22 19:43:31开始，19:43:39.761完成；产物miniapp-uni/word-app1/unpackage/dist/invitation-p2-final-20261122-1943/mp-weixin。build-evidence.json与build.log位于其父目录。首次启动被Webpack Windows路径格式检查拒绝，改用本机原生绝对路径后成功；没有改应用源码或依赖来绕过编译。仅既有Browserslist数据过期提示。
+- 新增scripts/verify-miniapp-invitation-p2-simulator.mjs，使用该最终产物、DevTools自动化9421及127.0.0.1:3019模拟接口；北京时间19:45:53.990开始、19:46:00.916检查通过。同一页面Vue uid、userId=101，模拟手机号登录实际handlePhoneLogin返回后卡片registered从false变true，恰好1次统计查询，可准备邀请；另检查次数用尽按钮经实际openInvitation到共享权益卡。
+- 最新截图和result.json：miniapp-uni/word-app1/unpackage/invitation-p2-qa-20261122-1943。same-account-before-phone.png（19:45:55.975）、mine-instant-after-phone.png（19:45:57.386）、quota-invitation-entry.png（19:45:59.156）、quota-benefits-invitation-card.png（19:46:00.916）；均晚于最终构建，已人工查看。此前invitation-qa-20261122截图仅保留历史记录，不作为本次最终入口验收依据。
+- 模拟器运行命令：node scripts/verify-miniapp-invitation-p2-simulator.mjs [编译目录] [截图目录]；测试会话及wx.login mock在结束恢复。没有执行真实分享、真实手机号授权、安卓/iPhone真机或生产验收，仍待验。
+- 本轮应用只改上述3个文件，另增2个定向脚本并更新本交付说明和Documentation.md。原第二阶段改动、docs/competition/均保留，未读取competition；未暂存、提交、推送、上传发布、部署或连接生产。
+
+
+## 2026-11-22：邀请小程序第二阶段
+
+- 基线分支codex/membership-monthly-yearly、HEAD e5a6ab0296b41a2fb87c6ed3f511eb9ddc6e5b56，与origin一致；开始时暂存区为空，仅原有docs/competition/未跟踪。保留并未读取该目录。
+- “我的”学习权益下使用InvitationCard，次数用尽提示跳转现有权益页的同一组件；保留会员购买、普通分享、视频组件和底部导航。统计从summary读取，余额仍从entitlements读取，不做客户端加额和常驻轮询。
+- App onLaunch/onShow及分享落地页接收invitationToken；候选串行保存，保留最后有效回执，手机号请求等待候选完成后独立取新的wx.login code。网络失败保留重试状态、阻止悄悄丢失候选的注册；服务器判无效/老用户不阻断正常注册。
+- 仅有微信身份、尚未手机号注册的已登录账号，在“我的”顶部仍提供手机号快捷注册按钮，不把身份识别当正式注册。
+- 登出或切换账号清理凭证/回执，迟到响应不会恢复旧账号状态。分享仅在准备好有效服务器凭证后开放；失效回调降为普通卡片并提示，不把点击/取消当奖励到账。
+- 必要服务器补充：候选Store及API响应添加expiresAt，直接使用原share.expires_at；既有业务规则、事务、数据库迁移不变，两个相关测试补断言，供独立复审。
+- 通过：test-miniapp-invitations（实际SFC方法/生命周期+uni模拟）、test-miniapp-auth-phone-login、test-miniapp-learning-benefits、test-miniapp-virtual-payment-client、test-miniapp-virtual-payment-purchase；服务器仅跑test-invitation-registration-api及test-invitation-store，未重复整套服务器回归。
+- HBuilderX本机已安装的5.07编译器，Vue2/mp-weixin本地production及development编译通过，仅既有Browserslist过期提示。开发版明确使用http://127.0.0.1:3019，未连接生产API；产物为miniapp-uni/word-app1/unpackage/dist/invitation-local-20261122/mp-weixin及invitation-dev-local-20261122/mp-weixin。
+- 微信开发者工具自动化9420+本地模拟接口3019检查通过：编译组件实际请求统计/凭证、2/5含1笔待发但已到账30次、5/5满额、两个页面共用组件及分享路径。检查并修正跨自定义组件滚动锚点，截图人工检查通过；截图和result.json在miniapp-uni/word-app1/unpackage/invitation-qa-20261122。首次自动化等待IDE启动超时、后续组件识别/渲染等待问题均已修正，最终通过。
+- 未验证：真实发送/取消分享卡片、微信code2Session、手机号授权、安卓/iPhone真机与平台审核。模拟器使用人工账号/统计fixture，不证明生产或真实微信发奖；真机步骤及改动文件清单见docs/INVITATION_MINIAPP_PHASE2.md。
+- 本轮保持未暂存、未提交；未推送、创建PR、合并、上传发布、部署或连接生产。线上版本、011执行、两个HMAC及审核状态继续待核实。
+
+
 ## 2026-11-19：邀请服务器第一阶段
 
 - 分支 codex/membership-monthly-yearly，基线HEAD 7ebffedbb976b25a19add89b8aaf9c8e82bcb050；开始时暂存区为空，已有未跟踪 docs/competition/ 保留且未读取。

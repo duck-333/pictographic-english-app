@@ -1,6 +1,8 @@
 <script>
+import { receiveInvitation } from './common/invitation-state.js'
 export default {
-  onLaunch() {}
+  onLaunch(options) { receiveInvitation((options && options.query) || {}).catch(() => {}) },
+  onShow(options) { receiveInvitation((options && options.query) || {}).catch(() => {}) }
 }
 </script>
 

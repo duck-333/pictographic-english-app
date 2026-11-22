@@ -27,6 +27,7 @@
       <button class="secondary" open-type="share">分享给好友</button>
       <button class="secondary" @tap="backToLearning">返回学习</button>
     </view>
+    <view id="invitation-section"><invitation-card ref="invitationCard" @refresh-entitlement="refresh" /></view>
     <view v-if="records.length" class="card">
       <text class="section-title">本机购买记录</text>
       <text class="description">未确认的购买记录会保留，可稍后回来查询。</text>
@@ -41,12 +42,15 @@
 </template>
 
 <script>
+import InvitationCard from '../../components/InvitationCard.vue'
+import { invitationShareMessage } from '../../common/invitation-api-client.js'
 import { MEMBERSHIP_PLANS, MONTHLY_MEMBERSHIP_PRODUCT, membershipProductForPrice, membershipDays, membershipPriceText } from '../../common/membership-products.js'
 import { getAuthSession } from '../../common/auth-store.js'
 import { createPurchaseController, recordMessage } from '../../common/virtual-payment-purchase.js'
 import { paymentMessage } from '../../common/virtual-payment-api-client.js'
 
 export default {
+  components: { InvitationCard },
   data() {
     return { loggedIn: false, purchaseAllowed: false, queryAllowed: false, busy: false, records: [], entitlement: null, products: MEMBERSHIP_PLANS, selectedSku: MONTHLY_MEMBERSHIP_PRODUCT.internalSku, monthlyDuration: MONTHLY_MEMBERSHIP_PRODUCT.durationSeconds,
       availabilityMessage: '', message: '', nextCursor: null, discoveryFailed: false, loadSequence: 0, pageEpoch: 0, pageVisible: true, pageDisposed: false }
@@ -57,14 +61,12 @@ export default {
     pendingRecord() { return this.records.find((r) => !['granted', 'delivered', 'manual_review', 'closed', 'failed'].includes(r.hint)) || null },
     expiryText() { return String((this.entitlement && this.entitlement.membershipExpireAt) || '').slice(0, 10) }
   },
-  onShareAppMessage() {
-    return {
-      title: '象形英语｜以形释义解码单词',
-      path: '/pages/index/index'
-    }
-  },
+  onLoad(options) { this.focusInvitation = options && options.invite === '1' },
+  onReady() { if (this.focusInvitation) uni.pageScrollTo({ selector: '#invitation-section', duration: 200 }) },
+  onShareAppMessage(event) { return invitationShareMessage(event, this.$refs && this.$refs.invitationCard) },
   onShow() {
     if (this.pageDisposed) return
+    if (this.$refs && this.$refs.invitationCard) this.$refs.invitationCard.refresh()
     if (!this.pageVisible) this.busy = false
     this.pageVisible = true
     if (!this.purchase) {
@@ -82,7 +84,7 @@ export default {
     this.purchase.resume()
     this.refresh()
   },
-  onHide() { this.pageVisible = false; this.pageEpoch++; this.loadSequence++; if (this.purchase) this.purchase.pause() },
+  onHide() { if (this.$refs && this.$refs.invitationCard) this.$refs.invitationCard.pause(); this.pageVisible = false; this.pageEpoch++; this.loadSequence++; if (this.purchase) this.purchase.pause() },
   onUnload() { this.pageDisposed = true; this.pageVisible = false; this.pageEpoch++; this.loadSequence++; if (this.purchase) this.purchase.dispose() },
   methods: {
     days: membershipDays,

@@ -144,7 +144,7 @@ export function createInvitationStore(options = {}) {
         await replaceCandidate(connection, concurrent, share, subjectDigest, now, invitationId, candidateReceipt)
       }
     }
-    return Object.freeze({ invitationId, candidateReceipt, candidateCapturedAt: now })
+    return Object.freeze({ invitationId, candidateReceipt, candidateCapturedAt: now, expiresAt: new Date(share.expires_at) })
   }
 
   async function resolveCurrentCandidateInTransaction(value, input = {}) {

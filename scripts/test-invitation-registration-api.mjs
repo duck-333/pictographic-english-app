@@ -87,7 +87,7 @@ function assertNoStore(response) {
     },
     async captureCandidate(input) {
       calls.push(input)
-      return { invitationId: 'private-invitation-id', candidateReceipt: 'icr1.return-once', candidateCapturedAt: NOW }
+      return { invitationId: 'private-invitation-id', candidateReceipt: 'icr1.return-once', candidateCapturedAt: NOW, expiresAt: NOW }
     }
   }
   await withServer({ invitationRegistrationService: service }, async baseUrl => {
@@ -103,7 +103,7 @@ function assertNoStore(response) {
     const candidate = await request(baseUrl, '/api/user/invitations/candidates', { token: 'ivt1.return-once' }, auth('20'))
     assert.equal(candidate.response.status, 200)
     assertNoStore(candidate.response)
-    assert.deepEqual(candidate.body, { ok: true, candidateReceipt: 'icr1.return-once', candidateCapturedAt: NOW.toISOString() })
+    assert.deepEqual(candidate.body, { ok: true, candidateReceipt: 'icr1.return-once', expiresAt: NOW.toISOString(), candidateCapturedAt: NOW.toISOString() })
     assert.deepEqual(calls, [
       { authenticatedUserId: '10' },
       { authenticatedUserId: '20', token: 'ivt1.return-once' }
@@ -214,7 +214,7 @@ function assertNoStore(response) {
   await withServer({
     wechatLoginClient: { async code2Session(code) { assert.equal(code, 'candidate-only-code'); return { openid: 'verified-anonymous' } } },
     invitationRegistrationService: {
-      async captureCandidate(input) { calls.push(input); return { candidateReceipt: 'icr1.anonymous', candidateCapturedAt: NOW } },
+      async captureCandidate(input) { calls.push(input); return { candidateReceipt: 'icr1.anonymous', candidateCapturedAt: NOW, expiresAt: NOW } },
       async getSummary(input) { calls.push(input); throw new Error('private SQL connection failure') }
     }
   }, async baseUrl => {

@@ -1558,6 +1558,7 @@ export function createApiHandler(options = {}) {
           sendNoStoreJson(res, 200, {
             ok: true,
             candidateReceipt: result.candidateReceipt,
+            expiresAt: result.expiresAt instanceof Date ? result.expiresAt.toISOString() : String(result.expiresAt),
             candidateCapturedAt: result.candidateCapturedAt instanceof Date
               ? result.candidateCapturedAt.toISOString()
               : String(result.candidateCapturedAt)

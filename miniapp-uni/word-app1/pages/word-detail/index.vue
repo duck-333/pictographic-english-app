@@ -74,6 +74,7 @@
         <text class="access-lock-title">{{ accessLockTitle }}</text>
         <text class="access-lock-desc">{{ accessLockDescription }}</text>
         <text v-if="isQuotaInsufficientAccess" class="access-lock-quota">剩余次数0</text>
+        <button v-if="isQuotaInsufficientAccess" class="access-lock-button" @tap="openInvitation">邀请好友，得30次</button>
         <button class="access-lock-button" hover-class="button-pressed" @tap="handleAccessLockAction">
           {{ accessLockActionText }}
         </button>
@@ -296,6 +297,7 @@
       <text class="empty-title">{{ notFoundTitle }}</text>
       <text class="empty-description">{{ notFoundDescription }}</text>
       <button v-if="quotaInsufficientFallback" class="access-lock-button" @tap="handleAccessLockAction">开通会员或获取更多次数</button>
+      <button v-if="quotaInsufficientFallback" class="access-lock-button" @tap="openInvitation">邀请好友，得30次</button>
     </view>
 
     <bottom-nav current="/pages/index/index" />
@@ -928,6 +930,10 @@ export default {
       } finally {
         this.favoriteLoading = false
       }
+    },
+    openInvitation() {
+      this.refreshAccessOnReturn = true
+      uni.navigateTo({ url: '/pages/learning-benefits/index?invite=1' })
     },
     handleAccessLockAction() {
       if (this.word && this.word.id) {
