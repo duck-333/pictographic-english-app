@@ -1,4 +1,4 @@
-import { captureAuthSession, isAuthSessionCurrent, subscribeAuthSession } from './auth-store.js'
+import { captureAuthSession, getAuthSession, isAuthSessionCurrent, subscribeAuthSession } from './auth-store.js'
 import { captureInvitationCandidate, invitationMessage } from './invitation-api-client.js'
 
 const KEY = 'pictographic:pendingInvitation'
@@ -10,6 +10,9 @@ let epoch = 0
 let task = null
 let registering = false
 let initialized = false
+// Presentation only: restored invitations remain usable without reopening a dialog.
+let noticeHidden = true
+let noticeKind = 'feedback'
 
 function persist() {
   const value = { ownerId: captureAuthSession().userId, candidate, incoming }
@@ -33,6 +36,7 @@ function expireCandidate() {
   if (candidate && !(Date.parse(candidate.expiresAt) > Date.now())) {
     candidate = null
     message = '好友邀请已过期，可继续正常注册'
+    noticeKind = 'feedback'
     persist()
   }
 }
@@ -42,6 +46,7 @@ export function clearPendingInvitation() {
   candidate = null
   incoming = null
   message = ''
+  noticeHidden = true
   try { persist() } catch (error) {}
   notify()
 }
@@ -50,15 +55,20 @@ subscribeAuthSession(clearPendingInvitation)
 export function invitationState() {
   initialize()
   expireCandidate()
-  return { candidate: Boolean(candidate), pending: Boolean(incoming), saving: Boolean(task), message }
+  const registered = Boolean(getAuthSession()?.user?.hasPhoneBinding)
+  return { candidate: Boolean(candidate), pending: Boolean(incoming), saving: Boolean(task), message,
+    expiresAt: candidate ? candidate.expiresAt : '',
+    guideVisible: !noticeHidden && noticeKind === 'guide' && !registered && Boolean(candidate) && !incoming && !task,
+    feedbackVisible: !noticeHidden && !task && Boolean(message) && noticeKind === 'feedback' }
 }
 export function subscribeInvitation(listener) { listeners.add(listener); return () => listeners.delete(listener) }
+export function dismissInvitationNotice() { noticeHidden = true; notify() }
 
 export function receiveInvitation(query = {}, options = {}) {
   initialize()
   const token = typeof query.invitationToken === 'string' ? query.invitationToken : ''
   if (!token) return Promise.resolve()
-  if (token.length > 128) { message = '此邀请无效，可继续正常注册'; notify(); return Promise.resolve() }
+  if (token.length > 128) { message = '此邀请无效，可继续正常注册'; noticeHidden = false; noticeKind = 'feedback'; notify(); return Promise.resolve() }
   if (!incoming && candidate && candidate.token === token) return Promise.resolve()
   if (!incoming || incoming.token !== token) {
     incoming = { token }
@@ -83,11 +93,15 @@ export function saveIncomingInvitation(options = {}) {
         const result = await captureInvitationCandidate(target.token, { ...options, isOperationCurrent })
         if (epoch !== activeEpoch || !isAuthSessionCurrent(snapshot)) return
         candidate = { ...result, token: target.token }
-        message = '好友邀请已保存，首次手机号注册时由服务器确认权益'
+        message = ''
+        noticeHidden = false
+        noticeKind = 'guide'
         if (incoming === target) incoming = null
       } catch (error) {
         if (epoch !== activeEpoch || !isAuthSessionCurrent(snapshot)) return
         message = invitationMessage(error) + (candidate && error.code === 'INVITATION_CREDENTIAL_INVALID' ? '；此前有效邀请已保留' : '')
+        noticeHidden = false
+        noticeKind = 'feedback'
         if (['INVITATION_CREDENTIAL_INVALID', 'INVITATION_RELATION_LOCKED'].includes(error.code)) {
           if (incoming === target) incoming = null
           if (error.code === 'INVITATION_RELATION_LOCKED') candidate = null

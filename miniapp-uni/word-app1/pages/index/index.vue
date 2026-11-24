@@ -1,6 +1,6 @@
 ﻿<template>
   <view class="page">
-    <invitation-notice />
+    <invitation-notice :active="invitationNoticeActive" @register="openInvitationRegistration" />
     <view class="content">
       <view class="hero">
         <view class="top-row">
@@ -276,11 +276,13 @@ export default {
       todayWordPending: false,
       todayWordRefreshTimer: null,
       recentWordsRequestId: 0,
-      missingDescription: ''
+      missingDescription: '',
+      invitationNoticeActive: false
     }
   },
   onLoad(options) { receiveInvitation(options || {}).catch(() => {}) },
   onShow() {
+    this.invitationNoticeActive = true
     this.todayWordActive = true
     this.gameEntryActive = true
     this.measureGameEntryBounds()
@@ -290,6 +292,7 @@ export default {
   onReady() { this.measureGameEntryBounds() },
   onResize() { this.measureGameEntryBounds() },
   onHide() {
+    this.invitationNoticeActive = false
     this.stopTodayWordRefresh()
     this.gameEntryActive = false
     this.gameEntryMeasureRequestId++
@@ -306,6 +309,7 @@ export default {
     }
   },
   onUnload() {
+    this.invitationNoticeActive = false
     this.stopTodayWordRefresh()
     this.gameEntryActive = false
     this.gameEntryUnloaded = true
@@ -351,6 +355,7 @@ export default {
     }
   },
   methods: {
+    openInvitationRegistration() { uni.navigateTo({ url: '/pages/mine/index' }) },
     measureGameEntryBounds() {
       // Capture before nextTick: a delayed older task must keep its own id.
       const requestId = ++this.gameEntryMeasureRequestId

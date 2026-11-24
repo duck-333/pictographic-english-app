@@ -1,7 +1,6 @@
 <template>
   <view class="page">
-    <invitation-notice />
-    <text v-if="invitationResultMessage" class="book-benefit-description">{{ invitationResultMessage }}</text>
+    <invitation-notice :active="invitationNoticeActive" :result="invitationResult" @register="openPhoneRegistration" @dismiss-result="dismissInvitationResult" />
     <view class="profile-card">
       <view class="avatar-fallback">象</view>
       <view class="profile-main">
@@ -10,7 +9,7 @@
       </view>
     </view>
 
-    <view class="section auth-card">
+    <view id="phone-registration" class="section auth-card">
       <view class="auth-copy">
         <text class="setting-title">{{ authLoggedIn && hasPhoneBinding ? '账号信息' : '手机号快捷登录' }}</text>
         <text class="setting-desc">
@@ -179,11 +178,12 @@
 <script>
 import InvitationCard from '../../components/InvitationCard.vue'
 import InvitationNotice from '../../components/InvitationNotice.vue'
-import { invitationShareMessage, invitationRegistrationMessage } from '../../common/invitation-api-client.js'
+import { invitationShareMessage } from '../../common/invitation-api-client.js'
+import { invitationRegistrationFeedback } from '../../common/invitation-feedback.js'
 import BottomNav from '../../components/BottomNav.vue'
 import { loginWithWechatPhone } from '../../common/auth-api-client.js'
 import { redeemBookBenefitCode } from '../../common/book-benefit-api-client.js'
-import { clearAuthSession, getAuthSession, captureAuthSession, isAuthSessionCurrent, invalidateAuthSession } from '../../common/auth-store.js'
+import { clearAuthSession, getAuthSession, captureAuthSession, isAuthSessionCurrent, invalidateAuthSession, subscribeAuthSession } from '../../common/auth-store.js'
 import { getUserEntitlements } from '../../common/user-entitlements-api-client.js'
 import { listUserFavorites } from '../../common/user-favorites-api-client.js'
 import { listUserRecentWords } from '../../common/user-recent-words-api-client.js'
@@ -199,7 +199,9 @@ export default {
   },
   data() {
     return {
-      invitationResultMessage: '',
+      invitationNoticeActive: false,
+      invitationResult: null,
+      invitationResultTimer: null,
       state: getUserState(),
       recentWordCount: 0,
       favoriteWordCount: 0,
@@ -305,13 +307,27 @@ export default {
       return '账号权益'
     }
   },
+  onLoad() {
+    if (!this.unsubscribeInvitationResult) this.unsubscribeInvitationResult = subscribeAuthSession(() => this.dismissInvitationResult())
+  },
   onShow() {
+    this.invitationNoticeActive = true
     this.refreshData()
     if (this.$refs.invitationCard) this.$refs.invitationCard.refresh()
   },
-  onHide() { if (this.$refs.invitationCard) this.$refs.invitationCard.pause() },
+  onHide() { this.invitationNoticeActive = false; this.dismissInvitationResult(); if (this.$refs.invitationCard) this.$refs.invitationCard.pause() },
+  onUnload() { this.disposeInvitationResult() },
+  beforeDestroy() { this.disposeInvitationResult() },
   onShareAppMessage(event) { return invitationShareMessage(event, this.$refs.invitationCard) },
   methods: {
+    openPhoneRegistration() { uni.pageScrollTo({ selector: '#phone-registration', duration: 200 }) },
+    dismissInvitationResult() { clearTimeout(this.invitationResultTimer); this.invitationResultTimer = null; this.invitationResult = null },
+    disposeInvitationResult() {
+      this.invitationNoticeActive = false
+      this.dismissInvitationResult()
+      if (this.unsubscribeInvitationResult) this.unsubscribeInvitationResult()
+      this.unsubscribeInvitationResult = null
+    },
     openLearningBenefits() { uni.navigateTo({ url: '/pages/learning-benefits/index' }) },
     async refreshData() {
       const favoriteLoadToken = this.favoriteLoadToken + 1
@@ -463,18 +479,26 @@ export default {
         return
       }
       this.authLoading = true
+      let resultOwner = null
       try {
         const session = await loginWithWechatPhone(phoneCode)
+        resultOwner = captureAuthSession()
         this.authSession = session
-        this.invitationResultMessage = invitationRegistrationMessage(session.invitation)
         await this.$nextTick()
         if (this.$refs.invitationCard) await this.$refs.invitationCard.refresh()
+        if (!isAuthSessionCurrent(resultOwner)) return
         await this.refreshData()
-        uni.showToast({
-          title: '登录成功',
-          icon: 'none'
-        })
+        // Check before touching either the current result or its timer. A logout
+        // invalidates this snapshot even if the same account signs in again.
+        if (!this.invitationNoticeActive || !isAuthSessionCurrent(resultOwner)) return
+        this.dismissInvitationResult()
+        if (this.invitationNoticeActive) {
+          this.invitationResult = invitationRegistrationFeedback(session.invitation)
+          if (this.invitationResult) this.invitationResultTimer = setTimeout(() => this.dismissInvitationResult(), 8000)
+          else uni.showToast({ title: '登录成功', icon: 'none' })
+        }
       } catch (error) {
+        if (resultOwner && (!this.invitationNoticeActive || !isAuthSessionCurrent(resultOwner))) return
         uni.showToast({
           title: this.getLoginErrorMessage(error),
           icon: 'none'
@@ -484,7 +508,7 @@ export default {
       }
     },
     handleLogout() {
-      this.invitationResultMessage = ''
+      this.dismissInvitationResult()
       clearAuthSession()
       this.authSession = null
       this.entitlement = null
