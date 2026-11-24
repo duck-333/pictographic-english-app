@@ -77,6 +77,7 @@
         <text v-if="membershipActive" class="membership-summary-note">会员期间不限次数</text>
       </view>
       <view class="entitlement-grid">
+        <view class="entitlement-row">
         <view class="entitlement-item">
           <text class="entitlement-value">{{ quotaTotalGrantedText }}</text>
           <text class="entitlement-label">累计获得</text>
@@ -85,6 +86,8 @@
           <text class="entitlement-value">{{ quotaTotalConsumedText }}</text>
           <text class="entitlement-label">已消耗</text>
         </view>
+        </view>
+        <view class="entitlement-row">
         <view class="entitlement-item">
           <text class="entitlement-value">{{ membershipTypeText }}</text>
           <text class="entitlement-label">会员类型</text>
@@ -92,6 +95,7 @@
         <view class="entitlement-item">
           <text class="entitlement-value">{{ membershipStatusText }}</text>
           <text class="entitlement-label">会员状态</text>
+        </view>
         </view>
       </view>
     </view>
@@ -831,17 +835,34 @@ export default {
 
 .entitlement-grid {
   display: flex;
-  flex-wrap: wrap;
-  gap: 16rpx;
+  flex-direction: column;
+}
+
+.entitlement-row {
+  display: flex;
+}
+
+.entitlement-row + .entitlement-row {
+  margin-top: 16rpx;
 }
 
 .entitlement-item {
-  flex: 0 0 calc(50% - 8rpx);
+  flex: 1;
   min-width: 0;
   box-sizing: border-box;
   padding: 20rpx;
   border-radius: 20rpx;
   background: #f7fbff;
+}
+
+.entitlement-item + .entitlement-item {
+  margin-left: 16rpx;
+}
+
+.entitlement-item text {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .book-benefit-redeem-card {
