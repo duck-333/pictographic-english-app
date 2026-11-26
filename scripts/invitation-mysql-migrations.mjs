@@ -12,7 +12,8 @@ export const INVITATION_MIGRATION_FILES = Object.freeze([
   '008_extend_book_benefit_issuance_review.sql',
   '009_create_virtual_payment_foundation.sql',
   '010_create_virtual_payment_delivery_attempts.sql',
-  '011_create_invitation_reward_foundation.sql'
+  '011_create_invitation_reward_foundation.sql',
+  '012_create_content_read_guard.sql'
 ])
 
 // Minimal bootstrap fixture only: these two formal base tables have no repository migration source.

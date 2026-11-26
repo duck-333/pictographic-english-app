@@ -27,7 +27,7 @@ function manifestFailure(entries, manifest = INVITATION_MIGRATION_FILES) {
 
 manifestFailure(files(INVITATION_MIGRATION_FILES.slice(0, -1)))
 manifestFailure(files([...INVITATION_MIGRATION_FILES, '001_duplicate.sql']))
-manifestFailure(files([...INVITATION_MIGRATION_FILES, '012_uncreated_extra.sql']))
+manifestFailure(files([...INVITATION_MIGRATION_FILES, '013_uncreated_extra.sql']))
 manifestFailure(files(), [...INVITATION_MIGRATION_FILES].reverse())
 
 const invalidDirectoryCases = Object.freeze([
@@ -50,7 +50,8 @@ const unorderedNames = [
   INVITATION_MIGRATION_FILES[10],
   INVITATION_MIGRATION_FILES[0],
   ...INVITATION_MIGRATION_FILES.slice(2, 7),
-  ...INVITATION_MIGRATION_FILES.slice(8, 10)
+  ...INVITATION_MIGRATION_FILES.slice(8, 10),
+  ...INVITATION_MIGRATION_FILES.slice(11)
 ]
 const unordered = files(unorderedNames)
 assert.deepEqual(validateInvitationMigrationManifest(unordered), INVITATION_MIGRATION_FILES)
@@ -58,7 +59,7 @@ assert.deepEqual(validateInvitationMigrationManifest(unordered), INVITATION_MIGR
 const failClosedCases = [
   files(INVITATION_MIGRATION_FILES.slice(1)),
   files([...INVITATION_MIGRATION_FILES, '001_duplicate.sql']),
-  files([...INVITATION_MIGRATION_FILES, '012_uncreated_extra.sql']),
+  files([...INVITATION_MIGRATION_FILES, '013_uncreated_extra.sql']),
   ...invalidDirectoryCases.map(([, entry]) => [...files(), entry])
 ]
 for (const entries of failClosedCases) {
@@ -97,8 +98,8 @@ const executed = await runInvitationRepositoryMigrations(connection, {
 assert.deepEqual(successfulReaddirOptions, { withFileTypes: true })
 assert.deepEqual(reads, INVITATION_MIGRATION_FILES)
 assert.deepEqual(executed, INVITATION_MIGRATION_FILES)
-assert.equal(new Set(reads).size, 11)
-assert.equal(queries.length, INVITATION_MYSQL_BOOTSTRAP_FIXTURES.length + 11)
+assert.equal(new Set(reads).size, INVITATION_MIGRATION_FILES.length)
+assert.equal(queries.length, INVITATION_MYSQL_BOOTSTRAP_FIXTURES.length + INVITATION_MIGRATION_FILES.length)
 assert(queries[0].includes('CREATE TABLE users'))
 assert(queries[1].includes('CREATE TABLE wechat_user_bindings'))
 
@@ -107,10 +108,10 @@ const actualExecuted = await runInvitationRepositoryMigrations({
   async query(sql) { actualQueries.push(String(sql)); return [[], []] }
 })
 assert.deepEqual(actualExecuted, INVITATION_MIGRATION_FILES)
-assert.equal(actualQueries.length, INVITATION_MYSQL_BOOTSTRAP_FIXTURES.length + 11)
+assert.equal(actualQueries.length, INVITATION_MYSQL_BOOTSTRAP_FIXTURES.length + INVITATION_MIGRATION_FILES.length)
 for (const [index, filename] of INVITATION_MIGRATION_FILES.entries()) {
   const expected = await readFile(new URL(`../database/migrations/${filename}`, import.meta.url), 'utf8')
   assert.equal(actualQueries[INVITATION_MYSQL_BOOTSTRAP_FIXTURES.length + index], expected)
 }
 
-console.log(`invitation migration directory strictly equals frozen 001-011 manifest; ${invalidDirectoryCases.length} invalid-entry classes rejected before SQL`)
+console.log(`invitation migration directory strictly equals frozen 001-012 manifest; ${invalidDirectoryCases.length} invalid-entry classes rejected before SQL`)

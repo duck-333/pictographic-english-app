@@ -809,6 +809,13 @@ export default {
           this.loading = false
           return
         }
+        if (error.code === 'CONTENT_READ_COOLDOWN') {
+          const minutes = Math.max(1, Math.ceil(Number(error.retryAfter || 60) / 60))
+          this.notFoundTitle = '新词读取暂时冷却'
+          this.notFoundDescription = `约 ${minutes} 分钟后可继续读取新词，期间可复习近期已读词条。`
+          this.loading = false
+          return
+        }
         this.notFoundTitle = '暂时无法加载词条'
         this.notFoundDescription = error.statusCode === 429
           ? '访问过于频繁，请稍后重试。'

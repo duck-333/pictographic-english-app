@@ -255,6 +255,7 @@ function createRemoteFailure(error, fallback) {
   const repositoryError = new Error(error && error.message ? error.message : 'Word API request failed.')
   repositoryError.code = error && error.code ? error.code : 'WORD_API_ERROR'
   repositoryError.statusCode = error && error.statusCode ? error.statusCode : 0
+  repositoryError.retryAfter = Number(error && error.retryAfter || 0)
   repositoryError.remoteFailed = true
   repositoryError.fallback = Array.isArray(fallback)
     ? fallback.map((item) => cloneWord(item))
