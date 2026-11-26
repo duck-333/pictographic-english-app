@@ -1361,6 +1361,7 @@ export function createApiHandler(options = {}) {
           }
 
           const quotaResult = await userEntitlementStore.consumeQuota({
+            protectContentRead: true,
             userId: authResult.userId,
             amount: 1,
             rootLearningObjectId: word.id,
@@ -1377,6 +1378,14 @@ export function createApiHandler(options = {}) {
             operatorId: 'word-detail-api'
           })
 
+          if (quotaResult.reason === 'CONTENT_READ_COOLDOWN') {
+            sendJson(res, 429, {
+              ok: false, code: 'CONTENT_READ_COOLDOWN',
+              message: '新词读取暂时冷却，请稍后再试；可继续复习近期已读词条。',
+              retryAfter: quotaResult.retryAfter
+            }, { 'Cache-Control': 'private, no-store', 'Retry-After': String(quotaResult.retryAfter) })
+            return
+          }
           if (!quotaResult.allowed) {
             const remainingQuota = Number(quotaResult.remainingQuota || 0)
             const basicWord = toBasicWord(word, {

@@ -1,6 +1,7 @@
 import { YEARLY_MEMBERSHIP_PRODUCT } from '../miniapp-uni/word-app1/common/membership-products.js'
 import crypto from 'crypto'
 import mysql from 'mysql2/promise'
+import { contentReadPolicy, guardContentRead } from './content-read-guard.mjs'
 
 import { requireDatabaseTransactionContext } from './database-transaction-context.mjs'
 import {
@@ -775,6 +776,7 @@ function isMembershipActive(entitlement, now) {
 }
 
 export function createUserEntitlementStore(options = {}) {
+  const readPolicy = contentReadPolicy(options.contentReadPolicy)
   let pool = options.pool || null
   const now = options.now || (() => new Date())
   const currentMembershipReadUsersByConnection = new WeakMap()
@@ -2551,11 +2553,24 @@ export function createUserEntitlementStore(options = {}) {
 
     const connection = await getPool().getConnection()
     try {
+      // Avoid absent-idempotency-key gap locks between unrelated accounts.
+      if (input.protectContentRead === true) await connection.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
       await connection.beginTransaction()
 
-      const existingTransaction = await findTransactionByIdempotencyKey(connection, idempotencyKey)
+      // Only the server detail route enables this; never accept client policy/IDs.
+      // Lock before the replay lookup so concurrent retries see the committed ledger.
+      const protectedRead = input.protectContentRead === true
+      const lockedEntitlement = protectedRead
+        ? await ensureUserEntitlementInTransaction(connection, userId) : null
+      const checkRead = () => protectedRead ? guardContentRead(connection, {
+        userId, wordId: currentLearningObjectId, nowMs: now().getTime(), policy: readPolicy
+      }) : null
+
+      const existingTransaction = await findTransactionByIdempotencyKey(connection, idempotencyKey, { forUpdate: input.protectContentRead === true })
       if (existingTransaction) {
         assertIdempotentTransaction(existingTransaction, CONTENT_ACCESS_TRANSACTION_TYPES, userId)
+        const denied = await checkRead()
+        if (denied) { await connection.commit(); return denied }
         await connection.commit()
         return {
           allowed: true,
@@ -2567,9 +2582,11 @@ export function createUserEntitlementStore(options = {}) {
         }
       }
 
-      let entitlement = await ensureUserEntitlementInTransaction(connection, userId)
+      let entitlement = lockedEntitlement || await ensureUserEntitlementInTransaction(connection, userId)
       const currentTime = now()
       if (isMembershipActive(entitlement, currentTime)) {
+        const denied = await checkRead()
+        if (denied) { await connection.commit(); return denied }
         await connection.commit()
         return {
           allowed: true,
@@ -2606,6 +2623,8 @@ export function createUserEntitlementStore(options = {}) {
         }
       }
 
+      const denied = await checkRead()
+      if (denied) { await connection.commit(); return denied }
       const balanceAfter = entitlement.quotaBalance - amount
       const transactionId = normalizeTransactionId(input.transactionId)
       const grantTransactionId = allocationResult.allocations[0].grantTransactionId
@@ -2644,7 +2663,7 @@ export function createUserEntitlementStore(options = {}) {
       )
 
       const updatedEntitlement = await findUserEntitlement(connection, userId)
-      const transaction = await findTransactionByIdempotencyKey(connection, idempotencyKey)
+      const transaction = await findTransactionByIdempotencyKey(connection, idempotencyKey, { forUpdate: input.protectContentRead === true })
       await connection.commit()
       return {
         allowed: true,
@@ -2656,7 +2675,7 @@ export function createUserEntitlementStore(options = {}) {
       }
     } catch (error) {
       await connection.rollback()
-      if (isDuplicateEntryError(error)) {
+      if (isDuplicateEntryError(error) && input.protectContentRead !== true) {
         const existing = await getEntitlementAndTransactionAfterDuplicate(connection, idempotencyKey)
         assertIdempotentTransaction(existing.transaction, CONTENT_ACCESS_TRANSACTION_TYPES, userId)
         return {
