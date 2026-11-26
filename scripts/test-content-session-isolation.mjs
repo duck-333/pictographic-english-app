@@ -107,6 +107,14 @@ try {
   noFull(repository.getCachedPublishedRemoteWordById(full.id))
 
   auth.saveAuthSession(session('C'))
+  const cooldownLoad = page.loadWord({ id: full.id })
+  requests.at(-1).success({ statusCode: 429, data: { ok: false, code: 'CONTENT_READ_COOLDOWN' }, header: { 'Retry-After': '120' } })
+  await cooldownLoad
+  assert.equal(page.word, null)
+  assert.equal(page.quotaInsufficientFallback, false)
+  assert.equal(page.notFoundTitle, '新词读取暂时冷却')
+  assert.match(page.notFoundDescription, /2 分钟/)
+  assert.doesNotMatch(page.notFoundDescription, /购买|付费|次数不足/)
   const deniedLoad = page.loadWord({ id: full.id })
   respond(requests.at(-1), full, 401)
   await deniedLoad
@@ -117,7 +125,7 @@ try {
   const mineScript = mineSource.split('<script>')[1].split('</script>')[0]
     .replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\r?\n/gm, '').replace('export default', 'return')
   const mineDefinition = new Function('dependencies', `with (dependencies) { ${mineScript} }`)({
-    ...auth, ...bookClient, BottomNav: {}, getUserState: () => ({})
+    ...auth, ...bookClient, BottomNav: {}, InvitationCard: {}, InvitationNotice: {}, getUserState: () => ({})
   })
   const mine = mineDefinition.data()
   Object.entries(mineDefinition.methods).forEach(([name, method]) => { mine[name] = method.bind(mine) })
